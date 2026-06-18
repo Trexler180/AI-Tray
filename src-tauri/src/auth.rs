@@ -27,13 +27,6 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
-pub fn claude_creds_path() -> Option<PathBuf> {
-    let mut p = dirs::home_dir()?;
-    p.push(".claude");
-    p.push(".credentials.json");
-    Some(p)
-}
-
 pub fn codex_auth_path() -> Option<PathBuf> {
     let mut p = dirs::home_dir()?;
     p.push(".codex");
@@ -125,36 +118,6 @@ fn refresh_claude(refresh_token: &str) -> Option<Value> {
     None
 }
 
-/// Tokens returned by a successful refresh exchange.
-pub struct RefreshedTokens {
-    pub access_token: String,
-    /// Present only when the provider rotated the refresh token (it always does).
-    pub refresh_token: Option<String>,
-    /// Unix milliseconds, when known.
-    pub expires_at: Option<i64>,
-}
-
-/// True when an access token with this expiry (unix ms) is close enough to
-/// expiry that we should refresh it preemptively.
-pub fn claude_token_is_expiring(expires_at_ms: i64) -> bool {
-    expires_at_ms <= Utc::now().timestamp_millis() + TOKEN_REFRESH_SKEW_MS
-}
-
-/// Exchange a Claude refresh token for fresh tokens WITHOUT touching any
-/// credential file. Used by the multi-account store to keep accounts the CLI
-/// isn't currently tracking alive on its own. Returns None on a hard rejection
-/// (the refresh token was invalidated) or a network failure.
-pub fn refresh_claude_tokens(refresh_token: &str) -> Option<RefreshedTokens> {
-    let tok = refresh_claude(refresh_token)?;
-    Some(RefreshedTokens {
-        access_token: tok["access_token"].as_str()?.to_string(),
-        refresh_token: tok["refresh_token"].as_str().map(|s| s.to_string()),
-        expires_at: tok["expires_in"]
-            .as_i64()
-            .map(|exp| Utc::now().timestamp_millis() + exp * 1000),
-    })
-}
-
 fn refresh_claude_creds_locked(path: &Path, mut creds: Value) -> Option<String> {
     let rt = claude_oauth(&creds)?
         .get("refreshToken")?
@@ -176,41 +139,41 @@ fn refresh_claude_creds_locked(path: &Path, mut creds: Value) -> Option<String> 
     Some(access)
 }
 
-/// Read a Claude access token, preemptively refreshing it when it is about to expire.
-pub fn claude_access_token() -> Option<String> {
-    let path = claude_creds_path()?;
-    let creds = read_json(&path)?;
+/// Read a Claude access token from a specific credentials file, preemptively
+/// refreshing it (in place, in that same file) when it is about to expire.
+pub fn claude_access_token_at(path: &Path) -> Option<String> {
+    let creds = read_json(path)?;
     if !claude_token_expiring(&creds) {
         return claude_access_from(&creds);
     }
 
     let _guard = claude_refresh_lock().lock().ok()?;
-    let creds = read_json(&path)?;
+    let creds = read_json(path)?;
     if !claude_token_expiring(&creds) {
         return claude_access_from(&creds);
     }
-    refresh_claude_creds_locked(&path, creds).or_else(|| {
-        read_json(&path)
-            .as_ref()
-            .and_then(|creds| claude_access_from(creds))
-    })
+    refresh_claude_creds_locked(path, creds)
+        .or_else(|| read_json(path).as_ref().and_then(claude_access_from))
 }
 
-/// Refresh after the usage endpoint rejected a token.
+/// Refresh a specific credentials file after the usage endpoint rejected its
+/// token.
 ///
 /// Claude refresh tokens rotate. If another refresh finished while this call
 /// was waiting, use that newer access token instead of spending the fresh
 /// refresh token again.
-pub fn refresh_claude_creds_after_rejection(rejected_access: &str) -> Option<String> {
+pub fn refresh_claude_creds_after_rejection_at(
+    path: &Path,
+    rejected_access: &str,
+) -> Option<String> {
     let _guard = claude_refresh_lock().lock().ok()?;
-    let path = claude_creds_path()?;
-    let creds = read_json(&path)?;
+    let creds = read_json(path)?;
     let current_access = claude_access_from(&creds)?;
     if current_access != rejected_access {
         return Some(current_access);
     }
-    refresh_claude_creds_locked(&path, creds).or_else(|| {
-        read_json(&path).and_then(|creds| {
+    refresh_claude_creds_locked(path, creds).or_else(|| {
+        read_json(path).and_then(|creds| {
             let current_access = claude_access_from(&creds)?;
             (current_access != rejected_access).then_some(current_access)
         })

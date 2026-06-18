@@ -1,70 +1,51 @@
-//! App-owned multi-account store for Claude.
+//! Claude accounts, modeled as credential *directories*.
 //!
-//! The CLI only ever keeps ONE account in `~/.claude/.credentials.json`;
-//! logging into another overwrites it. To show live gauges for more than one
-//! account we keep our own copy of each account's OAuth tokens here, keyed by
-//! the stable `organizationUuid`, and accumulate accounts as the user logs into
-//! them (the credentials file is already watched, so a login is captured within
-//! seconds).
+//! The CLI keeps one login in `<config-dir>/.credentials.json`. The default
+//! config dir is `~/.claude`, but a user can run several CLIs against separate
+//! `CLAUDE_CONFIG_DIR` folders, each holding an independent login. We never see
+//! a stable account id inside the credentials file (current CLIs write no
+//! `organizationUuid`), so the *directory path* is the account's identity.
 //!
-//! Refresh tokens ROTATE. For the account that is *currently active* on disk we
-//! never refresh from this store — `live.rs` goes through the normal
-//! `~/.credentials.json` flow so the CLI stays in sync. For *inactive* accounts
-//! we own the rotation: refreshes are written back here only, never to the
-//! shared credentials file (that would clobber whichever account the CLI is
-//! using right now).
-//!
-//! `capture_active` runs at the top of every collection, so an active account's
-//! stored tokens are re-synced from the CLI's file each cycle; a stale stored
-//! copy therefore self-heals on the next refresh.
+//! The default `~/.claude` is always present; extra directories are registered
+//! by the user and stored in `claude-dirs.json`. Each directory is read and its
+//! rotating token refreshed in place in its own file (handled by `auth`/`live`),
+//! so both the app and the CLI pointed at that folder stay in sync.
 
 use crate::auth;
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 #[derive(Serialize, Deserialize, Clone, Default)]
-struct AccountStore {
+struct DirStore {
+    /// User-added config directories. The default `~/.claude` is implicit and
+    /// never listed here.
     #[serde(default)]
-    accounts: Vec<StoredAccount>,
+    added: Vec<String>,
+    /// Optional display label per directory path (the default dir included).
+    #[serde(default)]
+    labels: HashMap<String, String>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-struct StoredAccount {
-    org_uuid: String,
-    /// User-chosen display name. None falls back to a derived label.
-    #[serde(default)]
-    label: Option<String>,
-    #[serde(default)]
-    subscription_type: Option<String>,
-    #[serde(default)]
-    rate_limit_tier: Option<String>,
-    access_token: String,
-    refresh_token: String,
-    /// Access-token expiry, unix milliseconds.
-    #[serde(default)]
-    expires_at: i64,
-    /// Unix seconds this account was last seen active on disk.
-    #[serde(default)]
-    last_seen: i64,
-}
-
-/// A known account, with its label resolved, for the rest of the app.
+/// A known account (one per config directory), with its label resolved.
 #[derive(Clone)]
 pub struct ClaudeAccount {
-    pub org_uuid: String,
+    /// Stable identity and display key: the config directory path.
+    pub id: String,
+    /// The config directory (`id` as a path).
+    pub dir: PathBuf,
     pub label: String,
     pub subscription_type: Option<String>,
+    /// False for the built-in `~/.claude`, which can't be removed (only the
+    /// extra directories the user added can be).
+    pub removable: bool,
 }
 
 static STORE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
-/// Serializes every read-modify-write of the store file. Two collections can
-/// run at once (a panel refresh alongside an alert poll); without this they
-/// could both refresh the same inactive account and double-spend its rotating
-/// refresh token, invalidating one of them.
+/// Serializes read-modify-write of the directory list.
 fn lock() -> MutexGuard<'static, ()> {
     STORE_LOCK
         .get_or_init(|| Mutex::new(()))
@@ -75,18 +56,18 @@ fn lock() -> MutexGuard<'static, ()> {
 fn store_path() -> Option<PathBuf> {
     let mut root = dirs::config_dir().or_else(dirs::home_dir)?;
     root.push("AI Usage Tray");
-    root.push("claude-accounts.json");
+    root.push("claude-dirs.json");
     Some(root)
 }
 
-fn load() -> AccountStore {
+fn load() -> DirStore {
     store_path()
         .and_then(|p| fs::read_to_string(p).ok())
         .and_then(|b| serde_json::from_str(&b).ok())
         .unwrap_or_default()
 }
 
-fn save(store: &AccountStore) -> std::io::Result<()> {
+fn save(store: &DirStore) -> std::io::Result<()> {
     let path = store_path()
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no config dir"))?;
     if let Some(parent) = path.parent() {
@@ -97,6 +78,49 @@ fn save(store: &AccountStore) -> std::io::Result<()> {
     fs::rename(&tmp, &path)
 }
 
+/// The built-in default Claude config directory, `~/.claude`.
+pub fn home_dir() -> Option<PathBuf> {
+    let mut p = dirs::home_dir()?;
+    p.push(".claude");
+    Some(p)
+}
+
+/// The credentials file inside a Claude config directory.
+pub fn creds_file(dir: &Path) -> PathBuf {
+    dir.join(".credentials.json")
+}
+
+/// Trim surrounding whitespace/quotes and any trailing path separators.
+fn clean(p: &str) -> String {
+    p.trim()
+        .trim_matches('"')
+        .trim()
+        .trim_end_matches(['/', '\\'])
+        .to_string()
+}
+
+/// A case-insensitive, separator-insensitive form for comparing two paths.
+fn norm(p: &str) -> String {
+    clean(p).replace('/', "\\").to_lowercase()
+}
+
+/// Every config directory we know about: the default `~/.claude` first, then
+/// each user-added one (deduped, the default never duplicated).
+pub fn account_dirs() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    if let Some(home) = home_dir() {
+        seen.insert(norm(&home.to_string_lossy()));
+        out.push(home);
+    }
+    for p in load().added {
+        if seen.insert(norm(&p)) {
+            out.push(PathBuf::from(clean(&p)));
+        }
+    }
+    out
+}
+
 fn pretty_plan(s: &str) -> String {
     let mut chars = s.chars();
     match chars.next() {
@@ -105,167 +129,129 @@ fn pretty_plan(s: &str) -> String {
     }
 }
 
-fn default_label(acc: &StoredAccount) -> String {
-    let kind = acc
-        .subscription_type
-        .as_deref()
+fn read_subscription(dir: &Path) -> Option<String> {
+    let creds = auth::read_json(&creds_file(dir))?;
+    creds
+        .get("claudeAiOauth")?
+        .get("subscriptionType")?
+        .as_str()
+        .map(str::to_string)
+}
+
+fn resolved_label(
+    store: &DirStore,
+    id: &str,
+    dir: &Path,
+    subscription: Option<&str>,
+    is_home: bool,
+    only_home: bool,
+) -> String {
+    if let Some(custom) = store
+        .labels
+        .iter()
+        .find(|(k, _)| norm(k) == norm(id))
+        .map(|(_, v)| v.trim())
+        .filter(|v| !v.is_empty())
+    {
+        return custom.to_string();
+    }
+    let kind = subscription
         .map(pretty_plan)
         .unwrap_or_else(|| "Claude".to_string());
-    let short: String = acc.org_uuid.chars().take(4).collect();
-    if short.is_empty() || acc.org_uuid == "default" {
-        kind
-    } else {
-        format!("{kind} · {short}")
+    // With a single account the plain plan name reads cleanest; once there's
+    // more than one, append the folder name so they're distinguishable.
+    if is_home && only_home {
+        return kind;
+    }
+    match dir.file_name().and_then(|s| s.to_str()) {
+        Some(name) if !name.is_empty() => format!("{kind} · {name}"),
+        _ => kind,
     }
 }
 
-fn resolved_label(acc: &StoredAccount) -> String {
-    acc.label
-        .as_ref()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .map(|l| l.to_string())
-        .unwrap_or_else(|| default_label(acc))
-}
-
-/// Refresh an inactive account's tokens via the rotating refresh token and
-/// persist the result. Caller holds the store lock. Returns the new access
-/// token, or None if the refresh token was rejected / the network failed
-/// (the stale entry is left in place so a later re-login can re-capture it).
-fn refresh_locked(store: &mut AccountStore, idx: usize) -> Option<String> {
-    let rt = store.accounts[idx].refresh_token.clone();
-    let fresh = auth::refresh_claude_tokens(&rt)?;
-    let acc = &mut store.accounts[idx];
-    acc.access_token = fresh.access_token.clone();
-    if let Some(new_rt) = fresh.refresh_token {
-        acc.refresh_token = new_rt;
-    }
-    if let Some(exp) = fresh.expires_at {
-        acc.expires_at = exp;
-    }
-    let _ = save(store);
-    Some(fresh.access_token)
-}
-
-/// Read the account currently in `~/.claude/.credentials.json`, store/refresh
-/// our copy of it, and return its org UUID (the "active" account). Returns None
-/// when no usable credentials are present.
-pub fn capture_active() -> Option<String> {
-    let path = auth::claude_creds_path()?;
-    let creds = auth::read_json(&path)?;
-    let oauth = creds.get("claudeAiOauth")?;
-    let access = oauth.get("accessToken")?.as_str()?.to_string();
-    let refresh = oauth.get("refreshToken")?.as_str()?.to_string();
-
-    let org = creds
-        .get("organizationUuid")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .unwrap_or("default")
-        .to_string();
-    let expires_at = oauth.get("expiresAt").and_then(|v| v.as_i64()).unwrap_or(0);
-    let subscription_type = oauth
-        .get("subscriptionType")
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
-    let rate_limit_tier = oauth
-        .get("rateLimitTier")
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
-
-    let _guard = lock();
-    let mut store = load();
-    let now = Utc::now().timestamp();
-    if let Some(acc) = store.accounts.iter_mut().find(|a| a.org_uuid == org) {
-        acc.access_token = access;
-        acc.refresh_token = refresh;
-        acc.expires_at = expires_at;
-        if subscription_type.is_some() {
-            acc.subscription_type = subscription_type;
-        }
-        if rate_limit_tier.is_some() {
-            acc.rate_limit_tier = rate_limit_tier;
-        }
-        acc.last_seen = now;
-    } else {
-        store.accounts.push(StoredAccount {
-            org_uuid: org.clone(),
-            label: None,
-            subscription_type,
-            rate_limit_tier,
-            access_token: access,
-            refresh_token: refresh,
-            expires_at,
-            last_seen: now,
-        });
-    }
-    let _ = save(&store);
-    Some(org)
-}
-
-/// Every account we know about, labels resolved.
+/// Every account we know about, labels resolved. The default `~/.claude` is
+/// listed even when its credentials are missing, so the management UI is always
+/// reachable.
 pub fn list() -> Vec<ClaudeAccount> {
-    let _guard = lock();
-    load()
-        .accounts
-        .iter()
-        .map(|a| ClaudeAccount {
-            org_uuid: a.org_uuid.clone(),
-            label: resolved_label(a),
-            subscription_type: a.subscription_type.clone(),
+    let store = load();
+    let only_home = store.added.is_empty();
+    let home_norm = home_dir().map(|h| norm(&h.to_string_lossy()));
+    account_dirs()
+        .into_iter()
+        .map(|dir| {
+            let id = clean(&dir.to_string_lossy());
+            let is_home = home_norm.as_deref() == Some(norm(&id).as_str());
+            let subscription_type = read_subscription(&dir);
+            let label =
+                resolved_label(&store, &id, &dir, subscription_type.as_deref(), is_home, only_home);
+            ClaudeAccount {
+                id,
+                dir,
+                label,
+                subscription_type,
+                removable: !is_home,
+            }
         })
         .collect()
 }
 
-/// A valid access token for an inactive account, refreshing (and persisting)
-/// it first if it is at or near expiry.
-pub fn access_token(org_uuid: &str) -> Option<String> {
-    let _guard = lock();
-    let mut store = load();
-    let idx = store.accounts.iter().position(|a| a.org_uuid == org_uuid)?;
-    if !auth::claude_token_is_expiring(store.accounts[idx].expires_at) {
-        return Some(store.accounts[idx].access_token.clone());
+/// Register an extra config directory. Validates that the folder exists and
+/// holds a `.credentials.json`, and rejects the default dir and duplicates.
+pub fn add_dir(path: &str) -> Result<(), String> {
+    let cleaned = clean(path);
+    if cleaned.is_empty() {
+        return Err("Enter a folder path.".into());
     }
-    refresh_locked(&mut store, idx)
-}
-
-/// Refresh an inactive account after the usage endpoint rejected its token.
-/// If another collection refreshed it while we waited, use that newer token
-/// instead of spending the rotating refresh token again.
-pub fn refresh_after_rejection(org_uuid: &str, rejected_access: &str) -> Option<String> {
-    let _guard = lock();
-    let mut store = load();
-    let idx = store.accounts.iter().position(|a| a.org_uuid == org_uuid)?;
-    if store.accounts[idx].access_token != rejected_access {
-        return Some(store.accounts[idx].access_token.clone());
+    let dir = PathBuf::from(&cleaned);
+    if !dir.is_dir() {
+        return Err("That folder doesn't exist.".into());
     }
-    refresh_locked(&mut store, idx)
-}
-
-/// Set (or clear, when empty) the user-facing label for an account.
-pub fn set_label(org_uuid: &str, label: &str) -> Result<(), String> {
+    if !creds_file(&dir).is_file() {
+        return Err("No .credentials.json there — sign in to that folder with Claude Code first.".into());
+    }
+    let n = norm(&cleaned);
+    if home_dir().map(|h| norm(&h.to_string_lossy())) == Some(n.clone()) {
+        return Err("That's the default ~/.claude folder — it's already shown.".into());
+    }
     let _guard = lock();
     let mut store = load();
-    let acc = store
-        .accounts
-        .iter_mut()
-        .find(|a| a.org_uuid == org_uuid)
-        .ok_or_else(|| "unknown account".to_string())?;
-    let trimmed = label.trim();
-    acc.label = if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    };
+    if store.added.iter().any(|p| norm(p) == n) {
+        return Err("That folder is already added.".into());
+    }
+    store.added.push(cleaned);
     save(&store).map_err(|e| e.to_string())
 }
 
-/// Drop an account from the store. If it happens to be the active one it will
-/// simply be re-captured on the next collection; this is mainly for clearing
-/// out a stale account whose refresh token no longer works.
-pub fn forget(org_uuid: &str) -> Result<(), String> {
+/// Drop a user-added directory (and any custom label for it). The default
+/// `~/.claude` is not removable.
+pub fn remove_dir(id: &str) -> Result<(), String> {
+    let n = norm(id);
     let _guard = lock();
     let mut store = load();
-    store.accounts.retain(|a| a.org_uuid != org_uuid);
+    let before = store.added.len();
+    store.added.retain(|p| norm(p) != n);
+    if store.added.len() == before {
+        return Err("unknown folder".into());
+    }
+    store.labels.retain(|k, _| norm(k) != n);
+    save(&store).map_err(|e| e.to_string())
+}
+
+/// Set (or clear, when empty) the display label for an account directory.
+pub fn set_label(id: &str, label: &str) -> Result<(), String> {
+    let _guard = lock();
+    let mut store = load();
+    let key = store
+        .labels
+        .keys()
+        .find(|k| norm(k) == norm(id))
+        .cloned()
+        .unwrap_or_else(|| clean(id));
+    let trimmed = label.trim();
+    if trimmed.is_empty() {
+        store.labels.remove(&key);
+    } else {
+        store.labels.insert(key, trimmed.to_string());
+    }
     save(&store).map_err(|e| e.to_string())
 }

@@ -41,13 +41,16 @@ pub struct CodexUsage {
 /// stays machine-wide on `ClaudeUsage`.
 #[derive(Serialize, Clone, Default)]
 pub struct ClaudeAccountUsage {
-    /// Stable organization UUID; the key the store and alerts dedupe on.
-    pub org_uuid: String,
-    /// Display name (user-set, or derived from plan + a UUID fragment).
+    /// Stable account identity and key: its config directory path.
+    pub id: String,
+    /// Display name (user-set, or derived from plan + the folder name).
     pub label: String,
     pub subscription_type: Option<String>,
-    /// True for the account currently in `~/.claude/.credentials.json`.
+    /// True for the built-in `~/.claude` account.
     pub active: bool,
+    /// True for user-added directories (which can be removed); false for the
+    /// built-in `~/.claude`.
+    pub removable: bool,
     /// True when this account's live gauges were fetched successfully.
     pub live: bool,
     pub five_hour: Option<Gauge>,

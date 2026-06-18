@@ -44,8 +44,8 @@ impl Provider {
 struct WindowKey {
     provider: Provider,
     window: &'static str,
-    /// Per-account discriminator: the Claude org UUID, empty for Codex. Keeps
-    /// each account's exhaustion/warn state independent.
+    /// Per-account discriminator: the Claude account id (its config-dir path),
+    /// empty for Codex. Keeps each account's exhaustion/warn state independent.
     account: String,
 }
 
@@ -436,7 +436,7 @@ fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
                 key: WindowKey {
                     provider: Provider::Claude,
                     window: "session",
-                    account: acct.org_uuid.clone(),
+                    account: acct.id.clone(),
                 },
                 name: name.clone(),
                 label: "session",
@@ -448,7 +448,7 @@ fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
                 key: WindowKey {
                     provider: Provider::Claude,
                     window: "weekly",
-                    account: acct.org_uuid.clone(),
+                    account: acct.id.clone(),
                 },
                 name,
                 label: "weekly",
@@ -468,25 +468,23 @@ fn provider_enabled(settings: &NotificationSettings, provider: Provider) -> bool
 
 fn usage_watch_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    if let Some(mut home) = dirs::home_dir() {
+    if let Some(home) = dirs::home_dir() {
         let mut codex_sessions = home.clone();
         codex_sessions.push(".codex");
         codex_sessions.push("sessions");
         paths.push(codex_sessions);
 
-        let mut codex_auth = home.clone();
+        let mut codex_auth = home;
         codex_auth.push(".codex");
         codex_auth.push("auth.json");
         paths.push(codex_auth);
+    }
 
-        let mut claude_projects = home.clone();
-        claude_projects.push(".claude");
-        claude_projects.push("projects");
-        paths.push(claude_projects);
-
-        home.push(".claude");
-        home.push(".credentials.json");
-        paths.push(home);
+    // Every Claude config directory we track: its credentials file (a re-login
+    // / token rotation) and its transcripts (active usage).
+    for dir in crate::accounts::account_dirs() {
+        paths.push(dir.join("projects"));
+        paths.push(crate::accounts::creds_file(&dir));
     }
     paths
 }
@@ -522,23 +520,55 @@ fn settings_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{CodexUsage, Usage};
+    use crate::models::{ClaudeAccountUsage, ClaudeUsage, CodexUsage, Usage};
     use std::collections::HashSet;
     use std::sync::atomic::{AtomicBool, AtomicU64};
     use std::sync::Mutex;
 
-    fn test_state() -> AlertState {
+    fn state_with(codex: bool, claude: bool) -> AlertState {
         AlertState {
-            settings: Mutex::new(NotificationSettings {
-                codex: true,
-                claude: false,
-            }),
+            settings: Mutex::new(NotificationSettings { codex, claude }),
             runtime: Mutex::new(AlertRuntime::default()),
             watcher: Mutex::new(None),
             watched: Mutex::new(HashSet::new()),
             generation: AtomicU64::new(0),
             refresh_inflight: AtomicBool::new(false),
             last_refresh: Mutex::new(0),
+        }
+    }
+
+    fn test_state() -> AlertState {
+        state_with(true, false)
+    }
+
+    /// Two live Claude accounts, each with only a 5h window at the given usage.
+    fn claude_two_account_usage(work_pct: f64, personal_pct: f64) -> Usage {
+        let account = |id: &str, label: &str, pct: f64| ClaudeAccountUsage {
+            id: id.to_string(),
+            label: label.to_string(),
+            subscription_type: Some("pro".to_string()),
+            active: id == "dirA",
+            removable: id != "dirA",
+            live: true,
+            five_hour: Some(Gauge {
+                used_percent: pct,
+                window_minutes: 300,
+                resets_at: Some(1_000),
+                resets_in: None,
+            }),
+            seven_day: None,
+        };
+        Usage {
+            claude: ClaudeUsage {
+                available: true,
+                live: true,
+                accounts: vec![
+                    account("dirA", "Work", work_pct),
+                    account("dirB", "Personal", personal_pct),
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
         }
     }
 
@@ -638,5 +668,32 @@ mod tests {
         let events = state.notification_events(&codex_session_usage(100.0, 2_000), 7);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].0, "Codex limit used up");
+    }
+
+    #[test]
+    fn claude_accounts_notify_independently_and_name_the_account() {
+        let state = state_with(false, true);
+
+        // Baseline below the warn band for both accounts: records only.
+        assert!(state
+            .notification_events(&claude_two_account_usage(50.0, 50.0), 1)
+            .is_empty());
+
+        // "Work" crosses into the warn band; "Personal" stays low. Exactly one
+        // notification fires, and it names the account it's about.
+        let events = state.notification_events(&claude_two_account_usage(91.0, 50.0), 2);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "Claude · Work limit almost used");
+        assert!(events[0].1.contains("Work"));
+        assert!(events[0].1.contains("91%"));
+
+        // Now "Personal" crosses too. "Work" is unchanged (already warned at
+        // 91%), so only "Personal" notifies — proving the two accounts track
+        // their warn state independently.
+        let events = state.notification_events(&claude_two_account_usage(91.0, 95.0), 3);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "Claude · Personal limit almost used");
+        assert!(events[0].1.contains("Personal"));
+        assert!(events[0].1.contains("95%"));
     }
 }

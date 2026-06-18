@@ -153,8 +153,10 @@ pub(crate) fn collect_usage_sync() -> Usage {
     // reading `claude.five_hour`/`seven_day` unchanged. Cost/token history
     // stays machine-wide on `claude` since the logs carry no account id.
     if !claude_accounts.is_empty() {
+        // Having any configured account makes the Claude tab (and its folder
+        // management UI) available even before a live fetch succeeds.
+        claude.available = true;
         if claude_accounts.iter().any(|a| a.live) {
-            claude.available = true;
             claude.live = true;
         }
         if let Some(active) = claude_accounts.iter().find(|a| a.active && a.live) {
@@ -164,10 +166,11 @@ pub(crate) fn collect_usage_sync() -> Usage {
         claude.accounts = claude_accounts
             .into_iter()
             .map(|a| ClaudeAccountUsage {
-                org_uuid: a.org_uuid,
+                id: a.id,
                 label: a.label,
                 subscription_type: a.subscription_type,
                 active: a.active,
+                removable: a.removable,
                 live: a.live,
                 five_hour: a.five_hour,
                 seven_day: a.seven_day,
@@ -229,15 +232,22 @@ fn set_notification_enabled(
 
 /// Rename a Claude account. An empty label clears back to the derived default.
 #[tauri::command]
-fn set_claude_account_label(org_uuid: String, label: String) -> Result<(), String> {
-    accounts::set_label(&org_uuid, &label)
+fn set_claude_account_label(id: String, label: String) -> Result<(), String> {
+    accounts::set_label(&id, &label)
 }
 
-/// Forget a Claude account's stored tokens. The active account simply gets
-/// re-captured on the next collection; this is for clearing out a stale one.
+/// Register an extra Claude config directory (a folder holding its own
+/// `.credentials.json`) so it shows up as its own account.
 #[tauri::command]
-fn forget_claude_account(org_uuid: String) -> Result<(), String> {
-    accounts::forget(&org_uuid)
+fn add_claude_directory(path: String) -> Result<(), String> {
+    accounts::add_dir(&path)
+}
+
+/// Stop tracking a user-added Claude directory. The built-in `~/.claude` can't
+/// be removed.
+#[tauri::command]
+fn remove_claude_directory(id: String) -> Result<(), String> {
+    accounts::remove_dir(&id)
 }
 
 /// Place the popover near the tray click, or at the bottom-right of the
@@ -319,7 +329,8 @@ pub fn run() {
             get_notification_settings,
             set_notification_enabled,
             set_claude_account_label,
-            forget_claude_account
+            add_claude_directory,
+            remove_claude_directory
         ])
         .setup(|app| {
             register_notification_aumid(

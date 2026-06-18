@@ -9,15 +9,15 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-fn projects_root() -> Option<PathBuf> {
-    let mut p = dirs::home_dir()?;
-    p.push(".claude");
-    p.push("projects");
-    if p.is_dir() {
-        Some(p)
-    } else {
-        None
-    }
+/// The `projects` transcript folder for every configured Claude directory that
+/// has one. Cost/tokens are reported machine-wide (the logs carry no account
+/// id), so all accounts' transcripts are pooled.
+fn projects_roots() -> Vec<PathBuf> {
+    crate::accounts::account_dirs()
+        .into_iter()
+        .map(|dir| dir.join("projects"))
+        .filter(|p| p.is_dir())
+        .collect()
 }
 
 /// All .jsonl transcripts modified after `min_mtime`. Files untouched for
@@ -53,10 +53,10 @@ struct Entry {
 }
 
 pub fn collect() -> ClaudeUsage {
-    let root = match projects_root() {
-        Some(r) => r,
-        None => return ClaudeUsage::default(),
-    };
+    let roots = projects_roots();
+    if roots.is_empty() {
+        return ClaudeUsage::default();
+    }
 
     let mut entries: Vec<Entry> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -66,7 +66,8 @@ pub fn collect() -> ClaudeUsage {
     // One extra day of slack so local-timezone edges never drop entries.
     let min_mtime = std::time::SystemTime::now() - std::time::Duration::from_secs(31 * 86400);
 
-    for path in jsonl_files(&root, min_mtime) {
+    let files = roots.iter().flat_map(|root| jsonl_files(root, min_mtime));
+    for path in files {
         let file = match File::open(&path) {
             Ok(f) => f,
             Err(_) => continue,

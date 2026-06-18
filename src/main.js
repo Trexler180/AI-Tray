@@ -5,9 +5,13 @@ let data = null;
 let activeTab = "overview";
 let notificationSettings = { codex: false, claude: false };
 let notifyError = null; // provider whose toggle failed to save, if any
-let editingAccount = null; // org uuid whose Claude label is being renamed inline
+let editingAccount = null; // account id whose Claude label is being renamed inline
 let editingDraft = ""; // in-progress label text, kept across background re-renders
 let editFocusPending = false; // focus the rename input once when editing starts
+let addingFolder = false; // whether the "add Claude folder" input is open
+let addFolderDraft = ""; // in-progress folder path, kept across background re-renders
+let addFolderError = null; // error from the last add attempt, if any
+let addFolderFocusPending = false; // focus the add-folder input once when opened
 
 // ---------- formatting helpers ----------
 const usd = (n) => "$" + (Number.isFinite(n) ? n : 0).toFixed(2);
@@ -131,14 +135,14 @@ function claudeGauges(acct, sessionLabel) {
   return h;
 }
 
-// Rename/forget controls. Forget is hidden for the active account, which would
-// just be re-captured from the credentials file on the next collection.
+// Rename/remove controls. Remove is shown only for user-added folders; the
+// built-in ~/.claude account can't be removed.
 function acctActions(a) {
-  const rename = `<button class="acct-btn" data-rename="${esc(a.org_uuid)}" title="Rename">✎</button>`;
-  const forget = a.active
-    ? ""
-    : `<button class="acct-btn" data-forget="${esc(a.org_uuid)}" title="Forget this account">✕</button>`;
-  return `<div class="acct-actions">${rename}${forget}</div>`;
+  const rename = `<button class="acct-btn" data-rename="${esc(a.id)}" title="Rename">✎</button>`;
+  const remove = a.removable
+    ? `<button class="acct-btn" data-remove="${esc(a.id)}" title="Remove this folder">✕</button>`
+    : "";
+  return `<div class="acct-actions">${rename}${remove}</div>`;
 }
 
 function renameField() {
@@ -150,22 +154,45 @@ function renameField() {
     </div>`;
 }
 
-// One account block: a header (name + active pill + controls, or the inline
-// rename field) followed by its live gauges.
-function renderClaudeAccount(a) {
-  const editing = editingAccount === a.org_uuid;
+// One account block: a header (name + default pill + controls, or the inline
+// rename field), the folder path, then its live gauges.
+function renderClaudeAccount(a, multi) {
+  const editing = editingAccount === a.id;
   const name = editing
     ? renameField()
     : `<div class="acct-name">
         <span class="ov-dot claude"></span>
-        <span class="acct-label" data-rename="${esc(a.org_uuid)}" title="Rename">${esc(a.label)}</span>
-        ${a.active ? `<span class="pill">active</span>` : ""}
+        <span class="acct-label" data-rename="${esc(a.id)}" title="Rename">${esc(a.label)}</span>
+        ${a.active ? `<span class="pill">default</span>` : ""}
       </div>${acctActions(a)}`;
+  // Show the folder each account maps to once more than one is configured.
+  const path = multi && !editing ? `<div class="acct-path">${esc(a.id)}</div>` : "";
   const body = a.live
     ? claudeGauges(a, "Session (5h)")
     : `<div class="banner small">Live usage unavailable — open Claude Code signed in as this account to refresh it.</div>`;
-  return `<div class="acct" data-org="${esc(a.org_uuid)}">
-    <div class="acct-head">${name}</div>${body}</div>`;
+  return `<div class="acct" data-acct="${esc(a.id)}">
+    <div class="acct-head">${name}</div>${path}${body}</div>`;
+}
+
+// "Add Claude folder" control: a button that expands into a path input. Lets a
+// user track a second login kept in a separate CLAUDE_CONFIG_DIR folder.
+function addFolderControl() {
+  if (!addingFolder) {
+    return `<button class="add-folder-btn" data-add-folder-open>+ Add Claude folder</button>`;
+  }
+  const err = addFolderError
+    ? `<div class="banner small">${esc(addFolderError)}</div>`
+    : "";
+  return `<div class="add-folder">
+      <input class="acct-input" data-add-folder-input type="text"
+        value="${esc(addFolderDraft)}" placeholder="Path to a Claude config folder" />
+      <div class="acct-actions">
+        <button class="acct-btn save" data-add-folder-save title="Add">✓</button>
+        <button class="acct-btn" data-add-folder-cancel title="Cancel">✕</button>
+      </div>
+    </div>
+    <div class="sec-sub" style="margin:4px 0 0">A folder containing its own <code>.credentials.json</code> (e.g. a second <code>CLAUDE_CONFIG_DIR</code>).</div>
+    ${err}`;
 }
 
 function renderClaude() {
@@ -183,10 +210,11 @@ function renderClaude() {
   html += notifyToggle("claude");
 
   if (accounts.length) {
-    for (const a of accounts) html += renderClaudeAccount(a);
+    for (const a of accounts) html += renderClaudeAccount(a, multi);
   } else {
     html += `<div class="banner">Live usage unavailable — token expired or offline. Open Claude Code to refresh it. Showing estimated cost from logs.</div>`;
   }
+  html += addFolderControl();
 
   html += `<div class="block-label">Cost (estimated from logs)</div>`;
   if (multi)
@@ -262,8 +290,8 @@ function render() {
   content.querySelectorAll("[data-rename]").forEach((el) =>
     el.addEventListener("click", () => startRename(el.dataset.rename))
   );
-  content.querySelectorAll("[data-forget]").forEach((el) =>
-    el.addEventListener("click", () => forgetAccount(el.dataset.forget))
+  content.querySelectorAll("[data-remove]").forEach((el) =>
+    el.addEventListener("click", () => removeDirectory(el.dataset.remove))
   );
   content.querySelectorAll("[data-rename-cancel]").forEach((el) =>
     el.addEventListener("click", cancelRename)
@@ -292,6 +320,34 @@ function render() {
       renameInput.focus();
       renameInput.select();
       editFocusPending = false;
+    }
+  }
+
+  // Add-folder control.
+  const addOpen = content.querySelector("[data-add-folder-open]");
+  if (addOpen) addOpen.addEventListener("click", openAddFolder);
+  const addCancel = content.querySelector("[data-add-folder-cancel]");
+  if (addCancel) addCancel.addEventListener("click", cancelAddFolder);
+  const addSave = content.querySelector("[data-add-folder-save]");
+  const addInput = content.querySelector("[data-add-folder-input]");
+  if (addSave)
+    addSave.addEventListener("click", () => addDirectory(addInput ? addInput.value : ""));
+  if (addInput) {
+    addInput.addEventListener("input", () => {
+      addFolderDraft = addInput.value;
+    });
+    addInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        addDirectory(addInput.value);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        cancelAddFolder();
+      }
+    });
+    if (addFolderFocusPending) {
+      addInput.focus();
+      addFolderFocusPending = false;
     }
   }
 
@@ -382,9 +438,9 @@ async function setNotifyEnabled(provider, enabled) {
 }
 
 // ---------- Claude account management ----------
-function startRename(org) {
-  const a = (data?.claude?.accounts || []).find((x) => x.org_uuid === org);
-  editingAccount = org;
+function startRename(id) {
+  const a = (data?.claude?.accounts || []).find((x) => x.id === id);
+  editingAccount = id;
   editingDraft = a ? a.label : "";
   editFocusPending = true;
   render();
@@ -396,20 +452,49 @@ function cancelRename() {
   render();
 }
 
-async function saveAccountLabel(org, label) {
+async function saveAccountLabel(id, label) {
   editingAccount = null;
   editingDraft = "";
   try {
-    await invoke("set_claude_account_label", { orgUuid: org, label });
+    await invoke("set_claude_account_label", { id, label });
   } catch (_) {}
   refresh();
 }
 
-async function forgetAccount(org) {
+async function removeDirectory(id) {
   try {
-    await invoke("forget_claude_account", { orgUuid: org });
+    await invoke("remove_claude_directory", { id });
   } catch (_) {}
   refresh();
+}
+
+function openAddFolder() {
+  addingFolder = true;
+  addFolderDraft = "";
+  addFolderError = null;
+  addFolderFocusPending = true;
+  render();
+}
+
+function cancelAddFolder() {
+  addingFolder = false;
+  addFolderDraft = "";
+  addFolderError = null;
+  render();
+}
+
+async function addDirectory(path) {
+  try {
+    await invoke("add_claude_directory", { path });
+    addingFolder = false;
+    addFolderDraft = "";
+    addFolderError = null;
+    refresh();
+  } catch (e) {
+    // Keep the input open so the user can fix the path.
+    addFolderError = String(e);
+    render();
+  }
 }
 
 // ---------- wiring ----------

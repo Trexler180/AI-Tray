@@ -29,8 +29,8 @@ struct Cached<T> {
     value: T,
 }
 
-/// Per-account Claude snapshots, keyed by org UUID, so a stale account keeps
-/// serving its own last-good gauges independently of the others.
+/// Per-account Claude snapshots, keyed by config-directory path, so a stale
+/// account keeps serving its own last-good gauges independently of the others.
 static CLAUDE_CACHE: OnceLock<Mutex<HashMap<String, Cached<ClaudeLive>>>> = OnceLock::new();
 static CODEX_CACHE: Mutex<Option<Cached<CodexLive>>> = Mutex::new(None);
 
@@ -114,11 +114,13 @@ pub struct ClaudeLive {
 
 /// One account's live gauges, ready for the UI/alerts layer.
 pub struct ClaudeAccountLive {
-    pub org_uuid: String,
+    pub id: String,
     pub label: String,
     pub subscription_type: Option<String>,
-    /// The account currently in `~/.claude/.credentials.json`.
+    /// The built-in `~/.claude` account.
     pub active: bool,
+    /// A user-added directory (removable); false for the built-in `~/.claude`.
+    pub removable: bool,
     /// True when these gauges are fresh or within the stale-serve grace window.
     pub live: bool,
     pub five_hour: Option<Gauge>,
@@ -207,37 +209,28 @@ fn claude_cached(org: &str, fetched: Option<ClaudeLive>) -> Option<ClaudeLive> {
 
 /// Live gauges for every known Claude account.
 ///
-/// The active account (the one in `~/.credentials.json`) is fetched through the
-/// normal auth flow so its rotated tokens are written back where the CLI reads
-/// them. Inactive accounts use the app-owned store, which refreshes their
-/// tokens without touching the shared credentials file.
+/// Each account is a config directory: its `.credentials.json` is read, used to
+/// fetch the live gauges, and (on a 401) refreshed in place in that same file —
+/// so the CLI pointed at that directory keeps working with the rotated token.
 pub fn claude_live_accounts() -> Vec<ClaudeAccountLive> {
-    let active_org = crate::accounts::capture_active();
-
     let mut out: Vec<ClaudeAccountLive> = crate::accounts::list()
         .into_iter()
         .map(|acct| {
-            let active = active_org.as_deref() == Some(acct.org_uuid.as_str());
-            let fetched = if active {
-                fetch_claude_for(auth::claude_access_token(), |t| {
-                    auth::refresh_claude_creds_after_rejection(t)
-                })
-            } else {
-                let org = acct.org_uuid.clone();
-                fetch_claude_for(crate::accounts::access_token(&org), |t| {
-                    crate::accounts::refresh_after_rejection(&org, t)
-                })
-            };
-            let served = claude_cached(&acct.org_uuid, fetched);
+            let creds = crate::accounts::creds_file(&acct.dir);
+            let fetched = fetch_claude_for(auth::claude_access_token_at(&creds), |t| {
+                auth::refresh_claude_creds_after_rejection_at(&creds, t)
+            });
+            let served = claude_cached(&acct.id, fetched);
             let live = served.is_some();
             let (five_hour, seven_day) = served
                 .map(|l| (l.five_hour, l.seven_day))
                 .unwrap_or((None, None));
             ClaudeAccountLive {
-                org_uuid: acct.org_uuid,
+                id: acct.id,
                 label: acct.label,
                 subscription_type: acct.subscription_type,
-                active,
+                active: !acct.removable,
+                removable: acct.removable,
                 live,
                 five_hour,
                 seven_day,
@@ -245,7 +238,7 @@ pub fn claude_live_accounts() -> Vec<ClaudeAccountLive> {
         })
         .collect();
 
-    // Active account first, then alphabetically, so the UI order is stable.
+    // Default account first, then alphabetically, so the UI order is stable.
     out.sort_by(|a, b| b.active.cmp(&a.active).then_with(|| a.label.cmp(&b.label)));
     out
 }
