@@ -1,0 +1,35 @@
+[package]
+name = "ai-usage-tray"
+version = "0.1.0"
+description = "Tray app for Claude & Codex usage"
+authors = ["dev"]
+edition = "2021"
+
+[lib]
+name = "ai_usage_tray_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-notification = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["clock"] }
+dirs = "5"
+walkdir = "2"
+ureq = { version = "2", features = ["json"] }
+notify = "6"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_Registry"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

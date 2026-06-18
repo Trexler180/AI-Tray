@@ -1,0 +1,7 @@
+node_modules
+dist
+src-tauri/target
+*.log
+
+# Machine-specific Cargo build redirect (contains a local absolute path).
+.cargo/config.toml
