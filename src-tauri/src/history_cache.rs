@@ -64,6 +64,20 @@ pub fn save<T: Serialize>(name: &str, version: u32, data: &T) -> std::io::Result
     save_path(&path, version, data)
 }
 
+pub fn clear(name: &str) -> std::io::Result<()> {
+    let path =
+        cache_path(name).ok_or_else(|| std::io::Error::other("no configuration directory"))?;
+    remove_path(&path)
+}
+
+fn remove_path(path: &std::path::Path) -> std::io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 fn save_path<T: Serialize>(path: &std::path::Path, version: u32, data: &T) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -71,7 +85,7 @@ fn save_path<T: Serialize>(path: &std::path::Path, version: u32, data: &T) -> st
     let temporary = path.with_extension("tmp-aiusage");
     let body = serde_json::to_vec(&Envelope { version, data })?;
     fs::write(&temporary, body)?;
-    replace_file(&temporary, &path)
+    replace_file(&temporary, path)
 }
 
 #[cfg(test)]
@@ -87,6 +101,17 @@ mod tests {
         let loaded: Envelope<Vec<u64>> = load_path(&path).unwrap();
         assert_eq!(loaded.version, 1);
         assert_eq!(loaded.data, vec![2, 3]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn clear_is_idempotent() {
+        let root = std::env::temp_dir().join(format!("ai-usage-cache-{}", uuid::Uuid::new_v4()));
+        let path = root.join("cache.json");
+        save_path(&path, 1, &vec![1u64]).unwrap();
+        remove_path(&path).unwrap();
+        remove_path(&path).unwrap();
+        assert!(!path.exists());
         let _ = fs::remove_dir_all(root);
     }
 }

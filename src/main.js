@@ -139,13 +139,16 @@ function healthRow(key, health, estimate = null) {
     ? `<div><span>Pricing catalog</span><strong>${esc(estimate.catalog_version)} · reviewed ${esc(estimate.pricing_reviewed_at)}</strong></div>`
     : "";
   const diagnostic = esc(JSON.stringify({ health, estimate }, null, 2));
+  const clearCache = key.endsWith("history")
+    ? `<button class="health-copy" data-history-cache-clear>Clear scan cache</button>`
+    : "";
   const warning = health.source === "memory_cache" || health.source === "unavailable";
   return `<div class="health ${warning ? "warn" : ""}">
     <button class="health-summary" data-health-toggle="${esc(key)}" aria-expanded="${expanded}">
       <span class="health-dot"></span><span>${esc(healthTitle(health))}</span><span class="health-chevron">⌄</span>
     </button>
     ${expanded ? `<div class="health-detail">${fetched}${attempted}${error}${files}${pricing}
-      <button class="health-copy" data-health-copy="${diagnostic}">Copy diagnostics</button>
+      <button class="health-copy" data-health-copy="${diagnostic}">Copy diagnostics</button>${clearCache}
     </div>` : ""}
   </div>`;
 }
@@ -497,6 +500,21 @@ function render() {
         button.textContent = "Copied";
       } catch (_) {
         button.textContent = "Copy failed";
+      }
+    })
+  );
+  content.querySelectorAll("[data-history-cache-clear]").forEach((button) =>
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      button.disabled = true;
+      button.textContent = "Clearing…";
+      try {
+        await invoke("clear_history_cache");
+        button.textContent = "Rebuilding…";
+        await refresh();
+      } catch (_) {
+        button.disabled = false;
+        button.textContent = "Clear failed";
       }
     })
   );

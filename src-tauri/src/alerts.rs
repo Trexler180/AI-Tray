@@ -258,7 +258,7 @@ impl AlertState {
                     // or the reset_at drift a rolling window emits each poll —
                     // leaves warned_at untouched and stays silent.
                     let pct = current.round() as u8;
-                    let climbed = state.warned_at.map_or(true, |prev| pct > prev);
+                    let climbed = state.warned_at.is_none_or(|prev| pct > prev);
                     if climbed {
                         state.warned_at = Some(pct);
                         if !first {
@@ -548,7 +548,7 @@ const EXPIRY_DAY_SECS: i64 = 24 * 3600;
 const EXPIRY_HOURS_SECS: i64 = 3 * 3600;
 
 /// Available, not-yet-expired credits — the only ones worth tracking.
-fn active_credits<'a>(resets: &'a CodexResets, now: i64) -> Vec<&'a ResetCredit> {
+fn active_credits(resets: &CodexResets, now: i64) -> Vec<&ResetCredit> {
     resets
         .credits
         .iter()

@@ -293,6 +293,14 @@ fn remove_claude_directory(id: String) -> Result<(), String> {
     accounts::remove_dir(&id)
 }
 
+/// Clear only the derived history indexes. Source logs and credentials are
+/// untouched; the next refresh rebuilds both indexes from local history.
+#[tauri::command]
+fn clear_history_cache() -> Result<(), String> {
+    codex::clear_history_cache().map_err(|error| error.to_string())?;
+    claude::clear_history_cache().map_err(|error| error.to_string())
+}
+
 /// Place the popover near the tray click, or at the bottom-right of the
 /// current monitor when no click position is known. The panel is always
 /// clamped into the monitor's work area (the screen minus the taskbar), so a
@@ -375,7 +383,8 @@ pub fn run() {
             set_claude_account_label,
             add_claude_directory,
             remove_claude_directory,
-            consume_codex_reset
+            consume_codex_reset,
+            clear_history_cache
         ])
         .setup(|app| {
             register_notification_aumid(

@@ -1,62 +1,109 @@
 # AI Usage Tray
 
-A Windows system-tray app that shows your **Claude** and **Codex** usage in a
-beautiful pop-over — inspired by Theo's CodexBar.
+A Windows system-tray app that shows Claude and Codex quota usage, reset times,
+and an API-equivalent value estimate in a compact popover.
 
-- **Overview tab** — both providers at a glance, with combined cost today.
-- **Codex tab** — live rate-limit gauges (5h session + weekly), plan type,
-  credits, and an estimated-cost view.
-- **Claude tab** — live 5h/weekly gauges, plus a token/cost estimate built
-  from your local Claude Code logs.
+- **Overview** — both providers at a glance and today's combined estimated value.
+- **Codex** — live quota windows, plan and credit details, reset credits, and
+  model-aware local token history.
+- **Claude** — live account and scoped quota windows plus model-aware local
+  Claude Code history. Multiple Claude config directories are supported.
+
+## What the numbers mean
+
+Quota gauges come from the providers' authenticated usage endpoints. The app
+discovers every returned quota window instead of assuming that only five-hour
+and weekly limits exist. Model- or surface-specific windows are labeled and can
+be shown or hidden in the popover.
+
+The currency figure is labeled **API-equivalent usage value** deliberately. It
+applies public API list prices to tokens found in local logs; it is not a bill,
+subscription charge, or claim about the provider's internal cost. Cached input
+is treated as a subset of input rather than counted twice.
+
+Each estimate includes a confidence level:
+
+- **High** — the model has an exact current catalog entry.
+- **Medium** — a documented model-family price was used.
+- **Low** — the model was unknown and the conservative fallback was used, or
+  the catalog is past its review date.
+
+Pricing is intentionally a small, manually reviewed catalog at
+[`src-tauri/src/pricing_catalog.json`](src-tauri/src/pricing_catalog.json).
+Release 1 does not fetch pricing automatically. If the catalog becomes stale,
+the app keeps using its last-known-good values and visibly lowers confidence.
+Update the catalog version, review dates, sources, and rate cards together when
+provider pricing changes.
 
 ## Where the data comes from
 
-- **Live gauges** are fetched from the same usage endpoints the official CLIs
-  use, authenticated with the tokens already on disk
-  (`~/.claude/.credentials.json`, `~/.codex/auth.json`). Expired access tokens
-  are refreshed automatically, and the rotated tokens are written back
-  atomically so the CLIs keep working.
-- **Cost / token history** is estimated locally from
-  `~/.claude/projects/**/*.jsonl` and `~/.codex/sessions/**/rollout-*.jsonl`.
-  Files untouched for more than the 30-day window are skipped, so refreshes
-  stay fast no matter how much history accumulates.
-- When the network (or a token) is unavailable, the app falls back to
-  log-based numbers and says so in the panel.
+- **Live quota data** uses the same authenticated endpoints as the official
+  CLIs, with credentials already stored in `~/.claude/.credentials.json` and
+  `~/.codex/auth.json`. Rotated access tokens are written back atomically.
+- **Codex history** comes from both
+  `CODEX_HOME/sessions/**/rollout-*.jsonl` and
+  `CODEX_HOME/archived_sessions/**/rollout-*.jsonl`. If `CODEX_HOME` is unset,
+  `~/.codex` is used. Usage is attributed to each event's timestamp, not the
+  directory date.
+- **Claude history** comes from `~/.claude/projects/**/*.jsonl` (and the
+  equivalent directory for each configured Claude account).
+- **Data health** is an expandable row in the existing popover. It identifies
+  live API, in-memory cache, local-log, and unavailable results; shows
+  freshness, scan counts, errors, and pricing review metadata; and can copy a
+  sanitized diagnostic summary.
+
+Live endpoint failures do not silently masquerade as current data. A recent
+in-memory result may be shown with its age and the failed attempt, while local
+history remains separately identified.
+
+## Incremental history cache
+
+History scans maintain versioned, provider-separated indexes in the Windows
+configuration directory:
+
+```text
+%APPDATA%\AI Usage Tray\codex-history-cache.json
+%APPDATA%\AI Usage Tray\claude-history-cache.json
+```
+
+The scanner reuses unchanged files and reads only newly appended, complete
+JSONL records. Files changed in place or truncated are rescanned. Cache writes
+use atomic replacement, and an unreadable or older cache version is ignored and
+rebuilt. The cache stores token facts rather than currency totals, so a pricing
+catalog update reprices history without forcing a log rescan.
+
+To rebuild the indexes, expand either local-history Data health row and choose
+**Clear scan cache**. This removes only the two derived cache files; source
+logs, credentials, settings, and provider data are untouched. The subsequent
+refresh rebuilds them.
 
 ## Behavior
 
-- **Left-click** the tray icon to toggle the panel; it auto-hides on blur.
-  The panel opens next to the tray icon and is clamped to the monitor's work
-  area, so it rests on the taskbar instead of covering it (top/side taskbars
-  work too).
-- **Right-click** the tray icon for Refresh / Quit.
-- Data refreshes when the panel opens and every 60s while it stays visible;
-  nothing polls while it's hidden.
-- **Starts on login** — the app registers itself under
-  `HKCU\...\CurrentVersion\Run` on every launch, so the entry follows the exe
-  if it moves. Remove it via Task Manager → Startup apps if unwanted.
-- **Single instance** — launching it again just pops the existing panel.
-- **Glassy panel** — the popover uses Windows acrylic (blur-behind) with
-  native rounded corners; if the OS can't provide it, the panel falls back to
-  a solid background automatically.
+- Left-click the tray icon to toggle the panel; it auto-hides on blur and is
+  clamped to the monitor work area.
+- Right-click the tray icon for Refresh or Quit.
+- The panel refreshes when opened and every 60 seconds while visible.
+- When notifications are enabled, a lightweight background refresh checks
+  quota thresholds approximately every five minutes even while the panel is
+  hidden. Local usage-file changes also schedule a refresh.
+- The app starts on login by registering itself under
+  `HKCU\...\CurrentVersion\Run`. Disable it in Task Manager's Startup apps.
+- A second launch opens the existing single instance.
+- Windows acrylic and native rounded corners gracefully fall back to a solid
+  panel when unavailable.
 
-## Stack
+## Stack and prerequisites
 
-Tauri v2 (Rust backend, vanilla web frontend + Vite).
+Tauri v2 with a Rust backend and vanilla JavaScript/Vite frontend.
 
-## Prerequisites
+- Node.js 18+ and npm
+- Rust (`rustup`) with the MSVC target
+- WebView2 runtime and MSVC C++ Build Tools
 
-- Node 18+ and npm
-- Rust toolchain (`rustup`) with the MSVC target
-- Tauri's Windows deps: **WebView2 runtime** (preinstalled on Win11) and the
-  **MSVC C++ Build Tools**
-
-## Setup & run
+## Setup and run
 
 ```powershell
 npm install
-
-# dev (hot reload)
 npm run tauri dev
 ```
 
@@ -70,26 +117,20 @@ npx tauri icon src-tauri/icons/source.png
 ## Build
 
 ```powershell
-# release exe only (fastest)
+# Release executable only
 npm run tauri build -- --no-bundle
 
-# release exe + MSI/NSIS installers
+# Release executable plus MSI/NSIS installers
 npm run tauri build
 ```
-
-The exe lands in the cargo target directory (path printed at the end of the
-build); installers go under `target/release/bundle/`.
 
 ## Tests
 
 ```powershell
-cd src-tauri
-cargo test
+cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-## Tuning the cost estimate
-
-Costs are **estimates** from local logs at list price (not what you actually
-pay on a subscription plan). The per-million-token rates live in
-[`src-tauri/src/pricing.rs`](src-tauri/src/pricing.rs) — adjust the `CLAUDE_*`
-and `CODEX_*` rate cards to match the models you use and current pricing.
+The test suite includes sanitized provider-contract fixtures, pricing and
+cached-input accounting, dynamic scoped quotas, provenance fallback behavior,
+active and archived Codex history, event-date attribution, unchanged and
+append-only scan paths, and atomic cache replacement.

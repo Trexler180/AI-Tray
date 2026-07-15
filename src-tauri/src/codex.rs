@@ -14,6 +14,13 @@ use walkdir::WalkDir;
 const CACHE_VERSION: u32 = 1;
 static COLLECT_LOCK: Mutex<()> = Mutex::new(());
 
+pub fn clear_history_cache() -> std::io::Result<()> {
+    let _guard = COLLECT_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    crate::history_cache::clear("codex")
+}
+
 fn codex_root() -> Option<PathBuf> {
     if let Some(root) = std::env::var_os("CODEX_HOME").map(PathBuf::from) {
         if root.is_dir() {

@@ -14,6 +14,13 @@ use walkdir::WalkDir;
 const CACHE_VERSION: u32 = 1;
 static COLLECT_LOCK: Mutex<()> = Mutex::new(());
 
+pub fn clear_history_cache() -> std::io::Result<()> {
+    let _guard = COLLECT_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    crate::history_cache::clear("claude")
+}
+
 fn projects_roots() -> Vec<PathBuf> {
     crate::accounts::account_dirs()
         .into_iter()
