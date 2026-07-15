@@ -82,6 +82,16 @@ function costCard(today, todayTok, m30, tok30) {
     </div>`;
 }
 
+function equivalentValueLabel(detail) {
+  const explanation =
+    "Not your subscription bill. Estimated from local token logs using API list prices.";
+  return `<div class="block-label value-label">API-equivalent usage value
+    <span class="info-tip" tabindex="0" role="img"
+      aria-label="${esc(explanation)}" title="${esc(explanation)}">i</span>
+    ${detail ? `<span class="value-detail">${esc(detail)}</span>` : ""}
+  </div>`;
+}
+
 function notifyToggle(provider, label = "Notify when limits near, hit, or reset") {
   const enabled = !!notificationSettings?.[provider];
   const claude = provider === "claude";
@@ -185,7 +195,7 @@ function renderCodex() {
 
   html += resetSection(c);
 
-  html += `<div class="block-label">Cost (estimated)</div>`;
+  html += equivalentValueLabel("estimated");
   html += costCard(c.cost_today, c.tokens_today, c.cost_30d, c.tokens_30d);
   html += chart(c.daily, false);
   return html;
@@ -301,7 +311,7 @@ function renderClaude() {
   }
   html += addFolderControl();
 
-  html += `<div class="block-label">Cost (estimated from logs)</div>`;
+  html += equivalentValueLabel("estimated from logs");
   if (multi)
     html += `<div class="sec-sub" style="margin:-4px 0 8px">Combined across all accounts — local logs aren't per-account.</div>`;
   html += costCard(c.cost_today, c.tokens_today, c.cost_30d, c.tokens_30d);
