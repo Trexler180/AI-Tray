@@ -23,18 +23,6 @@ pub struct DataHealth {
     pub files_skipped: u64,
 }
 
-impl DataHealth {
-    pub fn local_logs(files_scanned: u64) -> Self {
-        Self {
-            source: DataSource::LocalLogs,
-            fetched_at: Some(chrono::Utc::now().timestamp()),
-            attempted_at: Some(chrono::Utc::now().timestamp()),
-            files_scanned,
-            ..Default::default()
-        }
-    }
-}
-
 #[derive(Serialize, Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
 #[serde(rename_all = "lowercase")]
 pub enum EstimateConfidence {

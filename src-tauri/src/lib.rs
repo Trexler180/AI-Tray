@@ -3,6 +3,7 @@ mod alerts;
 mod auth;
 mod claude;
 mod codex;
+mod history_cache;
 mod live;
 mod models;
 mod pricing;

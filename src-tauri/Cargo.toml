@@ -28,7 +28,7 @@ notify = "6"
 uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_Registry"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Storage_FileSystem", "Win32_System_Registry"] }
 
 [profile.release]
 opt-level = "s"
