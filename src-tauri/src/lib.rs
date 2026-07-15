@@ -136,7 +136,7 @@ pub(crate) fn collect_usage_sync() -> Usage {
             (
                 a.join().unwrap_or_default(),
                 b.join().unwrap_or_default(),
-                c.join().ok().flatten(),
+                c.join().unwrap_or_default(),
                 d.join().unwrap_or_default(),
                 e.join().ok().flatten(),
             )
@@ -144,6 +144,8 @@ pub(crate) fn collect_usage_sync() -> Usage {
 
     // Live gauges come straight from the official usage endpoints and
     // override the log-based estimates when reachable.
+    let (codex_live, codex_live_health) = codex_live;
+    codex.health = codex_live_health;
     if let Some(l) = codex_live {
         codex.available = true;
         codex.live = true;
@@ -177,6 +179,9 @@ pub(crate) fn collect_usage_sync() -> Usage {
         if claude_accounts.iter().any(|a| a.live) {
             claude.live = true;
         }
+        if let Some(active) = claude_accounts.iter().find(|a| a.active) {
+            claude.health = active.health.clone();
+        }
         if let Some(active) = claude_accounts.iter().find(|a| a.active && a.live) {
             claude.five_hour = active.five_hour.clone();
             claude.seven_day = active.seven_day.clone();
@@ -194,6 +199,7 @@ pub(crate) fn collect_usage_sync() -> Usage {
                 five_hour: a.five_hour,
                 seven_day: a.seven_day,
                 seven_day_model: a.seven_day_model,
+                health: a.health,
             })
             .collect();
     }

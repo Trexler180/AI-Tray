@@ -13,7 +13,7 @@
 //! CLI doesn't flip the UI and the alert pipeline to "logs only".
 
 use crate::auth;
-use crate::models::{Gauge, ModelGauge};
+use crate::models::{DataHealth, DataSource, Gauge, ModelGauge};
 use crate::util::human_until;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -27,6 +27,64 @@ const LIVE_CACHE_SECS: i64 = 15 * 60;
 struct Cached<T> {
     fetched_at: i64,
     value: T,
+}
+
+#[derive(Clone)]
+struct FetchFailure {
+    kind: &'static str,
+    message: String,
+}
+
+impl FetchFailure {
+    fn status(status: u16) -> Self {
+        let (kind, message) = match status {
+            0 => ("network", "Network request failed".to_string()),
+            401 | 403 => ("authorization", "Provider rejected the saved credentials".to_string()),
+            429 => ("rate_limited", "Provider temporarily rate-limited refreshes".to_string()),
+            500..=599 => ("provider", format!("Provider returned HTTP {status}")),
+            _ => ("http", format!("Provider returned HTTP {status}")),
+        };
+        Self { kind, message }
+    }
+
+    fn missing_credentials() -> Self {
+        Self {
+            kind: "missing_credentials",
+            message: "No usable provider credentials were found".to_string(),
+        }
+    }
+}
+
+fn live_health(now: i64) -> DataHealth {
+    DataHealth {
+        source: DataSource::LiveApi,
+        fetched_at: Some(now),
+        attempted_at: Some(now),
+        stale_age_seconds: Some(0),
+        ..Default::default()
+    }
+}
+
+fn failed_health(now: i64, failure: &FetchFailure) -> DataHealth {
+    DataHealth {
+        source: DataSource::Unavailable,
+        attempted_at: Some(now),
+        error_kind: Some(failure.kind.to_string()),
+        error_message: Some(failure.message.clone()),
+        ..Default::default()
+    }
+}
+
+fn cached_health(now: i64, fetched_at: i64, failure: &FetchFailure) -> DataHealth {
+    DataHealth {
+        source: DataSource::MemoryCache,
+        fetched_at: Some(fetched_at),
+        attempted_at: Some(now),
+        stale_age_seconds: Some((now - fetched_at).max(0)),
+        error_kind: Some(failure.kind.to_string()),
+        error_message: Some(failure.message.clone()),
+        ..Default::default()
+    }
 }
 
 /// Per-account Claude snapshots, keyed by config-directory path, so a stale
@@ -137,6 +195,7 @@ pub struct ClaudeAccountLive {
     pub five_hour: Option<Gauge>,
     pub seven_day: Option<Gauge>,
     pub seven_day_model: Option<ModelGauge>,
+    pub health: DataHealth,
 }
 
 fn rfc3339_unix(v: &Value) -> Option<i64> {
@@ -190,30 +249,39 @@ fn parse_claude(v: &Value) -> Option<ClaudeLive> {
 fn fetch_claude_for(
     token: Option<String>,
     refresh: impl FnOnce(&str) -> Option<String>,
-) -> Option<ClaudeLive> {
+) -> Result<ClaudeLive, FetchFailure> {
     const URL: &str = "https://api.anthropic.com/api/oauth/usage";
     const HDR: [(&str, &str); 1] = [("anthropic-beta", "oauth-2025-04-20")];
 
-    let token = token?;
+    let token = token.ok_or_else(FetchFailure::missing_credentials)?;
     match get_json_retrying(URL, &token, &HDR) {
-        Ok(v) => parse_claude(&v),
+        Ok(v) => parse_claude(&v).ok_or_else(|| FetchFailure {
+            kind: "decode",
+            message: "Provider response did not contain recognized quota windows".to_string(),
+        }),
         Err(401) | Err(403) => {
-            let fresh = refresh(&token)?;
+            let fresh = refresh(&token).ok_or_else(|| FetchFailure::status(401))?;
             get_json_retrying(URL, &fresh, &HDR)
-                .ok()
-                .and_then(|v| parse_claude(&v))
+                .map_err(FetchFailure::status)
+                .and_then(|v| parse_claude(&v).ok_or_else(|| FetchFailure {
+                    kind: "decode",
+                    message: "Provider response did not contain recognized quota windows".to_string(),
+                }))
         }
-        Err(_) => None,
+        Err(status) => Err(FetchFailure::status(status)),
     }
 }
 
 /// Cache the fetched snapshot for `org`, or serve its last-good one within the
 /// grace window when the fetch failed.
-fn claude_cached(org: &str, fetched: Option<ClaudeLive>) -> Option<ClaudeLive> {
+fn claude_cached(
+    org: &str,
+    fetched: Result<ClaudeLive, FetchFailure>,
+) -> (Option<ClaudeLive>, DataHealth) {
     let now = Utc::now().timestamp();
     let mut cache = claude_cache().lock().unwrap();
     match fetched {
-        Some(live) => {
+        Ok(live) => {
             cache.insert(
                 org.to_string(),
                 Cached {
@@ -221,19 +289,22 @@ fn claude_cached(org: &str, fetched: Option<ClaudeLive>) -> Option<ClaudeLive> {
                     value: live.clone(),
                 },
             );
-            Some(live)
+            (Some(live), live_health(now))
         }
-        None => {
-            let cached = cache.get(org)?;
+        Err(failure) => {
+            let Some(cached) = cache.get(org) else {
+                return (None, failed_health(now, &failure));
+            };
             if now - cached.fetched_at > LIVE_CACHE_SECS {
-                return None;
+                return (None, failed_health(now, &failure));
             }
             let live = ClaudeLive {
                 five_hour: serve_cached_gauge(&cached.value.five_hour),
                 seven_day: serve_cached_gauge(&cached.value.seven_day),
                 seven_day_model: serve_cached_model_gauge(&cached.value.seven_day_model),
             };
-            (live.five_hour.is_some() || live.seven_day.is_some()).then_some(live)
+            let value = (live.five_hour.is_some() || live.seven_day.is_some()).then_some(live);
+            (value, cached_health(now, cached.fetched_at, &failure))
         }
     }
 }
@@ -251,7 +322,7 @@ pub fn claude_live_accounts() -> Vec<ClaudeAccountLive> {
             let fetched = fetch_claude_for(auth::claude_access_token_at(&creds), |t| {
                 auth::refresh_claude_creds_after_rejection_at(&creds, t)
             });
-            let served = claude_cached(&acct.id, fetched);
+            let (served, health) = claude_cached(&acct.id, fetched);
             let live = served.is_some();
             let (five_hour, seven_day, seven_day_model) = served
                 .map(|l| (l.five_hour, l.seven_day, l.seven_day_model))
@@ -266,6 +337,7 @@ pub fn claude_live_accounts() -> Vec<ClaudeAccountLive> {
                 five_hour,
                 seven_day,
                 seven_day_model,
+                health,
             }
         })
         .collect();
@@ -307,51 +379,65 @@ fn parse_codex(v: &Value) -> Option<CodexLive> {
     (live.primary.is_some() || live.secondary.is_some()).then_some(live)
 }
 
-fn fetch_codex_live() -> Option<CodexLive> {
+fn fetch_codex_live() -> Result<CodexLive, FetchFailure> {
     const URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 
-    let auth_json = auth::read_json(&auth::codex_auth_path()?)?;
-    let token = auth_json["tokens"]["access_token"].as_str()?.to_string();
+    let path = auth::codex_auth_path().ok_or_else(FetchFailure::missing_credentials)?;
+    let auth_json = auth::read_json(&path).ok_or_else(FetchFailure::missing_credentials)?;
+    let token = auth_json["tokens"]["access_token"]
+        .as_str()
+        .ok_or_else(FetchFailure::missing_credentials)?
+        .to_string();
     let account = auth_json["tokens"]["account_id"]
         .as_str()
         .unwrap_or("")
         .to_string();
 
     match get_json_retrying(URL, &token, &[("chatgpt-account-id", account.as_str())]) {
-        Ok(v) => parse_codex(&v),
+        Ok(v) => parse_codex(&v).ok_or_else(|| FetchFailure {
+            kind: "decode",
+            message: "Provider response did not contain recognized quota windows".to_string(),
+        }),
         Err(401) | Err(403) => {
-            let (fresh, acc) = auth::refresh_codex_creds()?;
+            let (fresh, acc) =
+                auth::refresh_codex_creds().ok_or_else(|| FetchFailure::status(401))?;
             get_json_retrying(URL, &fresh, &[("chatgpt-account-id", acc.as_str())])
-                .ok()
-                .and_then(|v| parse_codex(&v))
+                .map_err(FetchFailure::status)
+                .and_then(|v| parse_codex(&v).ok_or_else(|| FetchFailure {
+                    kind: "decode",
+                    message: "Provider response did not contain recognized quota windows".to_string(),
+                }))
         }
-        Err(_) => None,
+        Err(status) => Err(FetchFailure::status(status)),
     }
 }
 
-pub fn codex_live() -> Option<CodexLive> {
+pub fn codex_live() -> (Option<CodexLive>, DataHealth) {
     let fetched = fetch_codex_live();
     let now = Utc::now().timestamp();
     let mut cache = CODEX_CACHE.lock().unwrap();
     match fetched {
-        Some(live) => {
+        Ok(live) => {
             *cache = Some(Cached {
                 fetched_at: now,
                 value: live.clone(),
             });
-            Some(live)
+            (Some(live), live_health(now))
         }
-        None => {
-            let cached = cache.as_ref()?;
+        Err(failure) => {
+            let Some(cached) = cache.as_ref() else {
+                return (None, failed_health(now, &failure));
+            };
             if now - cached.fetched_at > LIVE_CACHE_SECS {
-                return None;
+                return (None, failed_health(now, &failure));
             }
             let live = CodexLive {
                 plan_type: cached.value.plan_type.clone(),
                 primary: serve_cached_gauge(&cached.value.primary),
                 secondary: serve_cached_gauge(&cached.value.secondary),
             };
-            (live.primary.is_some() || live.secondary.is_some()).then_some(live)
+            let value = (live.primary.is_some() || live.secondary.is_some()).then_some(live);
+            (value, cached_health(now, cached.fetched_at, &failure))
         }
     }
 }
@@ -404,5 +490,15 @@ mod tests {
         .unwrap();
         let live = parse_claude(&v).expect("parses");
         assert!(live.seven_day_model.is_none());
+    }
+
+    #[test]
+    fn cached_health_keeps_failure_and_age() {
+        let health = cached_health(1_120, 1_000, &FetchFailure::status(429));
+        assert_eq!(health.source, DataSource::MemoryCache);
+        assert_eq!(health.stale_age_seconds, Some(120));
+        assert_eq!(health.error_kind.as_deref(), Some("rate_limited"));
+        assert_eq!(health.fetched_at, Some(1_000));
+        assert_eq!(health.attempted_at, Some(1_120));
     }
 }

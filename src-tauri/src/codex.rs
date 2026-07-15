@@ -147,6 +147,7 @@ pub fn collect() -> CodexUsage {
 
     let mut usage = CodexUsage {
         available: true,
+        history_health: crate::models::DataHealth::local_logs(files.len() as u64),
         ..Default::default()
     };
 

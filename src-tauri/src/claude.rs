@@ -73,8 +73,11 @@ pub fn collect() -> ClaudeUsage {
     // One extra day of slack so local-timezone edges never drop entries.
     let min_mtime = std::time::SystemTime::now() - std::time::Duration::from_secs(31 * 86400);
 
-    let files = roots.iter().flat_map(|root| jsonl_files(root, min_mtime));
-    for path in files {
+    let files: Vec<PathBuf> = roots
+        .iter()
+        .flat_map(|root| jsonl_files(root, min_mtime))
+        .collect();
+    for path in &files {
         let file = match File::open(&path) {
             Ok(f) => f,
             Err(_) => continue,
@@ -144,6 +147,7 @@ pub fn collect() -> ClaudeUsage {
 
     let mut usage = ClaudeUsage {
         available: !entries.is_empty(),
+        history_health: crate::models::DataHealth::local_logs(files.len() as u64),
         ..Default::default()
     };
 

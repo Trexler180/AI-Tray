@@ -723,6 +723,7 @@ mod tests {
             }),
             seven_day: None,
             seven_day_model: None,
+            health: Default::default(),
         };
         Usage {
             claude: ClaudeUsage {

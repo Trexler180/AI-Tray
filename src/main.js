@@ -16,6 +16,7 @@ let addingFolder = false; // whether the "add Claude folder" input is open
 let addFolderDraft = ""; // in-progress folder path, kept across background re-renders
 let addFolderError = null; // error from the last add attempt, if any
 let addFolderFocusPending = false; // focus the add-folder input once when opened
+const expandedHealth = new Set(); // inline data-health rows currently expanded
 
 // ---------- formatting helpers ----------
 const usd = (n) => "$" + (Number.isFinite(n) ? n : 0).toFixed(2);
@@ -99,6 +100,53 @@ function equivalentValueLabel(detail, estimate) {
       aria-label="${esc(explanation)}" title="${esc(explanation)}">i</span>
     ${detail ? `<span class="value-detail">${esc(detail)}</span>` : ""}
     <span class="confidence ${esc(badgeClass)}" title="${esc(explanation)}">${esc(confidence)} confidence</span>
+  </div>`;
+}
+
+function ageText(seconds) {
+  seconds = Math.max(0, Number(seconds) || 0);
+  if (seconds < 60) return `${Math.round(seconds)} sec`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
+  return `${(seconds / 3600).toFixed(seconds < 7200 ? 1 : 0)} hr`;
+}
+
+function healthTitle(health) {
+  if (!health) return "Data unavailable";
+  if (health.source === "live_api") return "Live API";
+  if (health.source === "memory_cache")
+    return `Cached API result · ${ageText(health.stale_age_seconds)} old`;
+  if (health.source === "local_logs")
+    return `Local logs${health.files_scanned ? ` · ${health.files_scanned} files` : ""}`;
+  return "Data unavailable";
+}
+
+function healthRow(key, health, estimate = null) {
+  if (!health) return "";
+  const expanded = expandedHealth.has(key);
+  const error = health.error_message
+    ? `<div><span>Last error</span><strong>${esc(health.error_message)}</strong></div>`
+    : "";
+  const fetched = health.fetched_at
+    ? `<div><span>Last successful update</span><strong>${esc(new Date(health.fetched_at * 1000).toLocaleTimeString())}</strong></div>`
+    : "";
+  const attempted = health.attempted_at
+    ? `<div><span>Last attempt</span><strong>${esc(new Date(health.attempted_at * 1000).toLocaleTimeString())}</strong></div>`
+    : "";
+  const files = health.files_scanned || health.files_cached || health.files_skipped
+    ? `<div><span>Files</span><strong>${health.files_scanned || 0} scanned · ${health.files_cached || 0} cached · ${health.files_skipped || 0} skipped</strong></div>`
+    : "";
+  const pricing = estimate?.pricing_reviewed_at
+    ? `<div><span>Pricing catalog</span><strong>${esc(estimate.catalog_version)} · reviewed ${esc(estimate.pricing_reviewed_at)}</strong></div>`
+    : "";
+  const diagnostic = esc(JSON.stringify({ health, estimate }, null, 2));
+  const warning = health.source === "memory_cache" || health.source === "unavailable";
+  return `<div class="health ${warning ? "warn" : ""}">
+    <button class="health-summary" data-health-toggle="${esc(key)}" aria-expanded="${expanded}">
+      <span class="health-dot"></span><span>${esc(healthTitle(health))}</span><span class="health-chevron">⌄</span>
+    </button>
+    ${expanded ? `<div class="health-detail">${fetched}${attempted}${error}${files}${pricing}
+      <button class="health-copy" data-health-copy="${diagnostic}">Copy diagnostics</button>
+    </div>` : ""}
   </div>`;
 }
 
@@ -197,6 +245,7 @@ function renderCodex() {
     html += gauge("Weekly", c.secondary.used_percent, c.secondary.resets_in);
   if (!c.live)
     html += `<div class="banner">Live usage unavailable — showing the last numbers from local session logs.</div>`;
+  html += healthRow("codex-quota", c.health);
 
   if (typeof c.credits === "number") {
     html += `<div class="divider"></div>
@@ -208,6 +257,7 @@ function renderCodex() {
   html += equivalentValueLabel("estimated", c.estimate);
   html += costCard(c.cost_today, c.tokens_today, c.cost_30d, c.tokens_30d);
   html += chart(c.daily, false);
+  html += healthRow("codex-history", c.history_health, c.estimate);
   return html;
 }
 
@@ -271,9 +321,10 @@ function renderClaudeAccount(a, multi) {
       </div>${acctActions(a)}`;
   // Show the folder each account maps to once more than one is configured.
   const path = multi && !editing ? `<div class="acct-path">${esc(a.id)}</div>` : "";
-  const body = a.live
+  let body = a.live
     ? claudeGauges(a, "Session (5h)")
     : `<div class="banner small">Live usage unavailable — open Claude Code signed in as this account to refresh it.</div>`;
+  body += healthRow(`claude-account:${a.id}`, a.health);
   return `<div class="acct" data-acct="${esc(a.id)}">
     <div class="acct-head">${name}</div>${path}${body}</div>`;
 }
@@ -326,6 +377,7 @@ function renderClaude() {
     html += `<div class="sec-sub" style="margin:-4px 0 8px">Combined across all accounts — local logs aren't per-account.</div>`;
   html += costCard(c.cost_today, c.tokens_today, c.cost_30d, c.tokens_30d);
   html += chart(c.daily, true);
+  html += healthRow("claude-history", c.history_health, c.estimate);
   return html;
 }
 
@@ -402,6 +454,25 @@ function render() {
         localStorage.setItem("showModelWeekly", input.checked ? "1" : "0");
       } catch (_) {}
       render();
+    })
+  );
+  content.querySelectorAll("[data-health-toggle]").forEach((button) =>
+    button.addEventListener("click", () => {
+      const key = button.dataset.healthToggle;
+      if (expandedHealth.has(key)) expandedHealth.delete(key);
+      else expandedHealth.add(key);
+      render();
+    })
+  );
+  content.querySelectorAll("[data-health-copy]").forEach((button) =>
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      try {
+        await navigator.clipboard.writeText(button.dataset.healthCopy || "");
+        button.textContent = "Copied";
+      } catch (_) {
+        button.textContent = "Copy failed";
+      }
     })
   );
 

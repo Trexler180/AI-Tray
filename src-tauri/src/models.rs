@@ -1,5 +1,40 @@
 use serde::Serialize;
 
+#[derive(Serialize, Clone, Debug, Default, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum DataSource {
+    LiveApi,
+    MemoryCache,
+    LocalLogs,
+    #[default]
+    Unavailable,
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct DataHealth {
+    pub source: DataSource,
+    pub fetched_at: Option<i64>,
+    pub attempted_at: Option<i64>,
+    pub stale_age_seconds: Option<i64>,
+    pub error_kind: Option<String>,
+    pub error_message: Option<String>,
+    pub files_scanned: u64,
+    pub files_cached: u64,
+    pub files_skipped: u64,
+}
+
+impl DataHealth {
+    pub fn local_logs(files_scanned: u64) -> Self {
+        Self {
+            source: DataSource::LocalLogs,
+            fetched_at: Some(chrono::Utc::now().timestamp()),
+            attempted_at: Some(chrono::Utc::now().timestamp()),
+            files_scanned,
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Serialize, Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
 #[serde(rename_all = "lowercase")]
 pub enum EstimateConfidence {
@@ -109,6 +144,8 @@ pub struct CodexUsage {
     pub token_breakdown: TokenBreakdown,
     pub models: Vec<ModelUsage>,
     pub estimate: EstimateMetadata,
+    pub health: DataHealth,
+    pub history_health: DataHealth,
     /// Reset credits, when the live endpoint was reachable.
     pub resets: Option<CodexResets>,
 }
@@ -134,6 +171,7 @@ pub struct ClaudeAccountUsage {
     pub seven_day: Option<Gauge>,
     /// Model-scoped weekly window (e.g. Fable-only), when the plan has one.
     pub seven_day_model: Option<ModelGauge>,
+    pub health: DataHealth,
 }
 
 #[derive(Serialize, Clone, Default)]
@@ -156,6 +194,8 @@ pub struct ClaudeUsage {
     pub token_breakdown: TokenBreakdown,
     pub models: Vec<ModelUsage>,
     pub estimate: EstimateMetadata,
+    pub health: DataHealth,
+    pub history_health: DataHealth,
 }
 
 #[derive(Serialize, Clone, Default)]
