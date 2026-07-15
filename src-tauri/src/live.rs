@@ -13,7 +13,7 @@
 //! CLI doesn't flip the UI and the alert pipeline to "logs only".
 
 use crate::auth;
-use crate::models::{DataHealth, DataSource, Gauge, ModelGauge};
+use crate::models::{DataHealth, DataSource, Gauge, ModelGauge, QuotaWindow};
 use crate::util::human_until;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -172,6 +172,12 @@ fn serve_cached_model_gauge(mg: &Option<ModelGauge>) -> Option<ModelGauge> {
     })
 }
 
+fn serve_cached_quota(quota: &QuotaWindow) -> Option<QuotaWindow> {
+    let mut quota = quota.clone();
+    quota.gauge = serve_cached_gauge(&Some(quota.gauge))?;
+    Some(quota)
+}
+
 // ---------------- Claude ----------------
 
 #[derive(Clone)]
@@ -179,6 +185,7 @@ pub struct ClaudeLive {
     pub five_hour: Option<Gauge>,
     pub seven_day: Option<Gauge>,
     pub seven_day_model: Option<ModelGauge>,
+    pub quotas: Vec<QuotaWindow>,
 }
 
 /// One account's live gauges, ready for the UI/alerts layer.
@@ -195,6 +202,7 @@ pub struct ClaudeAccountLive {
     pub five_hour: Option<Gauge>,
     pub seven_day: Option<Gauge>,
     pub seven_day_model: Option<ModelGauge>,
+    pub quotas: Vec<QuotaWindow>,
     pub health: DataHealth,
 }
 
@@ -216,32 +224,115 @@ fn claude_window(node: &Value, window_minutes: i64) -> Option<Gauge> {
     ))
 }
 
-/// The model-scoped weekly window (e.g. Fable-only) from the `limits` array.
-/// The legacy `seven_day_<model>` top-level fields are null on current
-/// responses; the `weekly_scoped` entry in `limits` is where this lives now.
-fn claude_model_weekly(v: &Value) -> Option<ModelGauge> {
-    v["limits"].as_array()?.iter().find_map(|l| {
-        if l["kind"] != "weekly_scoped" {
-            return None;
+fn scope_name(scope: &Value, key: &str) -> Option<String> {
+    let value = &scope[key];
+    value["display_name"]
+        .as_str()
+        .or_else(|| value["id"].as_str())
+        .or_else(|| value.as_str())
+        .map(str::to_string)
+}
+
+fn quota_id(kind: &str, model: Option<&str>, surface: Option<&str>) -> String {
+    let clean = |s: &str| {
+        s.to_ascii_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect::<String>()
+    };
+    match (model, surface) {
+        (Some(model), Some(surface)) => format!("{kind}:{}:{}", clean(model), clean(surface)),
+        (Some(model), None) => format!("{kind}:{}", clean(model)),
+        (None, Some(surface)) => format!("{kind}:{}", clean(surface)),
+        (None, None) => kind.to_string(),
+    }
+}
+
+fn claude_quotas(v: &Value) -> Vec<QuotaWindow> {
+    let mut quotas = Vec::new();
+    if let Some(limits) = v["limits"].as_array() {
+        for limit in limits {
+            let Some(used) = limit["percent"].as_f64() else {
+                continue;
+            };
+            let kind = limit["kind"].as_str().unwrap_or("quota");
+            let group = limit["group"].as_str().unwrap_or(kind);
+            let model = scope_name(&limit["scope"], "model");
+            let surface = scope_name(&limit["scope"], "surface");
+            let label = if let Some(model) = &model {
+                format!("Weekly ({model})")
+            } else if let Some(surface) = &surface {
+                format!("Weekly ({surface})")
+            } else if group == "session" || kind == "session" {
+                "Session (5h)".to_string()
+            } else if group == "weekly" || kind.contains("weekly") {
+                "Weekly".to_string()
+            } else {
+                kind.replace('_', " ")
+            };
+            let window_minutes = if group == "session" || kind == "session" {
+                300
+            } else if group == "weekly" || kind.contains("weekly") {
+                10080
+            } else {
+                0
+            };
+            quotas.push(QuotaWindow {
+                id: quota_id(kind, model.as_deref(), surface.as_deref()),
+                label,
+                kind: kind.to_string(),
+                group: group.to_string(),
+                scope_model: model,
+                scope_surface: surface,
+                gauge: gauge_from_pct(used, rfc3339_unix(&limit["resets_at"]), window_minutes),
+            });
         }
-        let model = l["scope"]["model"]["display_name"].as_str()?;
-        let used = l["percent"].as_f64()?;
-        Some(ModelGauge {
-            model: model.to_string(),
-            gauge: gauge_from_pct(used, rfc3339_unix(&l["resets_at"]), 10080),
-        })
-    })
+    }
+    quotas
 }
 
 fn parse_claude(v: &Value) -> Option<ClaudeLive> {
+    let five_hour = claude_window(&v["five_hour"], 300);
+    let seven_day = claude_window(&v["seven_day"], 10080);
+    let mut quotas = claude_quotas(v);
+    if quotas.is_empty() {
+        if let Some(gauge) = &five_hour {
+            quotas.push(QuotaWindow {
+                id: "session".to_string(),
+                label: "Session (5h)".to_string(),
+                kind: "session".to_string(),
+                group: "session".to_string(),
+                gauge: gauge.clone(),
+                ..Default::default()
+            });
+        }
+        if let Some(gauge) = &seven_day {
+            quotas.push(QuotaWindow {
+                id: "weekly_all".to_string(),
+                label: "Weekly".to_string(),
+                kind: "weekly_all".to_string(),
+                group: "weekly".to_string(),
+                gauge: gauge.clone(),
+                ..Default::default()
+            });
+        }
+    }
+    let seven_day_model = quotas.iter().find_map(|quota| {
+        quota.scope_model.as_ref().map(|model| ModelGauge {
+            model: model.clone(),
+            gauge: quota.gauge.clone(),
+        })
+    });
     let live = ClaudeLive {
-        five_hour: claude_window(&v["five_hour"], 300),
-        seven_day: claude_window(&v["seven_day"], 10080),
-        seven_day_model: claude_model_weekly(v),
+        five_hour,
+        seven_day,
+        seven_day_model,
+        quotas,
     };
     // A response with no recognizable window is a failure, not "no limits";
     // treating it as success would poison the cache with an empty snapshot.
-    (live.five_hour.is_some() || live.seven_day.is_some()).then_some(live)
+    (live.five_hour.is_some() || live.seven_day.is_some() || !live.quotas.is_empty())
+        .then_some(live)
 }
 
 /// Fetch one account's usage with a given access token, refreshing once via
@@ -302,8 +393,17 @@ fn claude_cached(
                 five_hour: serve_cached_gauge(&cached.value.five_hour),
                 seven_day: serve_cached_gauge(&cached.value.seven_day),
                 seven_day_model: serve_cached_model_gauge(&cached.value.seven_day_model),
+                quotas: cached
+                    .value
+                    .quotas
+                    .iter()
+                    .filter_map(serve_cached_quota)
+                    .collect(),
             };
-            let value = (live.five_hour.is_some() || live.seven_day.is_some()).then_some(live);
+            let value = (live.five_hour.is_some()
+                || live.seven_day.is_some()
+                || !live.quotas.is_empty())
+            .then_some(live);
             (value, cached_health(now, cached.fetched_at, &failure))
         }
     }
@@ -324,9 +424,9 @@ pub fn claude_live_accounts() -> Vec<ClaudeAccountLive> {
             });
             let (served, health) = claude_cached(&acct.id, fetched);
             let live = served.is_some();
-            let (five_hour, seven_day, seven_day_model) = served
-                .map(|l| (l.five_hour, l.seven_day, l.seven_day_model))
-                .unwrap_or((None, None, None));
+            let (five_hour, seven_day, seven_day_model, quotas) = served
+                .map(|l| (l.five_hour, l.seven_day, l.seven_day_model, l.quotas))
+                .unwrap_or((None, None, None, Vec::new()));
             ClaudeAccountLive {
                 id: acct.id,
                 label: acct.label,
@@ -337,6 +437,7 @@ pub fn claude_live_accounts() -> Vec<ClaudeAccountLive> {
                 five_hour,
                 seven_day,
                 seven_day_model,
+                quotas,
                 health,
             }
         })
@@ -354,6 +455,7 @@ pub struct CodexLive {
     pub plan_type: Option<String>,
     pub primary: Option<Gauge>,
     pub secondary: Option<Gauge>,
+    pub quotas: Vec<QuotaWindow>,
 }
 
 fn codex_window(node: &Value) -> Option<Gauge> {
@@ -371,12 +473,44 @@ fn codex_window(node: &Value) -> Option<Gauge> {
 
 fn parse_codex(v: &Value) -> Option<CodexLive> {
     let rl = &v["rate_limit"];
+    let primary = codex_window(&rl["primary_window"]);
+    let secondary = codex_window(&rl["secondary_window"]);
+    let mut quotas = Vec::new();
+    if let Some(windows) = rl.as_object() {
+        for (key, node) in windows {
+            if !key.ends_with("_window") {
+                continue;
+            }
+            let Some(gauge) = codex_window(node) else {
+                continue;
+            };
+            let (id, label, group) = match key.as_str() {
+                "primary_window" => ("session".to_string(), "Session (5h)".to_string(), "session"),
+                "secondary_window" => ("weekly".to_string(), "Weekly".to_string(), "weekly"),
+                _ => (
+                    key.trim_end_matches("_window").to_string(),
+                    key.trim_end_matches("_window").replace('_', " "),
+                    "other",
+                ),
+            };
+            quotas.push(QuotaWindow {
+                id,
+                label,
+                kind: key.clone(),
+                group: group.to_string(),
+                gauge,
+                ..Default::default()
+            });
+        }
+    }
     let live = CodexLive {
         plan_type: v["plan_type"].as_str().map(|s| s.to_string()),
-        primary: codex_window(&rl["primary_window"]),
-        secondary: codex_window(&rl["secondary_window"]),
+        primary,
+        secondary,
+        quotas,
     };
-    (live.primary.is_some() || live.secondary.is_some()).then_some(live)
+    (live.primary.is_some() || live.secondary.is_some() || !live.quotas.is_empty())
+        .then_some(live)
 }
 
 fn fetch_codex_live() -> Result<CodexLive, FetchFailure> {
@@ -435,8 +569,17 @@ pub fn codex_live() -> (Option<CodexLive>, DataHealth) {
                 plan_type: cached.value.plan_type.clone(),
                 primary: serve_cached_gauge(&cached.value.primary),
                 secondary: serve_cached_gauge(&cached.value.secondary),
+                quotas: cached
+                    .value
+                    .quotas
+                    .iter()
+                    .filter_map(serve_cached_quota)
+                    .collect(),
             };
-            let value = (live.primary.is_some() || live.secondary.is_some()).then_some(live);
+            let value = (live.primary.is_some()
+                || live.secondary.is_some()
+                || !live.quotas.is_empty())
+            .then_some(live);
             (value, cached_health(now, cached.fetched_at, &failure))
         }
     }
@@ -477,6 +620,7 @@ mod tests {
         assert_eq!(mg.gauge.used_percent, 68.0);
         assert_eq!(mg.gauge.window_minutes, 10080);
         assert!(mg.gauge.resets_at.is_some());
+        assert_eq!(live.quotas.len(), 3);
     }
 
     /// A plan without a model-scoped limit (no `limits`, or none scoped) still
@@ -500,5 +644,22 @@ mod tests {
         assert_eq!(health.error_kind.as_deref(), Some("rate_limited"));
         assert_eq!(health.fetched_at, Some(1_000));
         assert_eq!(health.attempted_at, Some(1_120));
+    }
+
+    #[test]
+    fn parses_every_model_and_surface_scoped_limit() {
+        let value: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/claude_usage.json"
+        ))
+        .unwrap();
+        let live = parse_claude(&value).expect("fixture parses");
+        assert_eq!(live.quotas.len(), 4);
+        let ids: std::collections::HashSet<_> =
+            live.quotas.iter().map(|quota| &quota.id).collect();
+        assert_eq!(ids.len(), 4);
+        assert!(live
+            .quotas
+            .iter()
+            .any(|quota| quota.scope_surface.as_deref() == Some("Cowork")));
     }
 }

@@ -91,6 +91,19 @@ pub struct ModelGauge {
     pub gauge: Gauge,
 }
 
+/// A provider-reported quota window. Stable IDs keep display preferences and
+/// alert state independent of response ordering.
+#[derive(Serialize, Clone, Default)]
+pub struct QuotaWindow {
+    pub id: String,
+    pub label: String,
+    pub kind: String,
+    pub group: String,
+    pub scope_model: Option<String>,
+    pub scope_surface: Option<String>,
+    pub gauge: Gauge,
+}
+
 /// One day of aggregated usage, used for the little bar chart.
 #[derive(Serialize, Clone)]
 pub struct DayBucket {
@@ -134,6 +147,7 @@ pub struct CodexUsage {
     pub plan_type: Option<String>,
     pub primary: Option<Gauge>,   // 5h session window
     pub secondary: Option<Gauge>, // weekly window
+    pub quotas: Vec<QuotaWindow>,
     pub credits: Option<f64>,
     pub updated_at: Option<i64>,
     pub cost_today: f64,
@@ -171,6 +185,7 @@ pub struct ClaudeAccountUsage {
     pub seven_day: Option<Gauge>,
     /// Model-scoped weekly window (e.g. Fable-only), when the plan has one.
     pub seven_day_model: Option<ModelGauge>,
+    pub quotas: Vec<QuotaWindow>,
     pub health: DataHealth,
 }
 
@@ -183,6 +198,7 @@ pub struct ClaudeUsage {
     pub seven_day: Option<Gauge>, // active account's live weekly window
     /// Active account's model-scoped weekly window (e.g. Fable-only).
     pub seven_day_model: Option<ModelGauge>,
+    pub quotas: Vec<QuotaWindow>,
     /// Per-account live gauges. One entry per known account; empty for a
     /// single-account, logs-only state.
     pub accounts: Vec<ClaudeAccountUsage>,

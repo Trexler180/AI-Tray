@@ -43,7 +43,7 @@ impl Provider {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct WindowKey {
     provider: Provider,
-    window: &'static str,
+    window: String,
     /// Per-account discriminator: the Claude account id (its config-dir path),
     /// empty for Codex. Keeps each account's exhaustion/warn state independent.
     account: String,
@@ -426,11 +426,24 @@ fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
     let mut out = Vec::new();
     if usage.codex.live {
         let name = Provider::Codex.title();
-        if let Some(gauge) = &usage.codex.primary {
+        if !usage.codex.quotas.is_empty() {
+            for quota in &usage.codex.quotas {
+                out.push(WindowSnapshot {
+                    key: WindowKey {
+                        provider: Provider::Codex,
+                        window: quota.id.clone(),
+                        account: String::new(),
+                    },
+                    name: name.to_string(),
+                    label: quota.label.to_ascii_lowercase(),
+                    gauge: &quota.gauge,
+                });
+            }
+        } else if let Some(gauge) = &usage.codex.primary {
             out.push(WindowSnapshot {
                 key: WindowKey {
                     provider: Provider::Codex,
-                    window: "session",
+                    window: "session".to_string(),
                     account: String::new(),
                 },
                 name: name.to_string(),
@@ -438,17 +451,19 @@ fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
                 gauge,
             });
         }
-        if let Some(gauge) = &usage.codex.secondary {
+        if usage.codex.quotas.is_empty() {
+            if let Some(gauge) = &usage.codex.secondary {
             out.push(WindowSnapshot {
                 key: WindowKey {
                     provider: Provider::Codex,
-                    window: "weekly",
+                    window: "weekly".to_string(),
                     account: String::new(),
                 },
                 name: name.to_string(),
                 label: "weekly".to_string(),
                 gauge,
             });
+            }
         }
     }
 
@@ -462,11 +477,26 @@ fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
         } else {
             Provider::Claude.title().to_string()
         };
+        if !acct.quotas.is_empty() {
+            for quota in &acct.quotas {
+                out.push(WindowSnapshot {
+                    key: WindowKey {
+                        provider: Provider::Claude,
+                        window: quota.id.clone(),
+                        account: acct.id.clone(),
+                    },
+                    name: name.clone(),
+                    label: quota.label.to_ascii_lowercase(),
+                    gauge: &quota.gauge,
+                });
+            }
+            continue;
+        }
         if let Some(gauge) = &acct.five_hour {
             out.push(WindowSnapshot {
                 key: WindowKey {
                     provider: Provider::Claude,
-                    window: "session",
+                    window: "session".to_string(),
                     account: acct.id.clone(),
                 },
                 name: name.clone(),
@@ -478,7 +508,7 @@ fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
             out.push(WindowSnapshot {
                 key: WindowKey {
                     provider: Provider::Claude,
-                    window: "weekly",
+                    window: "weekly".to_string(),
                     account: acct.id.clone(),
                 },
                 name: name.clone(),
@@ -492,7 +522,7 @@ fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
             out.push(WindowSnapshot {
                 key: WindowKey {
                     provider: Provider::Claude,
-                    window: "weekly_model",
+                    window: "weekly_model".to_string(),
                     account: acct.id.clone(),
                 },
                 name,
@@ -681,7 +711,7 @@ fn settings_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{ClaudeAccountUsage, ClaudeUsage, CodexUsage, Usage};
+    use crate::models::{ClaudeAccountUsage, ClaudeUsage, CodexUsage, QuotaWindow, Usage};
     use std::collections::HashSet;
     use std::sync::atomic::{AtomicBool, AtomicU64};
     use std::sync::Mutex;
@@ -723,6 +753,7 @@ mod tests {
             }),
             seven_day: None,
             seven_day_model: None,
+            quotas: Vec::new(),
             health: Default::default(),
         };
         Usage {
@@ -862,6 +893,36 @@ mod tests {
         assert_eq!(events[0].0, "Claude · Personal limit almost used");
         assert!(events[0].1.contains("Personal"));
         assert!(events[0].1.contains("95%"));
+    }
+
+    #[test]
+    fn dynamic_quota_ids_are_distinct_alert_keys() {
+        let quota = |id: &str| QuotaWindow {
+            id: id.to_string(),
+            label: id.to_string(),
+            gauge: Gauge {
+                used_percent: 50.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let usage = Usage {
+            claude: ClaudeUsage {
+                accounts: vec![ClaudeAccountUsage {
+                    id: "account".to_string(),
+                    label: "Account".to_string(),
+                    live: true,
+                    quotas: vec![quota("weekly:fable"), quota("weekly:cowork")],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let windows = usage_windows(&usage);
+        let keys: HashSet<_> = windows.iter().map(|window| &window.key).collect();
+        assert_eq!(windows.len(), 2);
+        assert_eq!(keys.len(), 2);
     }
 
     // ---------------- reset credits ----------------

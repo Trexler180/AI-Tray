@@ -239,10 +239,15 @@ function renderCodex() {
     </div>`;
   html += notifyToggle("codex");
 
-  if (c.primary)
-    html += gauge("Session (5h)", c.primary.used_percent, c.primary.resets_in);
-  if (c.secondary)
-    html += gauge("Weekly", c.secondary.used_percent, c.secondary.resets_in);
+  if ((c.quotas || []).length) {
+    for (const quota of c.quotas)
+      html += gauge(quota.label, quota.gauge.used_percent, quota.gauge.resets_in);
+  } else {
+    if (c.primary)
+      html += gauge("Session (5h)", c.primary.used_percent, c.primary.resets_in);
+    if (c.secondary)
+      html += gauge("Weekly", c.secondary.used_percent, c.secondary.resets_in);
+  }
   if (!c.live)
     html += `<div class="banner">Live usage unavailable — showing the last numbers from local session logs.</div>`;
   html += healthRow("codex-quota", c.health);
@@ -265,6 +270,15 @@ function renderCodex() {
 // detailed tab ("Session (5h)") and the compact overview card ("Session").
 function claudeGauges(acct, sessionLabel) {
   let h = "";
+  if ((acct.quotas || []).length) {
+    for (const quota of acct.quotas) {
+      const scoped = quota.scope_model || quota.scope_surface;
+      if (scoped && !showModelWeekly) continue;
+      const label = quota.group === "session" ? sessionLabel : quota.label;
+      h += gauge(label, quota.gauge.used_percent, quota.gauge.resets_in, { claude: true });
+    }
+    return h;
+  }
   if (acct.five_hour)
     h += gauge(sessionLabel, acct.five_hour.used_percent, acct.five_hour.resets_in, { claude: true });
   if (acct.seven_day)
@@ -278,13 +292,19 @@ function claudeGauges(acct, sessionLabel) {
 // Toggle for the model-scoped weekly gauge. Only rendered when at least one
 // account actually reports one, so it never shows as dead UI.
 function modelWeeklyToggle(accounts) {
-  const models = [...new Set(
-    (accounts || []).filter((a) => a.seven_day_model).map((a) => a.seven_day_model.model)
-  )];
-  if (!models.length) return "";
+  const scopes = [...new Set((accounts || []).flatMap((a) =>
+    (a.quotas || [])
+      .filter((q) => q.scope_model || q.scope_surface)
+      .map((q) => q.scope_model || q.scope_surface)
+  ))];
+  if (!scopes.length) {
+    for (const account of accounts || [])
+      if (account.seven_day_model) scopes.push(account.seven_day_model.model);
+  }
+  if (!scopes.length) return "";
   return `
     <label class="notify-row claude">
-      <span>Show ${esc(models.join(" / "))} weekly limit</span>
+      <span>Show scoped limits (${esc(scopes.join(" / "))})</span>
       <input class="notify-check" type="checkbox" data-model-weekly ${showModelWeekly ? "checked" : ""} />
     </label>`;
 }
@@ -393,10 +413,15 @@ function renderOverview() {
       <div class="ov-name"><span class="ov-dot"></span>Codex ${cx.plan_type ? `<span class="pill">${esc(cx.plan_type)}</span>` : ""}</div>
       <span class="ov-cost">${usd(cx.cost_today)} today</span>
     </div>`;
-  if (cx.primary)
-    html += gauge("Session", cx.primary.used_percent, cx.primary.resets_in);
-  if (cx.secondary)
-    html += gauge("Weekly", cx.secondary.used_percent, cx.secondary.resets_in);
+  if ((cx.quotas || []).length) {
+    for (const quota of cx.quotas)
+      html += gauge(quota.group === "session" ? "Session" : quota.label, quota.gauge.used_percent, quota.gauge.resets_in);
+  } else {
+    if (cx.primary)
+      html += gauge("Session", cx.primary.used_percent, cx.primary.resets_in);
+    if (cx.secondary)
+      html += gauge("Weekly", cx.secondary.used_percent, cx.secondary.resets_in);
+  }
   if (!cx.available) html += `<div class="sec-sub">No data</div>`;
   const resetCount = availableResets(cx).length;
   if (resetCount)

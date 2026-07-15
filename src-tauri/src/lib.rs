@@ -158,6 +158,7 @@ pub(crate) fn collect_usage_sync() -> Usage {
         if l.secondary.is_some() {
             codex.secondary = l.secondary;
         }
+        codex.quotas = l.quotas;
     }
     // Reset credits come from a separate live endpoint. Having reachable credit
     // data also means a Codex session exists, so surface the tab even if the
@@ -186,6 +187,7 @@ pub(crate) fn collect_usage_sync() -> Usage {
             claude.five_hour = active.five_hour.clone();
             claude.seven_day = active.seven_day.clone();
             claude.seven_day_model = active.seven_day_model.clone();
+            claude.quotas = active.quotas.clone();
         }
         claude.accounts = claude_accounts
             .into_iter()
@@ -199,6 +201,7 @@ pub(crate) fn collect_usage_sync() -> Usage {
                 five_hour: a.five_hour,
                 seven_day: a.seven_day,
                 seven_day_model: a.seven_day_model,
+                quotas: a.quotas,
                 health: a.health,
             })
             .collect();
