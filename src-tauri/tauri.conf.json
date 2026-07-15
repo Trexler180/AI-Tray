@@ -15,7 +15,7 @@
       {
         "label": "main",
         "title": "AI Usage",
-        "width": 380,
+        "width": 340,
         "height": 640,
         "resizable": false,
         "decorations": false,

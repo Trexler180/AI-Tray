@@ -56,7 +56,7 @@ body {
 .tabs {
   display: flex;
   gap: 4px;
-  padding: 10px 10px 8px;
+  padding: 6px 6px 5px;
   border-bottom: 1px solid var(--border);
 }
 .tab {
@@ -65,18 +65,18 @@ body {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 7px 6px;
-  font-size: 12.5px;
+  padding: 5px 6px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--muted);
   background: transparent;
   border: none;
-  border-radius: 9px;
+  border-radius: 8px;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
 .tab .ico {
-  font-size: 13px;
+  font-size: 12.5px;
   opacity: 0.8;
 }
 .tab:hover {
@@ -98,7 +98,7 @@ body {
 .content {
   flex: 1;
   overflow-y: auto;
-  padding: 14px 16px 6px;
+  padding: 10px 14px 4px;
 }
 .content::-webkit-scrollbar {
   width: 7px;
@@ -111,7 +111,7 @@ body {
 .loading {
   color: var(--muted);
   text-align: center;
-  padding: 40px 0;
+  padding: 28px 0;
   font-size: 13px;
 }
 
@@ -120,10 +120,10 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  margin: 4px 0 12px;
+  margin: 2px 0 8px;
 }
 .sec-title {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
   letter-spacing: 0.2px;
 }
@@ -144,12 +144,12 @@ body {
   font-size: 13px;
   font-weight: 700;
   color: var(--text);
-  margin: 16px 0 9px;
+  margin: 11px 0 6px;
 }
 
 /* ---- Gauge ---- */
 .gauge {
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 .gauge-bar {
   position: relative;
@@ -174,7 +174,7 @@ body {
 .gauge-meta {
   display: flex;
   justify-content: space-between;
-  margin-top: 7px;
+  margin-top: 5px;
   font-size: 12px;
 }
 .gauge-meta .l {
@@ -195,16 +195,16 @@ body {
 }
 .acct + .acct {
   border-top: 1px solid var(--border);
-  margin-top: 14px;
-  padding-top: 6px;
+  margin-top: 10px;
+  padding-top: 4px;
 }
 .acct-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin: 10px 0 11px;
-  min-height: 26px;
+  margin: 7px 0 8px;
+  min-height: 24px;
 }
 .acct-name {
   display: flex;
@@ -316,7 +316,7 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 9px 0 7px;
+  margin: 7px 0 5px;
   font-size: 12px;
   font-weight: 600;
   color: var(--muted);
@@ -334,13 +334,13 @@ body {
 .divider {
   height: 1px;
   background: var(--border);
-  margin: 14px 0;
+  margin: 10px 0;
 }
 .row {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  padding: 3px 0;
+  padding: 2px 0;
   font-size: 13px;
 }
 .row .k {
@@ -359,9 +359,9 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  min-height: 38px;
-  padding: 7px 0 12px;
-  margin-bottom: 10px;
+  min-height: 30px;
+  padding: 5px 0 9px;
+  margin-bottom: 8px;
   border-bottom: 1px solid var(--border);
   color: var(--muted);
   font-size: 12.5px;
@@ -440,14 +440,14 @@ body {
 .cost {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 12px 14px;
-  margin-top: 6px;
+  border-radius: 10px;
+  padding: 9px 12px;
+  margin-top: 4px;
 }
 .cost .row + .row {
   border-top: 1px solid var(--border);
-  margin-top: 6px;
-  padding-top: 9px;
+  margin-top: 5px;
+  padding-top: 7px;
 }
 
 /* ---- Bar chart ---- */
@@ -455,8 +455,8 @@ body {
   display: flex;
   align-items: flex-end;
   gap: 3px;
-  height: 56px;
-  margin: 14px 0 6px;
+  height: 44px;
+  margin: 10px 0 4px;
 }
 .chart .bar {
   flex: 1;
@@ -488,17 +488,17 @@ body {
   background: rgba(239, 107, 107, 0.12);
   border: 1px solid rgba(239, 107, 107, 0.3);
   color: #f2b0b0;
-  border-radius: 10px;
-  padding: 9px 12px;
+  border-radius: 9px;
+  padding: 7px 10px;
   font-size: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
   line-height: 1.4;
 }
 
 .empty-state {
   color: var(--faint);
   text-align: center;
-  padding: 30px 10px;
+  padding: 22px 10px;
   font-size: 12.5px;
   line-height: 1.5;
 }
@@ -507,9 +507,9 @@ body {
 .ov-card {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 13px 14px;
-  margin-bottom: 12px;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 9px;
   cursor: pointer;
   transition: border-color 0.15s, transform 0.1s;
 }
@@ -523,7 +523,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 11px;
+  margin-bottom: 8px;
 }
 .ov-name {
   font-size: 14px;
@@ -545,13 +545,95 @@ body {
   font-size: 12.5px;
   color: var(--muted);
 }
+.ov-reset {
+  margin-top: 7px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--codex);
+}
+
+/* ---- Reset credits ---- */
+.block-label.reset-block {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.block-label.reset-block .pill {
+  color: var(--codex);
+  border-color: rgba(45, 212, 191, 0.4);
+}
+.reset-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 11px;
+  margin-bottom: 8px;
+}
+.reset-card.soon {
+  border-color: rgba(217, 138, 58, 0.4);
+  background: rgba(217, 138, 58, 0.08);
+}
+.reset-info {
+  min-width: 0;
+}
+.reset-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+.reset-meta {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--faint);
+}
+.reset-meta.soon {
+  color: #e7a45e;
+}
+.reset-use {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: #03201d;
+  background: linear-gradient(90deg, var(--codex-2), var(--codex));
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: filter 0.15s, transform 0.1s;
+}
+.reset-use:hover {
+  filter: brightness(1.08);
+}
+.reset-use:active {
+  transform: scale(0.97);
+}
+.reset-confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.reset-q {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.reset-confirm .acct-btn.save:hover {
+  color: var(--codex);
+  border-color: var(--codex-2);
+}
 
 /* ---- Footer ---- */
 .foot {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 14px;
+  padding: 6px 12px;
   border-top: 1px solid var(--border);
   font-size: 11px;
   color: var(--faint);

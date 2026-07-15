@@ -3,8 +3,12 @@ const { listen } = window.__TAURI__.event;
 
 let data = null;
 let activeTab = "overview";
-let notificationSettings = { codex: false, claude: false };
+let notificationSettings = { codex: false, claude: false, codex_resets: false };
+// Whether the model-scoped weekly gauge (e.g. the Fable-only limit) is shown.
+let showModelWeekly = localStorage.getItem("showModelWeekly") !== "0";
 let notifyError = null; // provider whose toggle failed to save, if any
+let confirmingReset = null; // credit id awaiting the inline "Use reset" confirm
+let resetError = null; // error from the last consume attempt, if any
 let editingAccount = null; // account id whose Claude label is being renamed inline
 let editingDraft = ""; // in-progress label text, kept across background re-renders
 let editFocusPending = false; // focus the rename input once when editing starts
@@ -78,7 +82,7 @@ function costCard(today, todayTok, m30, tok30) {
     </div>`;
 }
 
-function notifyToggle(provider) {
+function notifyToggle(provider, label = "Notify when limits near, hit, or reset") {
   const enabled = !!notificationSettings?.[provider];
   const claude = provider === "claude";
   const err =
@@ -87,9 +91,70 @@ function notifyToggle(provider) {
       : "";
   return `
     <label class="notify-row ${claude ? "claude" : ""}">
-      <span>Notify when limits near, hit, or reset</span>
+      <span>${esc(label)}</span>
       <input class="notify-check" type="checkbox" data-notify-provider="${provider}" ${enabled ? "checked" : ""} />
     </label>${err}`;
+}
+
+// Local calendar date like "Jul 18, 2026" from a unix-seconds timestamp.
+function fmtDate(unix) {
+  if (typeof unix !== "number") return "";
+  return new Date(unix * 1000).toLocaleDateString([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+// Count of currently-redeemable reset credits in a Codex snapshot.
+function availableResets(c) {
+  return ((c.resets && c.resets.credits) || []).filter((x) => x.status === "available");
+}
+
+// One reset-credit card: title, granted/expiry dates, and a Use action that
+// expands into an inline two-step confirm (no native dialog). Tinted amber when
+// it expires within a day.
+function resetCard(cr) {
+  const soon =
+    typeof cr.expires_at === "number" && cr.expires_at * 1000 - Date.now() <= 24 * 3600 * 1000;
+  const title = cr.title || "Free rate-limit reset";
+  const granted = cr.granted_at ? `Granted ${fmtDate(cr.granted_at)}` : "";
+  const expires = cr.expires_at
+    ? `Expires ${fmtDate(cr.expires_at)}${cr.expires_in ? ` · ${esc(cr.expires_in)} left` : ""}`
+    : "";
+  const action =
+    confirmingReset === cr.id
+      ? `<div class="reset-confirm">
+          <span class="reset-q">Use it?</span>
+          <button class="acct-btn save" data-reset-confirm="${esc(cr.id)}" title="Confirm">✓</button>
+          <button class="acct-btn" data-reset-cancel title="Cancel">✕</button>
+        </div>`
+      : `<button class="reset-use" data-reset-use="${esc(cr.id)}">Use reset</button>`;
+  return `<div class="reset-card ${soon ? "soon" : ""}">
+    <div class="reset-info">
+      <div class="reset-title">${esc(title)}</div>
+      ${granted ? `<div class="reset-meta">${esc(granted)}</div>` : ""}
+      ${expires ? `<div class="reset-meta ${soon ? "soon" : ""}">${expires}</div>` : ""}
+    </div>
+    ${action}
+  </div>`;
+}
+
+// The "Reset credits" section for the Codex tab: a notify toggle plus a card
+// per available credit (or a quiet empty line).
+function resetSection(c) {
+  const r = c.resets;
+  const credits = availableResets(c);
+  let html = `<div class="block-label reset-block">Reset credits${
+    credits.length ? ` <span class="pill">${credits.length}</span>` : ""
+  }</div>`;
+  html += notifyToggle("codex_resets", "Notify about reset credits");
+  if (resetError)
+    html += `<div class="banner small">Couldn't use that reset — ${esc(resetError)}</div>`;
+  if (!r) html += `<div class="sec-sub">Live reset-credit info unavailable.</div>`;
+  else if (!credits.length) html += `<div class="sec-sub">No reset credits right now.</div>`;
+  else for (const cr of credits) html += resetCard(cr);
+  return html;
 }
 
 // ---------- tab renderers ----------
@@ -118,6 +183,8 @@ function renderCodex() {
       <div class="row"><span class="k">Credits</span><span class="v">${esc(c.credits.toFixed(2))}</span></div>`;
   }
 
+  html += resetSection(c);
+
   html += `<div class="block-label">Cost (estimated)</div>`;
   html += costCard(c.cost_today, c.tokens_today, c.cost_30d, c.tokens_30d);
   html += chart(c.daily, false);
@@ -132,7 +199,24 @@ function claudeGauges(acct, sessionLabel) {
     h += gauge(sessionLabel, acct.five_hour.used_percent, acct.five_hour.resets_in, { claude: true });
   if (acct.seven_day)
     h += gauge("Weekly", acct.seven_day.used_percent, acct.seven_day.resets_in, { claude: true });
+  const mg = acct.seven_day_model;
+  if (mg && showModelWeekly)
+    h += gauge(`Weekly (${mg.model})`, mg.gauge.used_percent, mg.gauge.resets_in, { claude: true });
   return h;
+}
+
+// Toggle for the model-scoped weekly gauge. Only rendered when at least one
+// account actually reports one, so it never shows as dead UI.
+function modelWeeklyToggle(accounts) {
+  const models = [...new Set(
+    (accounts || []).filter((a) => a.seven_day_model).map((a) => a.seven_day_model.model)
+  )];
+  if (!models.length) return "";
+  return `
+    <label class="notify-row claude">
+      <span>Show ${esc(models.join(" / "))} weekly limit</span>
+      <input class="notify-check" type="checkbox" data-model-weekly ${showModelWeekly ? "checked" : ""} />
+    </label>`;
 }
 
 // Rename/remove controls. Remove is shown only for user-added folders; the
@@ -208,6 +292,7 @@ function renderClaude() {
   let html = `<div class="sec-head"><div class="sec-title">Claude</div>
     <span class="pill">${c.live ? "live" : "logs only"}</span></div>`;
   html += notifyToggle("claude");
+  html += modelWeeklyToggle(c.accounts);
 
   if (accounts.length) {
     for (const a of accounts) html += renderClaudeAccount(a, multi);
@@ -241,6 +326,11 @@ function renderOverview() {
   if (cx.secondary)
     html += gauge("Weekly", cx.secondary.used_percent, cx.secondary.resets_in);
   if (!cx.available) html += `<div class="sec-sub">No data</div>`;
+  const resetCount = availableResets(cx).length;
+  if (resetCount)
+    html += `<div class="ov-reset">↻ ${resetCount} reset credit${
+      resetCount > 1 ? "s" : ""
+    } available</div>`;
   html += `</div>`;
 
   // Claude card
@@ -284,6 +374,26 @@ function render() {
   );
   content.querySelectorAll("[data-notify-provider]").forEach((input) =>
     input.addEventListener("change", () => setNotifyEnabled(input.dataset.notifyProvider, input.checked))
+  );
+  content.querySelectorAll("[data-model-weekly]").forEach((input) =>
+    input.addEventListener("change", () => {
+      showModelWeekly = input.checked;
+      try {
+        localStorage.setItem("showModelWeekly", input.checked ? "1" : "0");
+      } catch (_) {}
+      render();
+    })
+  );
+
+  // Reset-credit "Use" controls (inline two-step confirm).
+  content.querySelectorAll("[data-reset-use]").forEach((el) =>
+    el.addEventListener("click", () => startUseReset(el.dataset.resetUse))
+  );
+  content.querySelectorAll("[data-reset-confirm]").forEach((el) =>
+    el.addEventListener("click", () => confirmUseReset(el.dataset.resetConfirm))
+  );
+  content.querySelectorAll("[data-reset-cancel]").forEach((el) =>
+    el.addEventListener("click", cancelUseReset)
   );
 
   // Per-account rename / forget controls.
@@ -435,6 +545,32 @@ async function setNotifyEnabled(provider, enabled) {
     notifyError = provider;
   }
   render();
+}
+
+// ---------- Codex reset credits ----------
+function startUseReset(id) {
+  confirmingReset = id;
+  resetError = null;
+  render();
+}
+
+function cancelUseReset() {
+  confirmingReset = null;
+  render();
+}
+
+async function confirmUseReset(id) {
+  confirmingReset = null;
+  resetError = null;
+  render();
+  try {
+    await invoke("consume_codex_reset", { creditId: id });
+  } catch (e) {
+    resetError = String(e);
+  }
+  // Pull fresh numbers either way: success drops the spent credit, failure
+  // restores the list so the user can retry.
+  refresh();
 }
 
 // ---------- Claude account management ----------

@@ -13,7 +13,7 @@
 //! CLI doesn't flip the UI and the alert pipeline to "logs only".
 
 use crate::auth;
-use crate::models::Gauge;
+use crate::models::{Gauge, ModelGauge};
 use crate::util::human_until;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -104,12 +104,23 @@ fn serve_cached_gauge(gauge: &Option<Gauge>) -> Option<Gauge> {
     Some(gauge)
 }
 
+/// `serve_cached_gauge` for a model-scoped gauge, keeping its model name.
+fn serve_cached_model_gauge(mg: &Option<ModelGauge>) -> Option<ModelGauge> {
+    let mg = mg.as_ref()?;
+    let gauge = serve_cached_gauge(&Some(mg.gauge.clone()))?;
+    Some(ModelGauge {
+        model: mg.model.clone(),
+        gauge,
+    })
+}
+
 // ---------------- Claude ----------------
 
 #[derive(Clone)]
 pub struct ClaudeLive {
     pub five_hour: Option<Gauge>,
     pub seven_day: Option<Gauge>,
+    pub seven_day_model: Option<ModelGauge>,
 }
 
 /// One account's live gauges, ready for the UI/alerts layer.
@@ -125,6 +136,7 @@ pub struct ClaudeAccountLive {
     pub live: bool,
     pub five_hour: Option<Gauge>,
     pub seven_day: Option<Gauge>,
+    pub seven_day_model: Option<ModelGauge>,
 }
 
 fn rfc3339_unix(v: &Value) -> Option<i64> {
@@ -145,10 +157,28 @@ fn claude_window(node: &Value, window_minutes: i64) -> Option<Gauge> {
     ))
 }
 
+/// The model-scoped weekly window (e.g. Fable-only) from the `limits` array.
+/// The legacy `seven_day_<model>` top-level fields are null on current
+/// responses; the `weekly_scoped` entry in `limits` is where this lives now.
+fn claude_model_weekly(v: &Value) -> Option<ModelGauge> {
+    v["limits"].as_array()?.iter().find_map(|l| {
+        if l["kind"] != "weekly_scoped" {
+            return None;
+        }
+        let model = l["scope"]["model"]["display_name"].as_str()?;
+        let used = l["percent"].as_f64()?;
+        Some(ModelGauge {
+            model: model.to_string(),
+            gauge: gauge_from_pct(used, rfc3339_unix(&l["resets_at"]), 10080),
+        })
+    })
+}
+
 fn parse_claude(v: &Value) -> Option<ClaudeLive> {
     let live = ClaudeLive {
         five_hour: claude_window(&v["five_hour"], 300),
         seven_day: claude_window(&v["seven_day"], 10080),
+        seven_day_model: claude_model_weekly(v),
     };
     // A response with no recognizable window is a failure, not "no limits";
     // treating it as success would poison the cache with an empty snapshot.
@@ -201,6 +231,7 @@ fn claude_cached(org: &str, fetched: Option<ClaudeLive>) -> Option<ClaudeLive> {
             let live = ClaudeLive {
                 five_hour: serve_cached_gauge(&cached.value.five_hour),
                 seven_day: serve_cached_gauge(&cached.value.seven_day),
+                seven_day_model: serve_cached_model_gauge(&cached.value.seven_day_model),
             };
             (live.five_hour.is_some() || live.seven_day.is_some()).then_some(live)
         }
@@ -222,9 +253,9 @@ pub fn claude_live_accounts() -> Vec<ClaudeAccountLive> {
             });
             let served = claude_cached(&acct.id, fetched);
             let live = served.is_some();
-            let (five_hour, seven_day) = served
-                .map(|l| (l.five_hour, l.seven_day))
-                .unwrap_or((None, None));
+            let (five_hour, seven_day, seven_day_model) = served
+                .map(|l| (l.five_hour, l.seven_day, l.seven_day_model))
+                .unwrap_or((None, None, None));
             ClaudeAccountLive {
                 id: acct.id,
                 label: acct.label,
@@ -234,6 +265,7 @@ pub fn claude_live_accounts() -> Vec<ClaudeAccountLive> {
                 live,
                 five_hour,
                 seven_day,
+                seven_day_model,
             }
         })
         .collect();
@@ -321,5 +353,56 @@ pub fn codex_live() -> Option<CodexLive> {
             };
             (live.primary.is_some() || live.secondary.is_some()).then_some(live)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Shape observed from the live /api/oauth/usage endpoint: the top-level
+    /// `seven_day_<model>` fields are null and the model-scoped weekly window
+    /// lives in `limits` as a `weekly_scoped` entry.
+    #[test]
+    fn parses_model_scoped_weekly_from_limits() {
+        let v: Value = serde_json::from_str(
+            r#"{
+              "five_hour": {"utilization": 12.0, "resets_at": "2026-07-05T18:59:59+00:00"},
+              "seven_day": {"utilization": 55.0, "resets_at": "2026-07-09T02:59:59+00:00"},
+              "seven_day_opus": null,
+              "limits": [
+                {"kind": "session", "group": "session", "percent": 12,
+                 "resets_at": "2026-07-05T18:59:59+00:00", "scope": null},
+                {"kind": "weekly_all", "group": "weekly", "percent": 55,
+                 "resets_at": "2026-07-09T02:59:59+00:00", "scope": null},
+                {"kind": "weekly_scoped", "group": "weekly", "percent": 68,
+                 "resets_at": "2026-07-09T02:59:59+00:00",
+                 "scope": {"model": {"id": null, "display_name": "Fable"}, "surface": null}}
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let live = parse_claude(&v).expect("parses");
+        assert_eq!(live.five_hour.as_ref().unwrap().used_percent, 12.0);
+        assert_eq!(live.seven_day.as_ref().unwrap().used_percent, 55.0);
+        let mg = live.seven_day_model.expect("model-scoped weekly present");
+        assert_eq!(mg.model, "Fable");
+        assert_eq!(mg.gauge.used_percent, 68.0);
+        assert_eq!(mg.gauge.window_minutes, 10080);
+        assert!(mg.gauge.resets_at.is_some());
+    }
+
+    /// A plan without a model-scoped limit (no `limits`, or none scoped) still
+    /// parses; the extra gauge is simply absent.
+    #[test]
+    fn missing_scoped_limit_is_none() {
+        let v: Value = serde_json::from_str(
+            r#"{"five_hour": {"utilization": 1.0, "resets_at": "2026-07-05T18:59:59+00:00"},
+                "seven_day": {"utilization": 2.0, "resets_at": "2026-07-09T02:59:59+00:00"}}"#,
+        )
+        .unwrap();
+        let live = parse_claude(&v).expect("parses");
+        assert!(live.seven_day_model.is_none());
     }
 }

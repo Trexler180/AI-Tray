@@ -1,4 +1,4 @@
-use crate::models::{Gauge, Usage};
+use crate::models::{CodexResets, Gauge, ResetCredit, Usage};
 use chrono::Utc;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
@@ -54,7 +54,7 @@ struct WindowSnapshot<'a> {
     /// Provider-level display name for notifications, e.g. "Claude · Work"
     /// when more than one Claude account is signed in, else just "Claude".
     name: String,
-    label: &'static str,
+    label: String,
     gauge: &'a Gauge,
 }
 
@@ -64,6 +64,10 @@ pub struct NotificationSettings {
     pub codex: bool,
     #[serde(default)]
     pub claude: bool,
+    /// Alerts for Codex reset credits (granted / nearing expiry). Independent of
+    /// the `codex` limit-warning toggle.
+    #[serde(default)]
+    pub codex_resets: bool,
 }
 
 struct Exhaustion {
@@ -85,6 +89,24 @@ struct WindowState {
     warned_at: Option<u8>,
 }
 
+/// Per-credit notification bookkeeping: whether we've announced it and which
+/// expiry stages have already fired.
+#[derive(Default)]
+struct CreditAlert {
+    fired_added: bool,
+    fired_stages: HashSet<&'static str>,
+}
+
+/// Tracks reset-credit notifications across refreshes. `initialized` flips true
+/// after the first successful observation so credits already present at launch
+/// (and expiry stages already passed) are recorded as a silent baseline rather
+/// than replayed as fresh news.
+#[derive(Default)]
+struct ResetAlertState {
+    initialized: bool,
+    known: HashMap<String, CreditAlert>,
+}
+
 #[derive(Default)]
 struct AlertRuntime {
     latest_usage: Option<Usage>,
@@ -92,6 +114,7 @@ struct AlertRuntime {
     /// Generation of the snapshot last applied. Collections can finish out
     /// of order; an older snapshot must not step the state machine backwards.
     applied_generation: u64,
+    resets: ResetAlertState,
 }
 
 pub struct AlertState {
@@ -130,6 +153,7 @@ impl AlertState {
         match provider {
             "codex" => settings.codex = enabled,
             "claude" => settings.claude = enabled,
+            "codex_resets" => settings.codex_resets = enabled,
             _ => return Err(format!("unknown provider: {provider}")),
         }
         persist_settings(&settings)?;
@@ -248,6 +272,13 @@ impl AlertState {
                     state.warned_at = None;
                 }
             }
+
+            to_notify.extend(reset_events(
+                &mut runtime.resets,
+                settings.codex_resets,
+                usage.codex.resets.as_ref(),
+                Utc::now().timestamp(),
+            ));
         }
 
         to_notify
@@ -326,7 +357,7 @@ pub fn start_alert_ticker(app: AppHandle) {
                 state.watch_missing_paths();
 
                 let settings = state.settings();
-                if !settings.codex && !settings.claude {
+                if !settings.codex && !settings.claude && !settings.codex_resets {
                     continue;
                 }
 
@@ -403,7 +434,7 @@ fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
                     account: String::new(),
                 },
                 name: name.to_string(),
-                label: "session",
+                label: "session".to_string(),
                 gauge,
             });
         }
@@ -415,7 +446,7 @@ fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
                     account: String::new(),
                 },
                 name: name.to_string(),
-                label: "weekly",
+                label: "weekly".to_string(),
                 gauge,
             });
         }
@@ -439,7 +470,7 @@ fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
                     account: acct.id.clone(),
                 },
                 name: name.clone(),
-                label: "session",
+                label: "session".to_string(),
                 gauge,
             });
         }
@@ -450,9 +481,23 @@ fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
                     window: "weekly",
                     account: acct.id.clone(),
                 },
-                name,
-                label: "weekly",
+                name: name.clone(),
+                label: "weekly".to_string(),
                 gauge,
+            });
+        }
+        // Model-scoped weekly window (e.g. the Fable-only limit) — tracked
+        // independently since it usually runs ahead of the all-models weekly.
+        if let Some(mg) = &acct.seven_day_model {
+            out.push(WindowSnapshot {
+                key: WindowKey {
+                    provider: Provider::Claude,
+                    window: "weekly_model",
+                    account: acct.id.clone(),
+                },
+                name,
+                label: format!("{} weekly", mg.model),
+                gauge: &mg.gauge,
             });
         }
     }
@@ -464,6 +509,122 @@ fn provider_enabled(settings: &NotificationSettings, provider: Provider) -> bool
         Provider::Codex => settings.codex,
         Provider::Claude => settings.claude,
     }
+}
+
+/// Expiry-warning stages, fired once each as a credit's deadline approaches.
+/// They escalate: a day out, on the calendar day it expires, then a few hours
+/// before. Expressed as stable keys stored in `CreditAlert::fired_stages`.
+const EXPIRY_DAY_SECS: i64 = 24 * 3600;
+const EXPIRY_HOURS_SECS: i64 = 3 * 3600;
+
+/// Available, not-yet-expired credits — the only ones worth tracking.
+fn active_credits<'a>(resets: &'a CodexResets, now: i64) -> Vec<&'a ResetCredit> {
+    resets
+        .credits
+        .iter()
+        .filter(|c| c.status == "available")
+        .filter(|c| c.expires_at.map(|e| e > now).unwrap_or(true))
+        .collect()
+}
+
+fn same_local_day(a: i64, b: i64) -> bool {
+    use chrono::{Local, TimeZone};
+    match (
+        Local.timestamp_opt(a, 0).single(),
+        Local.timestamp_opt(b, 0).single(),
+    ) {
+        (Some(x), Some(y)) => x.date_naive() == y.date_naive(),
+        _ => false,
+    }
+}
+
+/// Which expiry stages a credit meets right now (cumulative — once "hours" is
+/// met, "day" is too). Empty once past expiry.
+fn stages_met(now: i64, expires_at: i64) -> Vec<&'static str> {
+    let remaining = expires_at - now;
+    if remaining <= 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    if remaining <= EXPIRY_DAY_SECS {
+        out.push("day");
+    }
+    if same_local_day(now, expires_at) {
+        out.push("today");
+    }
+    if remaining <= EXPIRY_HOURS_SECS {
+        out.push("hours");
+    }
+    out
+}
+
+fn added_body(c: &ResetCredit) -> String {
+    match &c.expires_in {
+        Some(t) => format!("A free Codex rate-limit reset is available — expires in {t}."),
+        None => "A free Codex rate-limit reset is available.".to_string(),
+    }
+}
+
+fn stage_body(stage: &str) -> String {
+    match stage {
+        "day" => "A Codex reset credit expires in about a day.",
+        "today" => "A Codex reset credit expires today.",
+        "hours" => "A Codex reset credit expires in a few hours — use it before it's gone.",
+        _ => "A Codex reset credit is expiring.",
+    }
+    .to_string()
+}
+
+/// Notifications for reset credits: a new credit appearing, and each expiry
+/// stage as the deadline nears. Only acts on a successful fetch (`available`),
+/// so a transient network blip never reads as "all credits gone".
+///
+/// The first successful observation (and the whole run while the toggle is off)
+/// records state silently, mirroring the gauge alerts: credits already present
+/// at launch, or stages already passed, aren't news.
+fn reset_events(
+    state: &mut ResetAlertState,
+    enabled: bool,
+    resets: Option<&CodexResets>,
+    now: i64,
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let Some(resets) = resets.filter(|r| r.available) else {
+        return out;
+    };
+
+    let active = active_credits(resets, now);
+    let active_ids: HashSet<String> = active.iter().map(|c| c.id.clone()).collect();
+
+    let first = !state.initialized;
+    state.initialized = true;
+    // Emit only once past the silent baseline and while the toggle is on. When
+    // off we still advance the bookkeeping so enabling later starts from the
+    // present rather than replaying history.
+    let emit = enabled && !first;
+
+    for c in &active {
+        let entry = state.known.entry(c.id.clone()).or_default();
+        if !entry.fired_added {
+            entry.fired_added = true;
+            if emit {
+                out.push(("Codex reset available".to_string(), added_body(c)));
+            }
+        }
+        if let Some(exp) = c.expires_at {
+            for stage in stages_met(now, exp) {
+                if entry.fired_stages.insert(stage) && emit {
+                    out.push(("Codex reset expiring".to_string(), stage_body(stage)));
+                }
+            }
+        }
+    }
+
+    // Drop credits that are gone (redeemed or expired) so a later re-grant with
+    // a fresh id is announced again. Safe here: only reached on a good fetch.
+    state.known.retain(|id, _| active_ids.contains(id));
+
+    out
 }
 
 fn usage_watch_paths() -> Vec<PathBuf> {
@@ -527,7 +688,11 @@ mod tests {
 
     fn state_with(codex: bool, claude: bool) -> AlertState {
         AlertState {
-            settings: Mutex::new(NotificationSettings { codex, claude }),
+            settings: Mutex::new(NotificationSettings {
+                codex,
+                claude,
+                codex_resets: false,
+            }),
             runtime: Mutex::new(AlertRuntime::default()),
             watcher: Mutex::new(None),
             watched: Mutex::new(HashSet::new()),
@@ -557,6 +722,7 @@ mod tests {
                 resets_in: None,
             }),
             seven_day: None,
+            seven_day_model: None,
         };
         Usage {
             claude: ClaudeUsage {
@@ -695,5 +861,127 @@ mod tests {
         assert_eq!(events[0].0, "Claude · Personal limit almost used");
         assert!(events[0].1.contains("Personal"));
         assert!(events[0].1.contains("95%"));
+    }
+
+    // ---------------- reset credits ----------------
+
+    fn credit(id: &str, expires_at: i64) -> ResetCredit {
+        ResetCredit {
+            id: id.to_string(),
+            status: "available".to_string(),
+            expires_at: Some(expires_at),
+            ..Default::default()
+        }
+    }
+
+    fn resets(credits: Vec<ResetCredit>) -> CodexResets {
+        let available_count = credits.iter().filter(|c| c.status == "available").count() as u64;
+        CodexResets {
+            available: true,
+            available_count,
+            credits,
+        }
+    }
+
+    #[test]
+    fn reset_baseline_is_silent_then_new_credit_notifies() {
+        let mut st = ResetAlertState::default();
+        let now = 1_000_000;
+        let far = now + 30 * 86400;
+
+        // First observation records existing credits as a silent baseline.
+        let r = resets(vec![credit("A", far)]);
+        assert!(reset_events(&mut st, true, Some(&r), now).is_empty());
+
+        // Same set again: nothing new.
+        assert!(reset_events(&mut st, true, Some(&r), now).is_empty());
+
+        // A genuinely new credit appears → announced once.
+        let r = resets(vec![credit("A", far), credit("B", far)]);
+        let ev = reset_events(&mut st, true, Some(&r), now);
+        assert_eq!(ev.len(), 1);
+        assert_eq!(ev[0].0, "Codex reset available");
+
+        // And not again on the next poll.
+        assert!(reset_events(&mut st, true, Some(&r), now).is_empty());
+    }
+
+    #[test]
+    fn stage_helpers_are_threshold_based() {
+        let exp = 1_700_000_000;
+        // Outside a day (25h apart is always a different calendar day too).
+        assert!(stages_met(exp - 25 * 3600, exp).is_empty());
+        // Inside a day → at least the "day" stage.
+        assert!(stages_met(exp - 10 * 3600, exp).contains(&"day"));
+        // Inside a few hours → "hours" as well.
+        let near = stages_met(exp - 3600, exp);
+        assert!(near.contains(&"day"));
+        assert!(near.contains(&"hours"));
+        // Past expiry → empty.
+        assert!(stages_met(exp + 10, exp).is_empty());
+        // Calendar comparison: identical instant is the same day; 3 days apart
+        // is always a different one regardless of timezone.
+        assert!(same_local_day(exp, exp));
+        assert!(!same_local_day(exp, exp + 3 * 86400));
+    }
+
+    #[test]
+    fn reset_expiry_stages_fire_once_as_deadline_nears() {
+        let mut st = ResetAlertState::default();
+        let expires = 1_700_000_000;
+        let r = resets(vec![credit("A", expires)]);
+
+        // Baseline far from expiry: silent.
+        assert!(reset_events(&mut st, true, Some(&r), expires - 5 * 86400).is_empty());
+
+        // ~10h out → the "day" stage fires.
+        let ev = reset_events(&mut st, true, Some(&r), expires - 10 * 3600);
+        assert!(ev
+            .iter()
+            .any(|(t, b)| t == "Codex reset expiring" && b.contains("about a day")));
+
+        // Same point again → the "day" stage does not re-fire.
+        let ev = reset_events(&mut st, true, Some(&r), expires - 10 * 3600);
+        assert!(ev.iter().all(|(_, b)| !b.contains("about a day")));
+
+        // ~1h out → the "few hours" stage fires.
+        let ev = reset_events(&mut st, true, Some(&r), expires - 3600);
+        assert!(ev.iter().any(|(_, b)| b.contains("few hours")));
+
+        // Past expiry → the credit is pruned and nothing fires.
+        assert!(reset_events(&mut st, true, Some(&r), expires + 60).is_empty());
+    }
+
+    #[test]
+    fn reset_disabled_records_baseline_without_emitting() {
+        let mut st = ResetAlertState::default();
+        let now = 1_000_000;
+        let far = now + 30 * 86400;
+
+        // Toggle off: a new credit must not notify, but state advances so that
+        // enabling later doesn't replay it.
+        let r = resets(vec![credit("A", far)]);
+        assert!(reset_events(&mut st, false, Some(&r), now).is_empty());
+
+        // Now enabled, same credit → still silent (already baselined).
+        assert!(reset_events(&mut st, true, Some(&r), now).is_empty());
+    }
+
+    #[test]
+    fn reset_failed_fetch_does_not_prune_or_notify() {
+        let mut st = ResetAlertState::default();
+        let now = 1_000_000;
+        let far = now + 30 * 86400;
+
+        let r = resets(vec![credit("A", far)]);
+        assert!(reset_events(&mut st, true, Some(&r), now).is_empty()); // baseline
+
+        // A fetch failure surfaces as None (or available=false): no pruning.
+        assert!(reset_events(&mut st, true, None, now).is_empty());
+        let unavailable = CodexResets::default(); // available = false
+        assert!(reset_events(&mut st, true, Some(&unavailable), now).is_empty());
+
+        // The credit is still known, so it doesn't re-announce when it returns.
+        assert!(reset_events(&mut st, true, Some(&r), now).is_empty());
     }
 }

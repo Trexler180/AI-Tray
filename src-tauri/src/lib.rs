@@ -6,6 +6,7 @@ mod codex;
 mod live;
 mod models;
 mod pricing;
+mod resets;
 mod util;
 
 use alerts::{AlertState, NotificationSettings};
@@ -27,6 +28,11 @@ struct HideGuard(Mutex<Option<Instant>>);
 /// Whether the native acrylic effect was applied, so the frontend knows to use
 /// a translucent background (true) or its solid fallback (false).
 struct Glass(AtomicBool);
+
+/// Set when the user picks Quit, so the run loop lets that exit through instead
+/// of preventing it the way it does for an ordinary window close (which keeps
+/// the app alive in the tray).
+struct Quitting(AtomicBool);
 
 #[tauri::command]
 fn glass_enabled(state: tauri::State<'_, Glass>) -> bool {
@@ -120,18 +126,21 @@ fn register_notification_aumid(_identifier: &str, _display_name: &str) {}
 /// thread, and independently of each other so one slow source can't stall the
 /// rest.
 pub(crate) fn collect_usage_sync() -> Usage {
-    let (mut codex, mut claude, codex_live, claude_accounts) = std::thread::scope(|s| {
-        let a = s.spawn(codex::collect);
-        let b = s.spawn(claude::collect);
-        let c = s.spawn(live::codex_live);
-        let d = s.spawn(live::claude_live_accounts);
-        (
-            a.join().unwrap_or_default(),
-            b.join().unwrap_or_default(),
-            c.join().ok().flatten(),
-            d.join().unwrap_or_default(),
-        )
-    });
+    let (mut codex, mut claude, codex_live, claude_accounts, codex_resets) =
+        std::thread::scope(|s| {
+            let a = s.spawn(codex::collect);
+            let b = s.spawn(claude::collect);
+            let c = s.spawn(live::codex_live);
+            let d = s.spawn(live::claude_live_accounts);
+            let e = s.spawn(resets::codex_resets);
+            (
+                a.join().unwrap_or_default(),
+                b.join().unwrap_or_default(),
+                c.join().ok().flatten(),
+                d.join().unwrap_or_default(),
+                e.join().ok().flatten(),
+            )
+        });
 
     // Live gauges come straight from the official usage endpoints and
     // override the log-based estimates when reachable.
@@ -148,6 +157,15 @@ pub(crate) fn collect_usage_sync() -> Usage {
             codex.secondary = l.secondary;
         }
     }
+    // Reset credits come from a separate live endpoint. Having reachable credit
+    // data also means a Codex session exists, so surface the tab even if the
+    // log scan and usage call both came up empty.
+    if let Some(r) = codex_resets {
+        if r.available {
+            codex.available = true;
+        }
+        codex.resets = Some(r);
+    }
     // Live Claude gauges are per-account. The active account also fills the
     // top-level gauges, so the alert windows and any single-account view keep
     // reading `claude.five_hour`/`seven_day` unchanged. Cost/token history
@@ -162,6 +180,7 @@ pub(crate) fn collect_usage_sync() -> Usage {
         if let Some(active) = claude_accounts.iter().find(|a| a.active && a.live) {
             claude.five_hour = active.five_hour.clone();
             claude.seven_day = active.seven_day.clone();
+            claude.seven_day_model = active.seven_day_model.clone();
         }
         claude.accounts = claude_accounts
             .into_iter()
@@ -174,6 +193,7 @@ pub(crate) fn collect_usage_sync() -> Usage {
                 live: a.live,
                 five_hour: a.five_hour,
                 seven_day: a.seven_day,
+                seven_day_model: a.seven_day_model,
             })
             .collect();
     }
@@ -228,6 +248,19 @@ fn set_notification_enabled(
         }
     }
     Ok(settings)
+}
+
+/// Consume (redeem) a Codex reset credit. This spends the credit, so it is only
+/// invoked from an explicit user action in the panel. Refreshes the panel after
+/// so the now-spent credit disappears.
+#[tauri::command]
+async fn consume_codex_reset(app: tauri::AppHandle, credit_id: String) -> Result<(), String> {
+    let id = credit_id.clone();
+    tauri::async_runtime::spawn_blocking(move || resets::consume_codex_reset(&id))
+        .await
+        .map_err(|e| e.to_string())??;
+    alerts::refresh_for_alerts(app);
+    Ok(())
 }
 
 /// Rename a Claude account. An empty label clears back to the derived default.
@@ -321,6 +354,7 @@ pub fn run() {
         .manage(AlertState::load())
         .manage(HideGuard(Mutex::new(None)))
         .manage(Glass(AtomicBool::new(false)))
+        .manage(Quitting(AtomicBool::new(false)))
         .invoke_handler(tauri::generate_handler![
             get_usage,
             get_cached_usage,
@@ -330,7 +364,8 @@ pub fn run() {
             set_notification_enabled,
             set_claude_account_label,
             add_claude_directory,
-            remove_claude_directory
+            remove_claude_directory,
+            consume_codex_reset
         ])
         .setup(|app| {
             register_notification_aumid(
@@ -364,7 +399,10 @@ pub fn run() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        app.state::<Quitting>().0.store(true, Ordering::Relaxed);
+                        app.exit(0);
+                    }
                     "refresh" => {
                         if let Some(w) = app.get_webview_window("main") {
                             let _ = w.emit("refresh", ());
@@ -416,10 +454,13 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
-        .run(|_app, event| {
-            // Keep running in the tray when the window is closed.
+        .run(|app, event| {
+            // Keep running in the tray when the window is closed, but let an
+            // explicit Quit (which sets this flag) actually exit.
             if let tauri::RunEvent::ExitRequested { api, .. } = event {
-                api.prevent_exit();
+                if !app.state::<Quitting>().0.load(Ordering::Relaxed) {
+                    api.prevent_exit();
+                }
             }
         });
 }
