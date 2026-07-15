@@ -82,13 +82,23 @@ function costCard(today, todayTok, m30, tok30) {
     </div>`;
 }
 
-function equivalentValueLabel(detail) {
+function equivalentValueLabel(detail, estimate) {
+  const confidence = estimate?.confidence || "low";
+  const reviewed = estimate?.pricing_reviewed_at
+    ? ` Pricing reviewed ${estimate.pricing_reviewed_at}.`
+    : "";
+  const unknown = (estimate?.unknown_models || []).length
+    ? ` Unknown models using fallback pricing: ${estimate.unknown_models.join(", ")}.`
+    : "";
+  const stale = estimate?.pricing_stale ? " Pricing may be stale." : "";
   const explanation =
-    "Not your subscription bill. Estimated from local token logs using API list prices.";
+    `Not your subscription bill. Estimated from local token logs using API list prices.${reviewed}${unknown}${stale}`;
+  const badgeClass = confidence === "high" && !estimate?.pricing_stale ? "high" : confidence;
   return `<div class="block-label value-label">API-equivalent usage value
     <span class="info-tip" tabindex="0" role="img"
       aria-label="${esc(explanation)}" title="${esc(explanation)}">i</span>
     ${detail ? `<span class="value-detail">${esc(detail)}</span>` : ""}
+    <span class="confidence ${esc(badgeClass)}" title="${esc(explanation)}">${esc(confidence)} confidence</span>
   </div>`;
 }
 
@@ -195,7 +205,7 @@ function renderCodex() {
 
   html += resetSection(c);
 
-  html += equivalentValueLabel("estimated");
+  html += equivalentValueLabel("estimated", c.estimate);
   html += costCard(c.cost_today, c.tokens_today, c.cost_30d, c.tokens_30d);
   html += chart(c.daily, false);
   return html;
@@ -311,7 +321,7 @@ function renderClaude() {
   }
   html += addFolderControl();
 
-  html += equivalentValueLabel("estimated from logs");
+  html += equivalentValueLabel("estimated from logs", c.estimate);
   if (multi)
     html += `<div class="sec-sub" style="margin:-4px 0 8px">Combined across all accounts — local logs aren't per-account.</div>`;
   html += costCard(c.cost_today, c.tokens_today, c.cost_30d, c.tokens_30d);

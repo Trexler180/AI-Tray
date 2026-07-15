@@ -1,9 +1,9 @@
-use crate::models::ClaudeUsage;
+use crate::models::{ClaudeUsage, EstimateConfidence, ModelUsage};
 use crate::pricing;
 use crate::util::today_str;
 use chrono::{DateTime, Local, Utc};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -50,6 +50,13 @@ struct Entry {
     ts: i64,
     tokens: u64,
     cost: f64,
+    model: String,
+    input: u64,
+    output: u64,
+    cache_write: u64,
+    cache_read: u64,
+    confidence: EstimateConfidence,
+    unknown_model: Option<String>,
 }
 
 pub fn collect() -> ClaudeUsage {
@@ -119,8 +126,19 @@ pub fn collect() -> ClaudeUsage {
                 None => continue,
             };
 
-            let cost = pricing::claude_rates(model).cost(input, output, cache_write, cache_read);
-            entries.push(Entry { ts, tokens, cost });
+            let priced = pricing::claude_value(model, input, output, cache_write, cache_read);
+            entries.push(Entry {
+                ts,
+                tokens,
+                cost: priced.cost,
+                model: model.to_string(),
+                input,
+                output,
+                cache_write,
+                cache_read,
+                confidence: priced.confidence,
+                unknown_model: priced.unknown_model,
+            });
         }
     }
 
@@ -131,6 +149,9 @@ pub fn collect() -> ClaudeUsage {
 
     let today = today_str();
     let mut per_day: BTreeMap<String, (u64, f64)> = BTreeMap::new();
+    let mut per_model: BTreeMap<String, (u64, f64, EstimateConfidence)> = BTreeMap::new();
+    let mut confidence = EstimateConfidence::High;
+    let mut unknown_models = BTreeSet::new();
 
     for e in &entries {
         if e.ts < cutoff_30d {
@@ -145,6 +166,20 @@ pub fn collect() -> ClaudeUsage {
 
         usage.tokens_30d += e.tokens;
         usage.cost_30d += e.cost;
+        usage.token_breakdown.input += e.input;
+        usage.token_breakdown.output += e.output;
+        usage.token_breakdown.cache_creation += e.cache_write;
+        usage.token_breakdown.cache_read += e.cache_read;
+        confidence = confidence.max(e.confidence);
+        if let Some(model) = &e.unknown_model {
+            unknown_models.insert(model.clone());
+        }
+        let model = per_model
+            .entry(e.model.clone())
+            .or_insert((0, 0.0, EstimateConfidence::High));
+        model.0 += e.tokens;
+        model.1 += e.cost;
+        model.2 = model.2.max(e.confidence);
         if date == today {
             usage.tokens_today += e.tokens;
             usage.cost_today += e.cost;
@@ -152,6 +187,16 @@ pub fn collect() -> ClaudeUsage {
     }
 
     usage.daily = crate::util::fill_daily(&per_day, 30);
+    usage.models = per_model
+        .into_iter()
+        .map(|(model, (tokens, value, confidence))| ModelUsage {
+            model,
+            tokens,
+            value,
+            confidence,
+        })
+        .collect();
+    usage.estimate = pricing::metadata(confidence, unknown_models);
 
     usage
 }

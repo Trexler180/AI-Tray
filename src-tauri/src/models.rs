@@ -1,5 +1,41 @@
 use serde::Serialize;
 
+#[derive(Serialize, Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
+#[serde(rename_all = "lowercase")]
+pub enum EstimateConfidence {
+    #[default]
+    High,
+    Medium,
+    Low,
+}
+
+#[derive(Serialize, Clone, Default)]
+pub struct EstimateMetadata {
+    pub confidence: EstimateConfidence,
+    pub catalog_version: String,
+    pub pricing_reviewed_at: String,
+    pub pricing_stale: bool,
+    pub unknown_models: Vec<String>,
+}
+
+#[derive(Serialize, Clone, Default)]
+pub struct TokenBreakdown {
+    pub input: u64,
+    pub cached_input: u64,
+    pub output: u64,
+    pub reasoning_output: u64,
+    pub cache_creation: u64,
+    pub cache_read: u64,
+}
+
+#[derive(Serialize, Clone, Default)]
+pub struct ModelUsage {
+    pub model: String,
+    pub tokens: u64,
+    pub value: f64,
+    pub confidence: EstimateConfidence,
+}
+
 /// A single rate-limit gauge (e.g. the rolling 5h window or the weekly window).
 #[derive(Serialize, Clone, Default)]
 pub struct Gauge {
@@ -70,6 +106,9 @@ pub struct CodexUsage {
     pub cost_30d: f64,
     pub tokens_30d: u64,
     pub daily: Vec<DayBucket>,
+    pub token_breakdown: TokenBreakdown,
+    pub models: Vec<ModelUsage>,
+    pub estimate: EstimateMetadata,
     /// Reset credits, when the live endpoint was reachable.
     pub resets: Option<CodexResets>,
 }
@@ -114,6 +153,9 @@ pub struct ClaudeUsage {
     pub cost_30d: f64,
     pub tokens_30d: u64,
     pub daily: Vec<DayBucket>,
+    pub token_breakdown: TokenBreakdown,
+    pub models: Vec<ModelUsage>,
+    pub estimate: EstimateMetadata,
 }
 
 #[derive(Serialize, Clone, Default)]

@@ -1,9 +1,9 @@
-use crate::models::{CodexUsage, Gauge};
+use crate::models::{CodexUsage, EstimateConfidence, Gauge, ModelUsage};
 use crate::pricing;
 use crate::util::{human_until, today_str};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -58,6 +58,8 @@ struct LastCount {
     input: u64,
     cached: u64,
     output: u64,
+    reasoning_output: u64,
+    model: String,
     rate_limits: Option<Value>,
     plan_type: Option<String>,
     ts: Option<i64>,
@@ -68,8 +70,9 @@ fn last_token_count(path: &Path) -> Option<LastCount> {
     let file = File::open(path).ok()?;
     let reader = BufReader::new(file);
     let mut found: Option<LastCount> = None;
+    let mut current_model = String::new();
     for line in reader.lines().map_while(Result::ok) {
-        if !line.contains("token_count") {
+        if !line.contains("token_count") && !line.contains("turn_context") {
             continue;
         }
         let v: Value = match serde_json::from_str(&line) {
@@ -77,6 +80,12 @@ fn last_token_count(path: &Path) -> Option<LastCount> {
             Err(_) => continue,
         };
         let payload = &v["payload"];
+        if v["type"] == "turn_context" {
+            if let Some(model) = payload["model"].as_str() {
+                current_model = model.to_string();
+            }
+            continue;
+        }
         if payload["type"] != "token_count" {
             continue;
         }
@@ -94,6 +103,12 @@ fn last_token_count(path: &Path) -> Option<LastCount> {
             input: total["input_tokens"].as_u64().unwrap_or(0),
             cached: total["cached_input_tokens"].as_u64().unwrap_or(0),
             output: total["output_tokens"].as_u64().unwrap_or(0),
+            reasoning_output: total["reasoning_output_tokens"].as_u64().unwrap_or(0),
+            model: if current_model.is_empty() {
+                "unknown".to_string()
+            } else {
+                current_model.clone()
+            },
             rate_limits: rl,
             plan_type: plan,
             ts,
@@ -146,8 +161,8 @@ pub fn collect() -> CodexUsage {
         }
     }
 
-    // Cost / token history: sum each session's final cumulative totals per day.
-    let rates = pricing::codex_rates("gpt-5");
+    // API-equivalent value history: sum each session's final cumulative totals
+    // per day. Cached input is a subset of input, not an additional category.
     let today = today_str();
     let cutoff = Utc::now().timestamp() - 30 * 86400;
     // Skip files untouched for >31 days without opening them — they can't
@@ -155,6 +170,9 @@ pub fn collect() -> CodexUsage {
     // refresh gets expensive.
     let min_mtime = std::time::SystemTime::now() - std::time::Duration::from_secs(31 * 86400);
     let mut per_day: BTreeMap<String, (u64, f64)> = BTreeMap::new();
+    let mut per_model: BTreeMap<String, (u64, f64, EstimateConfidence)> = BTreeMap::new();
+    let mut confidence = EstimateConfidence::High;
+    let mut unknown_models = BTreeSet::new();
 
     for (path, mtime) in &files {
         if *mtime < min_mtime {
@@ -172,14 +190,29 @@ pub fn collect() -> CodexUsage {
                     continue;
                 }
             }
-            let tokens = lc.input + lc.cached + lc.output;
-            let cost = rates.cost(lc.input, lc.output, 0, lc.cached);
+            let tokens = lc.input + lc.output;
+            let priced = pricing::codex_value(&lc.model, lc.input, lc.cached, lc.output);
+            let cost = priced.cost;
+            confidence = confidence.max(priced.confidence);
+            if let Some(model) = priced.unknown_model {
+                unknown_models.insert(model);
+            }
             let e = per_day.entry(date.clone()).or_insert((0, 0.0));
             e.0 += tokens;
             e.1 += cost;
 
             usage.tokens_30d += tokens;
             usage.cost_30d += cost;
+            usage.token_breakdown.input += lc.input;
+            usage.token_breakdown.cached_input += lc.cached;
+            usage.token_breakdown.output += lc.output;
+            usage.token_breakdown.reasoning_output += lc.reasoning_output;
+            let model = per_model
+                .entry(lc.model)
+                .or_insert((0, 0.0, EstimateConfidence::High));
+            model.0 += tokens;
+            model.1 += cost;
+            model.2 = model.2.max(priced.confidence);
             if date == today {
                 usage.tokens_today += tokens;
                 usage.cost_today += cost;
@@ -188,6 +221,16 @@ pub fn collect() -> CodexUsage {
     }
 
     usage.daily = crate::util::fill_daily(&per_day, 30);
+    usage.models = per_model
+        .into_iter()
+        .map(|(model, (tokens, value, confidence))| ModelUsage {
+            model,
+            tokens,
+            value,
+            confidence,
+        })
+        .collect();
+    usage.estimate = pricing::metadata(confidence, unknown_models);
 
     usage
 }
@@ -202,5 +245,19 @@ mod tests {
         assert_eq!(date_from_name(p), Some("2026-06-01".to_string()));
         assert_eq!(date_from_name(Path::new("other.jsonl")), None);
         assert_eq!(date_from_name(Path::new("rollout-x.jsonl")), None);
+    }
+
+    #[test]
+    fn fixture_keeps_model_and_codex_token_semantics() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/codex_token_count.jsonl"
+        ));
+        let count = last_token_count(path).expect("fixture token count");
+        assert_eq!(count.model, "gpt-5.5");
+        assert_eq!(count.input, 1_500);
+        assert_eq!(count.cached, 900);
+        assert_eq!(count.output, 300);
+        assert_eq!(count.input + count.output, 1_800);
     }
 }

@@ -1,0 +1,40 @@
+{
+  "catalog_version": "2026-07-15.1",
+  "reviewed_at": "2026-07-15",
+  "review_after": "2026-08-31",
+  "fallbacks": {
+    "codex": {"input": 5.0, "cache_read": 0.5, "output": 30.0},
+    "claude": {"input": 3.0, "cache_write": 3.75, "cache_read": 0.3, "output": 15.0}
+  },
+  "entries": [
+    {"provider":"codex","pattern":"gpt-5.6-sol","match_kind":"exact","rates":{"input":5.0,"cache_read":0.5,"output":30.0}},
+    {"provider":"codex","pattern":"gpt-5.6-terra","match_kind":"exact","rates":{"input":2.5,"cache_read":0.25,"output":15.0}},
+    {"provider":"codex","pattern":"gpt-5.6-luna","match_kind":"exact","rates":{"input":1.0,"cache_read":0.1,"output":6.0}},
+    {"provider":"codex","pattern":"gpt-5.5","match_kind":"exact","rates":{"input":5.0,"cache_read":0.5,"output":30.0}},
+    {"provider":"codex","pattern":"gpt-5.5-","match_kind":"prefix","rates":{"input":5.0,"cache_read":0.5,"output":30.0}},
+    {"provider":"codex","pattern":"gpt-5.4-mini","match_kind":"exact","rates":{"input":0.75,"cache_read":0.075,"output":4.5}},
+    {"provider":"codex","pattern":"gpt-5.4-mini-","match_kind":"prefix","rates":{"input":0.75,"cache_read":0.075,"output":4.5}},
+    {"provider":"codex","pattern":"gpt-5.4","match_kind":"exact","rates":{"input":2.5,"cache_read":0.25,"output":15.0}},
+    {"provider":"codex","pattern":"gpt-5.4-","match_kind":"prefix","rates":{"input":2.5,"cache_read":0.25,"output":15.0}},
+    {"provider":"codex","pattern":"gpt-5.3-codex","match_kind":"exact","rates":{"input":1.75,"cache_read":0.175,"output":14.0}},
+    {"provider":"codex","pattern":"gpt-5.3-codex-","match_kind":"prefix","rates":{"input":1.75,"cache_read":0.175,"output":14.0}},
+    {"provider":"codex","pattern":"gpt-5.2","match_kind":"exact","rates":{"input":1.75,"cache_read":0.175,"output":14.0}},
+    {"provider":"codex","pattern":"gpt-5.2-","match_kind":"prefix","rates":{"input":1.75,"cache_read":0.175,"output":14.0}},
+
+    {"provider":"claude","pattern":"claude-fable-5","match_kind":"prefix","rates":{"input":10.0,"cache_write":12.5,"cache_read":1.0,"output":50.0}},
+    {"provider":"claude","pattern":"claude-opus-4-8","match_kind":"prefix","rates":{"input":5.0,"cache_write":6.25,"cache_read":0.5,"output":25.0}},
+    {"provider":"claude","pattern":"claude-sonnet-5","match_kind":"prefix","rates":{"input":2.0,"cache_write":2.5,"cache_read":0.2,"output":10.0}},
+    {"provider":"claude","pattern":"claude-opus-4-6","match_kind":"prefix","rates":{"input":5.0,"cache_write":6.25,"cache_read":0.5,"output":25.0}},
+    {"provider":"claude","pattern":"claude-sonnet-4-6","match_kind":"prefix","rates":{"input":3.0,"cache_write":3.75,"cache_read":0.3,"output":15.0}},
+    {"provider":"claude","pattern":"claude-sonnet-4-5","match_kind":"prefix","rates":{"input":3.0,"cache_write":3.75,"cache_read":0.3,"output":15.0}},
+    {"provider":"claude","pattern":"claude-haiku-4-5","match_kind":"prefix","rates":{"input":1.0,"cache_write":1.25,"cache_read":0.1,"output":5.0}},
+    {"provider":"claude","pattern":"claude-opus-4","match_kind":"prefix","rates":{"input":15.0,"cache_write":18.75,"cache_read":1.5,"output":75.0}},
+    {"provider":"claude","pattern":"claude-sonnet-4","match_kind":"prefix","rates":{"input":3.0,"cache_write":3.75,"cache_read":0.3,"output":15.0}},
+    {"provider":"claude","pattern":"claude-3-5-haiku","match_kind":"prefix","rates":{"input":0.8,"cache_write":1.0,"cache_read":0.08,"output":4.0}}
+  ],
+  "sources": [
+    "https://developers.openai.com/api/docs/models",
+    "https://developers.openai.com/api/docs/models/gpt-5.5",
+    "https://platform.claude.com/docs/en/about-claude/pricing"
+  ]
+}
