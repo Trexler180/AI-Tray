@@ -1,0 +1,10 @@
+{
+  "five_hour": {"utilization": 12.0, "resets_at": "2026-07-15T05:00:00Z"},
+  "seven_day": {"utilization": 42.0, "resets_at": "2026-07-20T00:00:00Z"},
+  "limits": [
+    {"kind": "session", "group": "session", "percent": 12.0, "resets_at": "2026-07-15T05:00:00Z", "scope": null},
+    {"kind": "weekly_all", "group": "weekly", "percent": 42.0, "resets_at": "2026-07-20T00:00:00Z", "scope": null},
+    {"kind": "weekly_scoped", "group": "weekly", "percent": 55.0, "resets_at": "2026-07-20T00:00:00Z", "scope": {"model": {"id": "fable", "display_name": "Fable"}, "surface": null}},
+    {"kind": "weekly_scoped", "group": "weekly", "percent": 18.0, "resets_at": "2026-07-20T00:00:00Z", "scope": {"model": null, "surface": {"id": "cowork", "display_name": "Cowork"}}}
+  ]
+}
