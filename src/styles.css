@@ -52,12 +52,14 @@ body {
   );
 }
 
-/* ---- Tabs ---- */
+/* ---- Tabs ----
+   Docked under the content, so the nav sits nearest the tray icon the panel
+   pops out of and the content starts at the top edge. */
 .tabs {
   display: flex;
   gap: 4px;
-  padding: 6px 6px 5px;
-  border-bottom: 1px solid var(--border);
+  padding: 5px 6px 6px;
+  border-top: 1px solid var(--border);
 }
 .tab {
   flex: 1;
@@ -71,7 +73,7 @@ body {
   color: var(--muted);
   background: transparent;
   border: none;
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
@@ -262,46 +264,66 @@ body {
   cursor: pointer;
 }
 
-/* ---- Gauge ---- */
+/* ---- Gauge ----
+   Compact two-line meter: a label row carrying the headline number, over a
+   flat bar. The track keeps a soft radius while the fill is square-ended, so
+   the meter reads as a level rather than a lozenge. */
 .gauge {
-  margin-bottom: 10px;
+  margin: 0 0 11px;
+}
+.gauge-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.gauge-head .l {
+  min-width: 0;
+  color: var(--text);
+}
+.gauge-head b {
+  color: var(--codex);
+  font-variant-numeric: tabular-nums;
+}
+.gauge.claude .gauge-head b {
+  color: var(--claude);
+}
+.gauge.warn .gauge-head b {
+  color: var(--danger);
+}
+.gauge-head .sub {
+  color: var(--muted);
+  font-weight: 400;
+}
+.gauge-head .r {
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
 }
 .gauge-bar {
   position: relative;
-  height: 8px;
-  border-radius: 6px;
+  height: 7px;
+  border-radius: 4px;
   background: var(--track);
   overflow: hidden;
 }
 .gauge-fill {
   position: absolute;
   inset: 0 auto 0 0;
-  border-radius: 6px;
-  background: linear-gradient(90deg, var(--codex-2), var(--codex));
+  border-radius: 0;
+  background: var(--codex);
   transition: width 0.5s ease;
 }
 .gauge.claude .gauge-fill {
-  background: linear-gradient(90deg, var(--claude-2), var(--claude));
+  background: var(--claude);
 }
 .gauge.warn .gauge-fill {
-  background: linear-gradient(90deg, #d98a3a, #ef6b6b);
-}
-.gauge-meta {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 5px;
-  font-size: 12px;
-}
-.gauge-meta .l {
-  color: var(--text);
-  font-weight: 600;
-}
-.gauge-meta .r {
-  color: var(--muted);
-}
-.gauge-meta .sub {
-  color: var(--faint);
-  font-weight: 400;
+  background: var(--danger);
 }
 
 /* ---- Claude account block ---- */
@@ -576,13 +598,13 @@ body {
 .chart .bar {
   flex: 1;
   min-width: 4px;
-  background: linear-gradient(180deg, var(--codex), var(--codex-2));
-  border-radius: 3px 3px 0 0;
+  background: var(--codex);
+  border-radius: 2px 2px 0 0;
   opacity: 0.85;
   transition: height 0.3s;
 }
 .chart.claude .bar {
-  background: linear-gradient(180deg, var(--claude), var(--claude-2));
+  background: var(--claude);
 }
 .chart .bar:hover {
   opacity: 1;

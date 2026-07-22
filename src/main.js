@@ -35,7 +35,9 @@ const esc = (s) =>
   );
 
 // ---------- gauge ----------
-// usedPercent 0..100; we display the remaining "left".
+// usedPercent 0..100; we display the remaining "left", and the bar drains to
+// match it. The label row carries the headline number so the whole meter is
+// two lines; the exact used figure lives in the tooltip.
 function gauge(label, usedPercent, resetsIn, opts = {}) {
   usedPercent = Math.min(100, Math.max(0, Number(usedPercent) || 0));
   const left = (100 - usedPercent).toFixed(0);
@@ -44,15 +46,17 @@ function gauge(label, usedPercent, resetsIn, opts = {}) {
   if (opts.claude) cls.push("claude");
   if (warn) cls.push("warn");
   const fill = Math.min(100, Math.max(2, usedPercent));
-  const resetTxt = resetsIn ? `Resets in ${esc(resetsIn)}` : "";
+  const resetTxt = resetsIn ? `↻ ${esc(resetsIn)}` : "";
+  const tip = `${usedPercent.toFixed(0)}% used · ${left}% left${
+    resetsIn ? ` · resets in ${esc(resetsIn)}` : ""
+  }`;
   return `
-    <div class="block-label">${esc(label)}</div>
-    <div class="${cls.join(" ")}">
-      <div class="gauge-bar"><div class="gauge-fill" style="width:${100 - fill}%"></div></div>
-      <div class="gauge-meta">
-        <span class="l">${left}% left <span class="sub">· ${usedPercent.toFixed(0)}% used</span></span>
+    <div class="${cls.join(" ")}" title="${tip}">
+      <div class="gauge-head">
+        <span class="l">${esc(label)} <b>${left}%</b><span class="sub"> left</span></span>
         <span class="r">${resetTxt}</span>
       </div>
+      <div class="gauge-bar"><div class="gauge-fill" style="width:${100 - fill}%"></div></div>
     </div>`;
 }
 

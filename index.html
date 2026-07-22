@@ -8,12 +8,6 @@
   </head>
   <body>
     <div id="app" class="panel">
-      <header class="tabs" id="tabs">
-        <button class="tab active" data-tab="overview"><span class="ico">▦</span>Overview</button>
-        <button class="tab" data-tab="codex"><span class="ico">◍</span>Codex</button>
-        <button class="tab" data-tab="claude"><span class="ico">✳</span>Claude</button>
-      </header>
-
       <main id="content" class="content">
         <div class="loading">Loading usage…</div>
       </main>
@@ -22,6 +16,12 @@
         <span id="updated" class="updated">—</span>
         <button id="refreshBtn" class="refresh" title="Refresh">⟳</button>
       </footer>
+
+      <nav class="tabs" id="tabs">
+        <button class="tab active" data-tab="overview"><span class="ico">▦</span>Overview</button>
+        <button class="tab" data-tab="codex"><span class="ico">◍</span>Codex</button>
+        <button class="tab" data-tab="claude"><span class="ico">✳</span>Claude</button>
+      </nav>
     </div>
     <script type="module" src="/src/main.js"></script>
   </body>
