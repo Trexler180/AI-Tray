@@ -54,8 +54,7 @@ fn lock() -> MutexGuard<'static, ()> {
 }
 
 fn store_path() -> Option<PathBuf> {
-    let mut root = dirs::config_dir().or_else(dirs::home_dir)?;
-    root.push("AI Usage Tray");
+    let mut root = crate::util::config_dir()?;
     root.push("claude-dirs.json");
     Some(root)
 }

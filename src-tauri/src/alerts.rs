@@ -702,8 +702,7 @@ fn persist_settings(settings: &NotificationSettings) -> Result<(), String> {
 }
 
 fn settings_path() -> Option<PathBuf> {
-    let mut root = dirs::config_dir().or_else(dirs::home_dir)?;
-    root.push("AI Usage Tray");
+    let mut root = crate::util::config_dir()?;
     root.push("settings.json");
     Some(root)
 }

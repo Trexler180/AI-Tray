@@ -1,6 +1,16 @@
 use crate::models::DayBucket;
 use chrono::{Duration, Local};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+/// This app's own configuration directory (`%APPDATA%\AI Usage Tray` on Windows),
+/// falling back to the home directory on systems without a config dir. Holds the
+/// settings files and the derived history indexes.
+pub fn config_dir() -> Option<PathBuf> {
+    let mut root = dirs::config_dir().or_else(dirs::home_dir)?;
+    root.push("AI Usage Tray");
+    Some(root)
+}
 
 /// Local calendar date as YYYY-MM-DD.
 pub fn today_str() -> String {

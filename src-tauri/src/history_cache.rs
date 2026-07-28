@@ -38,8 +38,7 @@ struct Envelope<T> {
 }
 
 fn cache_path(name: &str) -> Option<PathBuf> {
-    let mut root = dirs::config_dir().or_else(dirs::home_dir)?;
-    root.push("AI Usage Tray");
+    let mut root = crate::util::config_dir()?;
     root.push(format!("{name}-history-cache.json"));
     Some(root)
 }
