@@ -1,0 +1,1054 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Usage credits — design variants</title>
+<style>
+/* ============================================================
+   App CSS, copied verbatim from src/styles.css
+   ============================================================ */
+:root {
+  --bg-top: #161b24;
+  --bg-bot: #0c0f15;
+  --card: rgba(255, 255, 255, 0.035);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --text: #e7ebf2;
+  --muted: #8b95a6;
+  --faint: #5c6577;
+  --track: rgba(255, 255, 255, 0.08);
+  --codex: #2dd4bf;
+  --codex-2: #0ea5a3;
+  --claude: #f0a36a;
+  --claude-2: #db7f4d;
+  --danger: #ef6b6b;
+  --ok: #71cdb0;
+  --warn: #dfa05f;
+  --radius: 8px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: transparent;
+  font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+  color: var(--text);
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+.panel {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--bg-top), var(--bg-bot));
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+.tabs { display: flex; gap: 4px; padding: 5px 6px 6px; border-top: 1px solid var(--border); }
+.tab {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 5px 6px; font: inherit; font-size: 12px; font-weight: 600;
+  color: var(--muted); background: transparent; border: none; border-radius: 6px;
+  cursor: pointer; transition: background 0.15s, color 0.15s;
+}
+.tab .ico { font-size: 12.5px; opacity: 0.8; }
+.tab:hover { color: var(--text); background: var(--card); }
+.tab.active { color: #fff; background: rgba(45, 212, 191, 0.16); }
+.tab.active[data-tab="claude"] { background: rgba(240, 163, 106, 0.18); }
+.tab.active[data-tab="overview"], .tab.active[data-tab="settings"] { background: rgba(255, 255, 255, 0.1); }
+.tab.gear { flex: 0 0 40px; }
+.content { flex: 1; overflow-y: auto; padding: 10px 14px 10px; }
+.hd {
+  display: flex; align-items: center; gap: 7px; margin: 0 0 10px;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border);
+}
+.hd-title { font-size: 15px; font-weight: 700; letter-spacing: 0.2px; }
+.hd-right {
+  margin-left: auto; display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums;
+}
+.hd-refresh {
+  width: 26px; height: 26px; padding: 0; flex: 0 0 auto; display: inline-grid;
+  place-items: center; background: transparent; border: none; border-radius: 7px;
+  color: var(--muted); line-height: 1; cursor: pointer;
+}
+.hd-refresh:hover { color: var(--text); background: rgba(255, 255, 255, 0.07); }
+.status-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--ok); box-shadow: 0 0 5px rgba(113, 205, 176, 0.5); cursor: help;
+}
+.status-dot.warn { background: var(--warn); box-shadow: 0 0 5px rgba(223, 160, 95, 0.5); }
+.sec-sub { font-size: 11.5px; color: var(--faint); margin: 4px 0 2px; }
+.pill {
+  font-size: 11px; font-weight: 600; color: var(--muted); padding: 2px 8px;
+  border: 1px solid var(--border); border-radius: 999px; flex: 0 0 auto;
+}
+.info-tip {
+  display: inline-grid; place-items: center; width: 14px; height: 14px;
+  border: 1px solid var(--faint); border-radius: 50%; color: var(--muted);
+  font-size: 9px; font-weight: 700; line-height: 1; cursor: help;
+}
+.gauge { margin: 0 0 11px; }
+.gauge-head {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  margin-bottom: 4px; font-size: 12.5px; font-weight: 600;
+}
+.gauge-head .l { min-width: 0; color: var(--text); }
+.gauge-head b { color: var(--codex); font-variant-numeric: tabular-nums; }
+.gauge.claude .gauge-head b { color: var(--claude); }
+.gauge.warn .gauge-head b { color: var(--danger); }
+.gauge-head .sub { color: var(--muted); font-weight: 400; }
+.gauge-head .r {
+  flex: 0 0 auto; font-size: 11.5px; font-weight: 500; color: var(--muted); white-space: nowrap;
+}
+.gauge-bar { position: relative; height: 7px; border-radius: 4px; background: var(--track); overflow: hidden; }
+.gauge-fill { position: absolute; inset: 0 auto 0 0; background: var(--codex); }
+.gauge.claude .gauge-fill { background: var(--claude); }
+.gauge.warn .gauge-fill { background: var(--danger); }
+.acct + .acct { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px; }
+.acct-head { display: flex; align-items: center; gap: 7px; margin: 0 0 8px; font-size: 13px; font-weight: 700; }
+.acct-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.row { display: flex; justify-content: space-between; align-items: baseline; padding: 2px 0; font-size: 13px; }
+.row .k { color: var(--muted); }
+.row .v { color: var(--text); font-weight: 600; }
+.stat-card {
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 9px 12px 8px; margin-top: 12px;
+}
+.stat-card-head {
+  display: flex; align-items: center; gap: 5px; font-size: 10.5px; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--faint); font-weight: 600; margin-bottom: 7px;
+}
+.stat-card-head .status-dot { margin-left: auto; }
+.stat-pair { display: flex; gap: 14px; }
+.stat { flex: 1; min-width: 0; }
+.stat .stat-lab { font-size: 11px; color: var(--muted); }
+.stat .val { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.25; }
+.stat .val small { font-size: 11px; font-weight: 400; color: var(--faint); }
+.chart { display: flex; align-items: flex-end; gap: 3px; height: 32px; margin: 9px 0 0; }
+.chart .bar { flex: 1; min-width: 4px; background: var(--codex); border-radius: 2px 2px 0 0; opacity: 0.85; }
+.chart.claude .bar { background: var(--claude); }
+.chart .bar.empty { background: var(--track); opacity: 1; }
+.grp-label {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase;
+  color: var(--faint); margin: 14px 0 6px;
+}
+.grp { border: 1px solid var(--border); border-radius: 10px; background: rgba(255, 255, 255, 0.018); overflow: hidden; }
+.grp-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 11px; font-size: 12.5px; color: var(--text); cursor: pointer;
+}
+.grp-row:hover { background: rgba(255, 255, 255, 0.025); }
+.grp-row + .grp-row, .acct-row + .acct-row, .grp-row + .acct-row, .acct-row + .grp-row { border-top: 1px solid var(--border); }
+.rlab { min-width: 0; }
+.rsub { display: block; font-size: 10.5px; color: var(--faint); margin-top: 1px; }
+.sw {
+  appearance: none; position: relative; width: 32px; height: 18px; flex: 0 0 auto;
+  border: 1px solid var(--border-strong); border-radius: 999px;
+  background: rgba(255, 255, 255, 0.075); box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+  cursor: pointer; outline: none; transition: background 0.18s ease, border-color 0.18s ease;
+}
+.sw::before {
+  content: ""; position: absolute; top: 2.5px; left: 2.5px; width: 11px; height: 11px;
+  border-radius: 50%; background: #c8ced8; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  transition: transform 0.18s ease, background 0.18s ease;
+}
+.sw:checked { border-color: rgba(45, 212, 191, 0.65); background: linear-gradient(90deg, var(--codex-2), var(--codex)); }
+.sw:checked::before { transform: translateX(14px); background: #eefdfb; }
+.sw.claude:checked { border-color: rgba(240, 163, 106, 0.66); background: linear-gradient(90deg, var(--claude-2), var(--claude)); }
+.acct-row { display: flex; align-items: center; gap: 8px; padding: 8px 11px; font-size: 12.5px; }
+.acct-row .nm { font-weight: 600; }
+.acct-row .pill { font-size: 10px; padding: 1px 6px; }
+.acct-row .pth {
+  display: block; font-size: 10px; color: var(--faint); margin-top: 1px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; word-break: break-all;
+}
+.banner {
+  background: rgba(239, 107, 107, 0.12); border: 1px solid rgba(239, 107, 107, 0.3);
+  color: #f2b0b0; border-radius: 9px; padding: 7px 10px; font-size: 12px;
+  margin-bottom: 10px; line-height: 1.4;
+}
+.ov-card {
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; margin-bottom: 9px; cursor: pointer; transition: border-color 0.15s;
+}
+.ov-card:hover { border-color: var(--border-strong); }
+.ov-card .gauge:last-child { margin-bottom: 0; }
+.ov-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.ov-name { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 7px; min-width: 0; }
+.ov-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--codex); flex: 0 0 auto; }
+.ov-dot.claude { background: var(--claude); }
+.ov-cost { font-size: 12.5px; color: var(--muted); flex: 0 0 auto; }
+.ov-reset { margin-top: 7px; font-size: 11.5px; font-weight: 600; color: var(--codex); }
+.ov-acct {
+  display: flex; align-items: center; gap: 6px; margin: 7px 0 5px;
+  font-size: 12px; font-weight: 600; color: var(--muted);
+}
+.ov-acct .pill { font-size: 10px; padding: 1px 6px; }
+.ov-acct .ov-dot { width: 6px; height: 6px; }
+
+/* ============================================================
+   New: usage-credit components (the proposal)
+   Violet = credits, so the money channel never reads as quota.
+   ============================================================ */
+:root { --credit: #b3a5f0; --credit-2: #8d7ce8; }
+.gauge.credit .gauge-head b { color: var(--credit); }
+.gauge.credit .gauge-fill { background: var(--credit); }
+.gauge.credit.warn .gauge-head b { color: var(--danger); }
+.gauge.credit.warn .gauge-fill { background: var(--danger); }
+.gauge.click { cursor: pointer; }
+.chev { font-size: 8.5px; color: var(--faint); margin-left: 2px; }
+.grants {
+  margin: -6px 0 11px; padding: 3px 2px 2px 8px;
+  border-left: 2px solid rgba(179, 165, 240, 0.3);
+}
+.grant { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); padding: 1.5px 0; }
+.grant b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.grant.soon span { color: var(--warn); }
+.grant.total { color: var(--faint); }
+.grant.total b { color: var(--credit); }
+.sw.credit:checked { border-color: rgba(179, 165, 240, 0.65); background: linear-gradient(90deg, var(--credit-2), var(--credit)); }
+.ov-credit { margin: -3px 0 7px; font-size: 11px; font-weight: 600; color: var(--credit); }
+.ov-credit.off { color: var(--faint); font-weight: 500; }
+.ov-credit.low { color: var(--warn); }
+/* Variant B: wallet card rows */
+.wc-row { display: flex; align-items: center; gap: 7px; padding: 6px 0; font-size: 12.5px; cursor: pointer; }
+.wc-row + .wc-row, .wc-detail + .wc-row { border-top: 1px solid var(--border); }
+.wc-row .nm { font-weight: 600; }
+.wc-row .amt { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.wc-row .amt b { color: var(--credit); font-weight: 700; }
+.wc-row.capped .amt b { color: var(--danger); }
+.wc-bal { margin-left: auto; text-transform: none; letter-spacing: 0; font-size: 11px; font-weight: 600; color: var(--credit); }
+.wc-detail { padding: 0 0 8px 13px; }
+.wc-detail .grants { margin: 0; }
+.wc-renews { font-size: 10.5px; color: var(--faint); margin-top: 3px; }
+/* Variant C: credits row + drill-in */
+.cr-row {
+  display: flex; align-items: center; gap: 6px; width: 100%; padding: 3px 0;
+  margin: -3px 0 9px; background: none; border: 0; color: var(--text);
+  font: inherit; font-size: 13px; cursor: pointer;
+}
+.cr-row .k { color: var(--muted); }
+.cr-row .v { margin-left: auto; font-weight: 600; font-variant-numeric: tabular-nums; }
+.cr-row .v small { color: var(--faint); font-weight: 400; }
+.cr-row .v b { color: var(--credit); font-weight: 600; }
+.cr-row.capped .v b { color: var(--danger); }
+.cr-panel {
+  margin: -4px 0 11px; padding: 9px 10px 8px;
+  border: 1px solid rgba(179, 165, 240, 0.22); border-radius: 9px;
+  background: rgba(179, 165, 240, 0.05);
+}
+.cr-panel .gauge { margin-bottom: 8px; }
+.cr-panel .grants { border: 0; padding-left: 0; margin: 0; }
+.cr-toggle {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--border);
+  font-size: 11.5px; color: var(--muted);
+}
+/* Variant D: dedicated Credits screen */
+.hd-back {
+  width: 26px; height: 26px; padding: 0 0 2px; flex: 0 0 auto; display: inline-grid;
+  place-items: center; background: transparent; border: none; border-radius: 7px;
+  color: var(--muted); font: inherit; font-size: 17px; line-height: 1; cursor: pointer;
+}
+.hd-back:hover { color: var(--text); background: rgba(255, 255, 255, 0.07); }
+.cr-link { cursor: pointer; }
+.cr-link .go { color: var(--faint); font-size: 12px; margin-left: 2px; }
+.cr-link:hover .go { color: var(--text); }
+/* Variant E: in-bar gauges — the label, number, and reset text sit inside the bar */
+.bgauge {
+  position: relative; height: 24px; border-radius: 6px; background: var(--track);
+  overflow: hidden; margin: 0 0 8px;
+}
+.bgauge .bfill {
+  position: absolute; inset: 0 auto 0 0;
+  background: rgba(45, 212, 191, 0.24); border-right: 2px solid var(--codex);
+}
+.bgauge.claude .bfill { background: rgba(240, 163, 106, 0.2); border-right-color: var(--claude); }
+.bgauge.credit .bfill { background: rgba(179, 165, 240, 0.2); border-right-color: var(--credit); }
+.bgauge.warn .bfill { background: rgba(239, 107, 107, 0.18); border-right-color: var(--danger); }
+.bgauge .btxt {
+  position: absolute; inset: 0; display: flex; align-items: center;
+  justify-content: space-between; gap: 8px; padding: 0 9px;
+  font-size: 11.5px; font-weight: 600; color: var(--text); white-space: nowrap;
+}
+.bgauge .btxt b { color: var(--codex); font-variant-numeric: tabular-nums; }
+.bgauge.claude .btxt b { color: var(--claude); }
+.bgauge.credit .btxt b { color: var(--credit); }
+.bgauge.warn .btxt b { color: var(--danger); }
+.bgauge .btxt .sub { color: var(--muted); font-weight: 400; }
+.bgauge .btxt .rr {
+  color: var(--muted); font-weight: 500; font-size: 10.5px;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.bgauge.link { cursor: pointer; }
+.bgauge.link:hover { box-shadow: inset 0 0 0 1px var(--border-strong); }
+/* Variant G: vibrant fills — gradients at higher opacity, readable text on top */
+.vivid .bgauge { background: rgba(255, 255, 255, 0.055); }
+.vivid .bgauge .bfill {
+  background: linear-gradient(90deg, rgba(14, 165, 163, 0.55), rgba(45, 226, 203, 0.7));
+  border-right-color: #43f5da;
+}
+.vivid .bgauge.claude .bfill {
+  background: linear-gradient(90deg, rgba(219, 127, 77, 0.55), rgba(248, 168, 106, 0.7));
+  border-right-color: #ffb478;
+}
+.vivid .bgauge.credit .bfill {
+  background: linear-gradient(90deg, rgba(122, 99, 235, 0.55), rgba(182, 162, 250, 0.7));
+  border-right-color: #c9b8ff;
+}
+.vivid .bgauge.warn .bfill {
+  background: linear-gradient(90deg, rgba(214, 62, 62, 0.55), rgba(244, 110, 110, 0.7));
+  border-right-color: #ff8a8a;
+}
+.vivid .bgauge .btxt { text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5); }
+.vivid .bgauge .btxt b { color: #fff; }
+.vivid .bgauge .btxt .sub, .vivid .bgauge .btxt .rr { color: #cdd5e1; }
+.vivid .chart .bar { opacity: 1; }
+
+/* Variant F: warn-only health — a pill instead of a dot, shown only when stale */
+.pill.warn-pill { color: var(--warn); border-color: rgba(223, 160, 95, 0.4); }
+.src-txt { margin-left: auto; font-size: 10.5px; color: var(--faint); }
+.src-txt.stale { color: var(--warn); }
+
+/* ============================================================
+   Mockup page chrome
+   ============================================================ */
+html, body { background: #080b10; user-select: auto; }
+body { padding: 30px 22px 56px; }
+.intro { max-width: 1120px; margin: 0 auto 26px; }
+.intro h1 { font-size: 17px; font-weight: 700; letter-spacing: 0.2px; }
+.intro p { font-size: 12.5px; color: var(--muted); margin-top: 5px; }
+.ctl {
+  max-width: 1120px; margin: 0 auto 28px; display: flex; gap: 10px 30px; flex-wrap: wrap;
+  padding: 11px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--card);
+}
+.ctl-g { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted); }
+.ctl-g > b { color: var(--text); font-size: 12px; min-width: 54px; }
+.ctl label { display: flex; align-items: center; gap: 6px; }
+.ctl input[type="range"] { width: 88px; accent-color: var(--codex); }
+.ctl-g.claude input[type="range"] { accent-color: var(--claude); }
+.ctl input[type="range"].credit { accent-color: var(--credit); }
+.ctl span[data-out] {
+  min-width: 42px; color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.board { display: flex; gap: 34px; flex-wrap: wrap; justify-content: center; align-items: flex-start; }
+.frame { width: 340px; }
+.cap { font-size: 12.5px; color: var(--muted); margin: 0 2px 10px; line-height: 1.45; }
+.cap b { color: var(--text); }
+.shot { height: 640px; }
+.shot .panel { height: 100%; }
+.shot .content { overflow: hidden; } /* the panel never scrolls */
+</style>
+</head>
+<body>
+<div class="intro">
+  <h1>Claude usage credits — design variants</h1>
+  <p>Everything is clickable: tabs, gauges, rows, toggles. Violet = credits; orange stays plan quota. Drag the sliders to put every mockup into any state.</p>
+</div>
+
+<div class="ctl">
+  <div class="ctl-g"><b>Codex</b>
+    <label>Session <input type="range" min="0" max="100" value="72" data-bind="cx.session" /><span data-out="cx.session">72%</span></label>
+    <label>Weekly <input type="range" min="0" max="100" value="38" data-bind="cx.weekly" /><span data-out="cx.weekly">38%</span></label>
+  </div>
+  <div class="ctl-g claude"><b>Personal</b>
+    <label>Session <input type="range" min="0" max="100" value="64" data-bind="a1.session" /><span data-out="a1.session">64%</span></label>
+    <label>Weekly <input type="range" min="0" max="100" value="41" data-bind="a1.weekly" /><span data-out="a1.weekly">41%</span></label>
+    <label>Credits spent <input type="range" min="0" max="20" step="0.1" value="6.8" data-bind="a1.spent" class="credit" /><span data-out="a1.spent">$6.80</span></label>
+  </div>
+  <div class="ctl-g claude"><b>Work</b>
+    <label>Session <input type="range" min="0" max="100" value="89" data-bind="a2.session" /><span data-out="a2.session">89%</span></label>
+    <label>Weekly <input type="range" min="0" max="100" value="12" data-bind="a2.weekly" /><span data-out="a2.weekly">12%</span></label>
+    <label>Credits spent <input type="range" min="0" max="10" step="0.1" value="9.1" data-bind="a2.spent" class="credit" /><span data-out="a2.spent">$9.10</span></label>
+  </div>
+</div>
+
+<div class="board">
+  <div class="frame">
+    <div class="cap"><b>A · Third meter.</b> Credits are a gauge per account, next to Session and Weekly. Click it for grants. Toggle lives in Settings.</div>
+    <div class="shot" id="frame-A"></div>
+  </div>
+  <div class="frame">
+    <div class="cap"><b>B · Wallet card.</b> One credits card for all accounts, toggle inline. Click a row for grants. Quota stack stays untouched.</div>
+    <div class="shot" id="frame-B"></div>
+  </div>
+  <div class="frame">
+    <div class="cap"><b>C · Drill-in row.</b> One quiet line per account; click it for meter, grants, and the toggle in one place. Nothing new in Settings.</div>
+    <div class="shot" id="frame-C"></div>
+  </div>
+  <div class="frame">
+    <div class="cap"><b>D · Credits page.</b> Tabs carry only a one-line summary; clicking it opens a dedicated Credits screen with grants, expiries, and toggles. Back with ‹.</div>
+    <div class="shot" id="frame-D"></div>
+  </div>
+  <div class="frame">
+    <div class="cap"><b>E · In-bar meters.</b> Same structure as D, but every gauge is one bar with its text inside — no label line above. Credits bar opens the Credits screen.</div>
+    <div class="shot" id="frame-E"></div>
+  </div>
+  <div class="frame">
+    <div class="cap"><b>F · Fewer dots.</b> E, cleaned up: provider dots dropped, and health is warn-only — silence when live, an amber pill only when data is stale (see Work).</div>
+    <div class="shot" id="frame-F"></div>
+  </div>
+  <div class="frame">
+    <div class="cap"><b>G · Vibrant bars.</b> F with saturated gradient fills. White numbers and a soft text shadow keep the labels readable on top of the color.</div>
+    <div class="shot" id="frame-G"></div>
+  </div>
+</div>
+
+<script>
+// ---------- static sample data ----------
+const ACCTS = [
+  {
+    id: "a1", label: "Personal", def: true,
+    session: { left: 64, r: "resets 1h 12m · 5:49 pm" },
+    weekly: { left: 41, r: "resets Thu 11:59 pm" },
+    cap: 20, spent: 6.8, renews: "Aug 1", balance: 31.5,
+    grants: [
+      { amt: "$25.00", exp: "expires Sep 30", soon: false },
+      { amt: "$6.50", exp: "expires Aug 15", soon: false },
+    ],
+  },
+  {
+    id: "a2", label: "Work", def: false,
+    session: { left: 89, r: "resets 3h 40m · 8:17 pm" },
+    weekly: { left: 12, r: "resets Sun 8:00 am" },
+    cap: 10, spent: 9.1, renews: "Aug 1", balance: 5.0,
+    grants: [{ amt: "$5.00", exp: "expires Aug 3", soon: true }],
+  },
+];
+const CODEX = { session: 72, weekly: 38 };
+const usd = (n) => "$" + n.toFixed(2);
+const left = (a) => usd(a.cap - a.spent);
+const capped = (a) => a.spent / a.cap >= 0.8;
+const CHART = [3, 5, 2, 7, 9, 4, 6, 10, 8, 3, 0, 6, 9, 7];
+
+// ---------- shared pieces (mirrors main.js output) ----------
+const refreshIcon = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+  stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /><polyline points="23 4 23 10 17 10" /></svg>`;
+
+function header(title, extras = "", hideRefresh = false) {
+  const right = hideRefresh
+    ? `<span class="hd-right"></span>`
+    : `<span class="hd-right"><span title="Last updated">4:37 pm</span>
+       <button class="hd-refresh" title="Refresh">${refreshIcon}</button></span>`;
+  return `<div class="hd"><span class="hd-title">${title}</span>${extras}${right}</div>`;
+}
+const dot = (warn = false) => `<span class="status-dot${warn ? " warn" : ""}"></span>`;
+
+function gauge(label, leftPct, resets, opts = {}) {
+  const cls = ["gauge"];
+  if (opts.claude) cls.push("claude");
+  if (opts.warn || leftPct <= 20) cls.push("warn");
+  return `<div class="${cls.join(" ")}">
+    <div class="gauge-head">
+      <span class="l">${label} <b>${leftPct}%</b><span class="sub"> left</span></span>
+      <span class="r">${resets}</span>
+    </div>
+    <div class="gauge-bar"><div class="gauge-fill" style="width:${leftPct}%"></div></div>
+  </div>`;
+}
+
+// In-bar gauge (variant E): one bar, text inside. Fill = what's left.
+function bgauge(labelHtml, leftPct, right, cls = "", attrs = "") {
+  const warn = leftPct <= 20 && !cls.includes("credit");
+  return `<div class="bgauge ${cls}${warn ? " warn" : ""}" ${attrs}>
+    <div class="bfill" style="width:${leftPct}%"></div>
+    <div class="btxt"><span>${labelHtml}</span><span class="rr">${right}</span></div>
+  </div>`;
+}
+const bq = (label, leftPct, resets, cls = "") =>
+  bgauge(`${label} <b>${leftPct}%</b><span class="sub"> left</span>`, leftPct, resets, cls);
+
+function chart(claude) {
+  const bars = CHART.map((v) =>
+    `<div class="bar${v === 0 ? " empty" : ""}" style="height:${Math.max(8, v * 10)}%"></div>`
+  ).join("");
+  return `<div class="chart${claude ? " claude" : ""}">${bars}</div>`;
+}
+
+function valueCard(claude, today, tokT, m30, tok30, noDot = false) {
+  return `<div class="stat-card">
+    <div class="stat-card-head">
+      <span>API-equivalent value</span><span class="info-tip">i</span>${noDot ? "" : dot()}
+    </div>
+    <div class="stat-pair">
+      <div class="stat"><div class="stat-lab">Today</div>
+        <div class="val">${today} <small>${tokT}</small></div></div>
+      <div class="stat"><div class="stat-lab">Last 30 days</div>
+        <div class="val">${m30} <small>${tok30}</small></div></div>
+    </div>
+    ${chart(claude)}
+  </div>`;
+}
+
+function grantsList(a, withBalance = true) {
+  let h = `<div class="grants">`;
+  for (const g of a.grants)
+    h += `<div class="grant${g.soon ? " soon" : ""}"><b>${g.amt}</b><span>${g.exp}</span></div>`;
+  if (withBalance)
+    h += `<div class="grant total"><b>${usd(a.balance)}</b><span>balance · ${a.grants.length} grant${a.grants.length > 1 ? "s" : ""}</span></div>`;
+  return h + `</div>`;
+}
+
+// The Codex tab is identical in every variant.
+function codexTab() {
+  let h = header("Codex", `${dot()}<span class="pill">Plus</span>`);
+  h += gauge("Session (5h)", CODEX.session, "resets 2h 41m · 7:18 pm");
+  h += gauge("Weekly", CODEX.weekly, "resets Fri 9:04 am");
+  h += `<div class="row"><span class="k">Credits</span><span class="v">41.20</span></div>`;
+  h += `<div class="grp-label">Reset credits</div>
+        <div class="sec-sub">No reset credits right now.</div>`;
+  h += valueCard(false, "$4.12", "1.2M", "$86.40", "24.8M");
+  return h;
+}
+
+function acctHead(a) {
+  return `<div class="acct-head"><span class="ov-dot claude"></span>
+    <span class="acct-label">${a.label}</span>${dot()}
+    ${a.def ? `<span class="pill">default</span>` : ""}</div>`;
+}
+function acctGauges(a, sessionLabel) {
+  return gauge(sessionLabel, a.session.left, a.session.r, { claude: true }) +
+         gauge("Weekly", a.weekly.left, a.weekly.r, { claude: true, warn: a.weekly.warn });
+}
+function ovAcct(a, extraPill = "") {
+  return `<div class="ov-acct"><span class="ov-dot claude"></span>${a.label}
+    ${dot()}${a.def ? ` <span class="pill">active</span>` : ""}${extraPill}</div>`;
+}
+const claudeValueCard = (noDot = false) =>
+  valueCard(true, "$5.00", "3.4M", "$61.20", "41.2M", noDot) +
+  `<div class="sec-sub">Combined across all accounts — local logs aren't per-account.</div>`;
+
+// Variant F heads: no provider dot, no green dot; Work demos the warn-only pill.
+const stalePill = `<span class="pill warn-pill">cached 12 min</span>`;
+const acctHeadF = (a) => `<div class="acct-head">
+  <span class="acct-label">${a.label}</span>
+  ${a.def ? `<span class="pill">default</span>` : stalePill}</div>`;
+const ovAcctF = (a) => `<div class="ov-acct">${a.label}${a.def ? ` <span class="pill">active</span>` : ` ${stalePill}`}</div>`;
+
+function settingsSkeleton(creditsGroup, extraNotifyRow = "") {
+  let h = header("Settings", "", true);
+  h += `<div class="grp-label">Notifications</div><div class="grp">`;
+  h += swRow("Codex limits", "Near, hit, and reset", true, "");
+  h += swRow("Claude limits", "Near, hit, and reset", true, "claude");
+  h += extraNotifyRow;
+  h += `</div>`;
+  h += creditsGroup;
+  h += `<div class="grp-label">Claude accounts</div><div class="grp">`;
+  for (const a of ACCTS)
+    h += `<div class="acct-row"><span class="ov-dot claude"></span>
+      <span class="rlab"><span class="nm">${a.label}</span>${a.def ? ` <span class="pill">default</span>` : ""}
+      <span class="pth">~/.claude${a.def ? "" : "-work"}</span></span></div>`;
+  h += `</div>`;
+  h += `<div class="grp-label">Data sources</div><div class="grp">`;
+  h += `<div class="acct-row">${dot()}<span class="rlab">Codex quota</span><span class="amt" style="margin-left:auto;font-size:10.5px;color:var(--faint)">Live API</span></div>`;
+  h += `<div class="acct-row">${dot()}<span class="rlab">Claude history</span><span class="amt" style="margin-left:auto;font-size:10.5px;color:var(--faint)">Local logs · 212 files</span></div>`;
+  h += `</div>`;
+  return h;
+}
+function swRow(label, sub, checked, cls, attrs = "") {
+  return `<label class="grp-row">
+    <span class="rlab">${label}<span class="rsub">${sub}</span></span>
+    <input class="sw${cls ? " " + cls : ""}" type="checkbox" ${attrs} ${checked ? "checked" : ""} />
+  </label>`;
+}
+
+// ---------- variant definitions ----------
+const variants = {
+  // A — credits as a third gauge per account
+  A: {
+    claude(st) {
+      let h = header("Claude");
+      for (const a of ACCTS) {
+        h += `<div class="acct">${acctHead(a)}${acctGauges(a, "Session (5h)")}`;
+        const warn = capped(a);
+        h += `<div class="gauge credit click${warn ? " warn" : ""}" data-grants="${a.id}">
+          <div class="gauge-head">
+            <span class="l">Credits <b>${left(a)}</b><span class="sub"> of ${usd(a.cap)}</span><span class="chev">${st.exp.has(a.id) ? "▲" : "▼"}</span></span>
+            <span class="r">renews ${a.renews}</span>
+          </div>
+          <div class="gauge-bar"><div class="gauge-fill" style="width:${Math.round((1 - a.spent / a.cap) * 100)}%"></div></div>
+        </div>`;
+        if (st.exp.has(a.id)) h += grantsList(a);
+        h += `</div>`;
+      }
+      h += claudeValueCard();
+      return h;
+    },
+    overview(st) {
+      let h = "";
+      for (const a of ACCTS) {
+        h += ovAcct(a) + acctGauges(a, "Session");
+        const on = st.on[a.id];
+        const low = capped(a);
+        h += `<div class="ov-credit${!on ? " off" : low ? " low" : ""}">Credits ${left(a)} · past-limits ${on ? "on" : "off"}</div>`;
+      }
+      return h;
+    },
+    settings(st) {
+      let grp = `<div class="grp-label">Usage credits</div><div class="grp">`;
+      for (const a of ACCTS)
+        grp += swRow(a.label, `Use credits past plan limits · ${left(a)} left this month`,
+          st.on[a.id], "credit", `data-on="${a.id}"`);
+      grp += `</div>`;
+      return settingsSkeleton(grp);
+    },
+  },
+
+  // B — one wallet card on the Claude tab, toggles inline
+  B: {
+    claude(st) {
+      let h = header("Claude");
+      for (const a of ACCTS) h += `<div class="acct">${acctHead(a)}${acctGauges(a, "Session (5h)")}</div>`;
+      const bal = ACCTS.reduce((s, a) => s + a.balance, 0);
+      h += `<div class="stat-card">
+        <div class="stat-card-head"><span>Usage credits</span><span class="wc-bal">balance ${usd(bal)}</span></div>`;
+      for (const a of ACCTS) {
+        h += `<div class="wc-row${capped(a) ? " capped" : ""}" data-grants="${a.id}">
+          <span class="ov-dot claude" style="width:6px;height:6px"></span>
+          <span class="nm">${a.label}</span>
+          <span class="amt"><b>${left(a)}</b> of ${usd(a.cap)}</span>
+          <input class="sw credit" type="checkbox" data-on="${a.id}" ${st.on[a.id] ? "checked" : ""} title="Use credits past plan limits" />
+        </div>`;
+        if (st.exp.has(a.id))
+          h += `<div class="wc-detail">${grantsList(a)}<div class="wc-renews">Cap renews ${a.renews} · switch spends credits past plan limits</div></div>`;
+      }
+      h += `</div>`;
+      h += claudeValueCard();
+      return h;
+    },
+    overview(st) {
+      let h = "";
+      for (const a of ACCTS) h += ovAcct(a) + acctGauges(a, "Session");
+      const totalLeft = ACCTS.reduce((s, a) => s + (a.cap - a.spent), 0);
+      h += `<div class="ov-reset" style="color:var(--credit)">Credits: ${usd(totalLeft)} left this month</div>`;
+      return h;
+    },
+    settings() {
+      let grp = `<div class="grp-label">Usage credits</div><div class="grp">`;
+      for (const a of ACCTS)
+        grp += `<div class="acct-row"><span class="ov-dot claude"></span>
+          <span class="rlab"><span class="nm">${a.label}</span>
+          <span class="rsub">${usd(a.cap)}/month cap · renews ${a.renews}</span></span></div>`;
+      grp += `</div><div class="sec-sub">Credits are billed alongside plan usage. The past-limits switch is on the Claude tab.</div>`;
+      return settingsSkeleton(grp);
+    },
+  },
+
+  // C — one quiet row per account, everything in the drill-in
+  C: {
+    claude(st) {
+      let h = header("Claude");
+      for (const a of ACCTS) {
+        h += `<div class="acct">${acctHead(a)}${acctGauges(a, "Session (5h)")}`;
+        const open = st.exp.has(a.id);
+        h += `<button class="cr-row${capped(a) ? " capped" : ""}" data-grants="${a.id}">
+          <span class="k">Credits</span>
+          <span class="v"><b>${left(a)}</b> <small>of ${usd(a.cap)}</small></span>
+          <span class="chev">${open ? "▲" : "▼"}</span>
+        </button>`;
+        if (open) {
+          h += `<div class="cr-panel">
+            <div class="gauge credit${capped(a) ? " warn" : ""}" style="margin-bottom:7px">
+              <div class="gauge-head">
+                <span class="l">This month <b>${left(a)}</b><span class="sub"> left</span></span>
+                <span class="r">renews ${a.renews}</span>
+              </div>
+              <div class="gauge-bar"><div class="gauge-fill" style="width:${Math.round((1 - a.spent / a.cap) * 100)}%"></div></div>
+            </div>
+            ${grantsList(a)}
+            <label class="cr-toggle">Use credits past plan limits
+              <input class="sw credit" type="checkbox" data-on="${a.id}" ${st.on[a.id] ? "checked" : ""} />
+            </label>
+          </div>`;
+        }
+        h += `</div>`;
+      }
+      h += claudeValueCard();
+      return h;
+    },
+    overview(st) {
+      let h = "";
+      for (const a of ACCTS) {
+        const pill = st.on[a.id]
+          ? ` <span class="pill" style="color:var(--credit);border-color:rgba(179,165,240,.35)">credits on</span>` : "";
+        h += ovAcct(a, pill) + acctGauges(a, "Session");
+      }
+      return h;
+    },
+    settings() {
+      return settingsSkeleton("",
+        swRow("Credit expiry", "When a grant nears its expiry date", true, "credit"));
+    },
+  },
+
+  // D — one-line summaries everywhere; details live on a dedicated Credits screen
+  D: {
+    claude(st) {
+      let h = header("Claude");
+      for (const a of ACCTS) {
+        h += `<div class="acct">${acctHead(a)}${acctGauges(a, "Session (5h)")}`;
+        h += `<button class="cr-row cr-link${capped(a) ? " capped" : ""}" data-credits>
+          <span class="k">Credits</span>
+          <span class="v"><b>${left(a)}</b> <small>of ${usd(a.cap)}</small></span>
+          <span class="go">›</span>
+        </button>`;
+        h += `</div>`;
+      }
+      h += claudeValueCard();
+      return h;
+    },
+    codex() {
+      let h = header("Codex", `${dot()}<span class="pill">Plus</span>`);
+      h += gauge("Session (5h)", CODEX.session, "resets 2h 41m · 7:18 pm");
+      h += gauge("Weekly", CODEX.weekly, "resets Fri 9:04 am");
+      h += `<button class="cr-row cr-link" data-credits>
+        <span class="k">Credits</span><span class="v">41.20</span><span class="go">›</span>
+      </button>`;
+      h += `<div class="grp-label">Reset credits</div>
+            <div class="sec-sub">No reset credits right now.</div>`;
+      h += valueCard(false, "$4.12", "1.2M", "$86.40", "24.8M");
+      return h;
+    },
+    overview(st) {
+      let h = "";
+      for (const a of ACCTS) h += ovAcct(a) + acctGauges(a, "Session");
+      const totalLeft = ACCTS.reduce((s, a) => s + (a.cap - a.spent), 0);
+      h += `<div class="ov-reset cr-link" style="color:var(--credit)" data-credits>Credits: ${usd(totalLeft)} left this month <span class="go">›</span></div>`;
+      return h;
+    },
+    settings() {
+      const grp = `<div class="grp-label">Usage credits</div><div class="grp">
+        <div class="grp-row cr-link" data-credits>
+          <span class="rlab">Manage credits<span class="rsub">Grants, expiries, and past-limits switches</span></span>
+          <span class="go">›</span>
+        </div></div>`;
+      return settingsSkeleton(grp);
+    },
+    credits(st) {
+      let h = `<div class="hd">
+        <button class="hd-back" data-back title="Back">‹</button>
+        <span class="hd-title">Credits</span>
+        <span class="hd-right"><span>4:37 pm</span></span>
+      </div>`;
+      h += `<div class="grp-label" style="margin-top:2px">Claude</div>`;
+      for (const a of ACCTS) {
+        const warn = capped(a);
+        h += `<div class="acct">${acctHead(a)}
+          <div class="gauge credit${warn ? " warn" : ""}">
+            <div class="gauge-head">
+              <span class="l">This month <b>${left(a)}</b><span class="sub"> of ${usd(a.cap)}</span></span>
+              <span class="r">renews ${a.renews}</span>
+            </div>
+            <div class="gauge-bar"><div class="gauge-fill" style="width:${Math.round((1 - a.spent / a.cap) * 100)}%"></div></div>
+          </div>
+          ${grantsList(a)}
+          <label class="cr-toggle" style="margin:-4px 0 2px;padding-top:6px">Use credits past plan limits
+            <input class="sw credit" type="checkbox" data-on="${a.id}" ${st.on[a.id] ? "checked" : ""} />
+          </label>
+        </div>`;
+      }
+      h += `<div class="grp-label">Codex</div>`;
+      h += `<div class="row"><span class="k">Balance</span><span class="v">41.20</span></div>`;
+      h += `<div class="grants">
+        <div class="grant"><b>$25.00</b><span>expires Aug 22</span></div>
+        <div class="grant soon"><b>$16.20</b><span>expires Jul 30</span></div>
+      </div>`;
+      h += `<div class="sec-sub">Codex spends credits automatically when a limit is hit.</div>`;
+      return h;
+    },
+  },
+
+  // E — variant D's navigation, but every meter is a bar with its text inside
+  E: {
+    claude(st) {
+      let h = header("Claude");
+      for (const a of ACCTS) {
+        h += `<div class="acct">${acctHead(a)}`;
+        h += bq("Session (5h)", a.session.left, a.session.r, "claude");
+        h += bq("Weekly", a.weekly.left, a.weekly.r, "claude");
+        h += bgauge(
+          `Credits <b>${left(a)}</b><span class="sub"> of ${usd(a.cap)}</span>`,
+          Math.round((1 - a.spent / a.cap) * 100),
+          `renews ${a.renews} <span class="go">›</span>`,
+          `credit link${capped(a) ? " warn" : ""}`, "data-credits");
+        h += `</div>`;
+      }
+      h += claudeValueCard();
+      return h;
+    },
+    codex() {
+      let h = header("Codex", `${dot()}<span class="pill">Plus</span>`);
+      h += bq("Session (5h)", CODEX.session, "resets 2h 41m · 7:18 pm");
+      h += bq("Weekly", CODEX.weekly, "resets Fri 9:04 am");
+      h += bgauge(`Credits <b>41.20</b>`, 0, `manage <span class="go">›</span>`, "credit link", "data-credits");
+      h += `<div class="grp-label">Reset credits</div>
+            <div class="sec-sub">No reset credits right now.</div>`;
+      h += valueCard(false, "$4.12", "1.2M", "$86.40", "24.8M");
+      return h;
+    },
+    ovCodex() {
+      return bq("Session", CODEX.session, "resets 2h 41m") + bq("Weekly", CODEX.weekly, "resets Fri 9:04 am");
+    },
+    overview(st) {
+      let h = "";
+      for (const a of ACCTS) {
+        h += ovAcct(a);
+        h += bq("Session", a.session.left, a.session.r.replace(/ ·.*$/, ""), "claude");
+        h += bq("Weekly", a.weekly.left, a.weekly.r, "claude");
+      }
+      const totalLeft = ACCTS.reduce((s, a) => s + (a.cap - a.spent), 0);
+      h += bgauge(
+        `Credits <b>${usd(totalLeft)}</b><span class="sub"> left this month</span>`,
+        Math.round((totalLeft / ACCTS.reduce((s, a) => s + a.cap, 0)) * 100),
+        `<span class="go">›</span>`, "credit link", "data-credits");
+      return h;
+    },
+    settings() {
+      return variants.D.settings();
+    },
+    credits(st) {
+      let h = `<div class="hd">
+        <button class="hd-back" data-back title="Back">‹</button>
+        <span class="hd-title">Credits</span>
+        <span class="hd-right"><span>4:37 pm</span></span>
+      </div>`;
+      h += `<div class="grp-label" style="margin-top:2px">Claude</div>`;
+      for (const a of ACCTS) {
+        h += `<div class="acct">${acctHead(a)}`;
+        h += bgauge(
+          `This month <b>${left(a)}</b><span class="sub"> of ${usd(a.cap)}</span>`,
+          Math.round((1 - a.spent / a.cap) * 100),
+          `renews ${a.renews}`, `credit${capped(a) ? " warn" : ""}`);
+        h += `${grantsList(a)}
+          <label class="cr-toggle" style="margin:-4px 0 2px;padding-top:6px">Use credits past plan limits
+            <input class="sw credit" type="checkbox" data-on="${a.id}" ${st.on[a.id] ? "checked" : ""} />
+          </label>
+        </div>`;
+      }
+      h += `<div class="grp-label">Codex</div>`;
+      h += `<div class="row"><span class="k">Balance</span><span class="v">41.20</span></div>`;
+      h += `<div class="grants">
+        <div class="grant"><b>$25.00</b><span>expires Aug 22</span></div>
+        <div class="grant soon"><b>$16.20</b><span>expires Jul 30</span></div>
+      </div>`;
+      h += `<div class="sec-sub">Codex spends credits automatically when a limit is hit.</div>`;
+      return h;
+    },
+  },
+
+  // F — variant E without the dot noise: no provider dots, health shown only when stale
+  F: {
+    claude(st) {
+      let h = header("Claude");
+      for (const a of ACCTS) {
+        h += `<div class="acct">${acctHeadF(a)}`;
+        h += bq("Session (5h)", a.session.left, a.session.r, "claude");
+        h += bq("Weekly", a.weekly.left, a.weekly.r, "claude");
+        h += bgauge(
+          `Credits <b>${left(a)}</b><span class="sub"> of ${usd(a.cap)}</span>`,
+          Math.round((1 - a.spent / a.cap) * 100),
+          `renews ${a.renews} <span class="go">›</span>`,
+          `credit link${capped(a) ? " warn" : ""}`, "data-credits");
+        h += `</div>`;
+      }
+      h += claudeValueCard(true);
+      return h;
+    },
+    codex() {
+      let h = header("Codex", `<span class="pill">Plus</span>`);
+      h += bq("Session (5h)", CODEX.session, "resets 2h 41m · 7:18 pm");
+      h += bq("Weekly", CODEX.weekly, "resets Fri 9:04 am");
+      h += bgauge(`Credits <b>41.20</b>`, 0, `manage <span class="go">›</span>`, "credit link", "data-credits");
+      h += `<div class="grp-label">Reset credits</div>
+            <div class="sec-sub">No reset credits right now.</div>`;
+      h += valueCard(false, "$4.12", "1.2M", "$86.40", "24.8M", true);
+      return h;
+    },
+    overviewFull(st) {
+      let h = header("Overview", `<span class="pill">$9.12 today</span>`);
+      h += `<div class="ov-card" data-goto="codex">
+        <div class="ov-head">
+          <div class="ov-name">Codex <span class="pill">Plus</span></div>
+          <span class="ov-cost">$4.12 today</span>
+        </div>
+        ${bq("Session", CODEX.session, "resets 2h 41m")}
+        ${bq("Weekly", CODEX.weekly, "resets Fri 9:04 am")}
+      </div>`;
+      h += `<div class="ov-card" data-goto="claude">
+        <div class="ov-head">
+          <div class="ov-name">Claude</div>
+          <span class="ov-cost">$5.00 today</span>
+        </div>`;
+      for (const a of ACCTS) {
+        h += ovAcctF(a);
+        h += bq("Session", a.session.left, a.session.r.replace(/ ·.*$/, ""), "claude");
+        h += bq("Weekly", a.weekly.left, a.weekly.r, "claude");
+      }
+      const totalLeft = ACCTS.reduce((s, a) => s + (a.cap - a.spent), 0);
+      h += bgauge(
+        `Credits <b>${usd(totalLeft)}</b><span class="sub"> left this month</span>`,
+        Math.round((totalLeft / ACCTS.reduce((s, a) => s + a.cap, 0)) * 100),
+        `<span class="go">›</span>`, "credit link", "data-credits");
+      h += `</div>`;
+      return h;
+    },
+    settings() {
+      let h = header("Settings", "", true);
+      h += `<div class="grp-label">Notifications</div><div class="grp">`;
+      h += swRow("Codex limits", "Near, hit, and reset", true, "");
+      h += swRow("Claude limits", "Near, hit, and reset", true, "claude");
+      h += `</div>`;
+      h += `<div class="grp-label">Usage credits</div><div class="grp">
+        <div class="grp-row cr-link" data-credits>
+          <span class="rlab">Manage credits<span class="rsub">Grants, expiries, and past-limits switches</span></span>
+          <span class="go">›</span>
+        </div></div>`;
+      h += `<div class="grp-label">Claude accounts</div><div class="grp">`;
+      for (const a of ACCTS)
+        h += `<div class="acct-row">
+          <span class="rlab"><span class="nm">${a.label}</span>${a.def ? ` <span class="pill">default</span>` : ""}
+          <span class="pth">~/.claude${a.def ? "" : "-work"}</span></span></div>`;
+      h += `</div>`;
+      h += `<div class="grp-label">Data sources</div><div class="grp">`;
+      h += `<div class="acct-row"><span class="rlab">Codex quota</span><span class="src-txt">Live API</span></div>`;
+      h += `<div class="acct-row"><span class="rlab">Work account</span><span class="src-txt stale">Cached · 12 min old</span></div>`;
+      h += `</div>`;
+      return h;
+    },
+    credits(st) {
+      let h = `<div class="hd">
+        <button class="hd-back" data-back title="Back">‹</button>
+        <span class="hd-title">Credits</span>
+        <span class="hd-right"><span>4:37 pm</span></span>
+      </div>`;
+      h += `<div class="grp-label" style="margin-top:2px">Claude</div>`;
+      for (const a of ACCTS) {
+        h += `<div class="acct">${acctHeadF(a)}`;
+        h += bgauge(
+          `This month <b>${left(a)}</b><span class="sub"> of ${usd(a.cap)}</span>`,
+          Math.round((1 - a.spent / a.cap) * 100),
+          `renews ${a.renews}`, `credit${capped(a) ? " warn" : ""}`);
+        h += `${grantsList(a)}
+          <label class="cr-toggle" style="margin:-4px 0 2px;padding-top:6px">Use credits past plan limits
+            <input class="sw credit" type="checkbox" data-on="${a.id}" ${st.on[a.id] ? "checked" : ""} />
+          </label>
+        </div>`;
+      }
+      h += `<div class="grp-label">Codex</div>`;
+      h += `<div class="row"><span class="k">Balance</span><span class="v">41.20</span></div>`;
+      h += `<div class="grants">
+        <div class="grant"><b>$25.00</b><span>expires Aug 22</span></div>
+        <div class="grant soon"><b>$16.20</b><span>expires Jul 30</span></div>
+      </div>`;
+      h += `<div class="sec-sub">Codex spends credits automatically when a limit is hit.</div>`;
+      return h;
+    },
+  },
+};
+
+// ---------- overview shared shell ----------
+function overviewTab(v, st) {
+  let h = header("Overview", `<span class="pill">$9.12 today</span>`);
+  h += `<div class="ov-card" data-goto="codex">
+    <div class="ov-head">
+      <div class="ov-name"><span class="ov-dot"></span>Codex ${dot()}<span class="pill">Plus</span></div>
+      <span class="ov-cost">$4.12 today</span>
+    </div>
+    ${variants[v].ovCodex ? variants[v].ovCodex() : gauge("Session", CODEX.session, "resets 2h 41m · 7:18 pm") + gauge("Weekly", CODEX.weekly, "resets Fri 9:04 am")}
+  </div>`;
+  h += `<div class="ov-card" data-goto="claude">
+    <div class="ov-head">
+      <div class="ov-name"><span class="ov-dot claude"></span>Claude</div>
+      <span class="ov-cost">$5.00 today</span>
+    </div>
+    ${variants[v].overview(st)}
+  </div>`;
+  return h;
+}
+
+// ---------- per-frame shell + wiring ----------
+function makeFrame(v) {
+  const root = document.getElementById("frame-" + v);
+  root.innerHTML = `<div class="panel">
+    <main class="content"></main>
+    <nav class="tabs">
+      <button class="tab active" data-tab="overview"><span class="ico">▦</span>Overview</button>
+      <button class="tab" data-tab="codex"><span class="ico">◍</span>Codex</button>
+      <button class="tab" data-tab="claude"><span class="ico">✳</span>Claude</button>
+      <button class="tab gear" data-tab="settings" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+          stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+      </button>
+    </nav>
+  </div>`;
+
+  const st = { tab: "overview", view: null, exp: new Set(["a1"]), on: { a1: true, a2: false } };
+  const content = root.querySelector(".content");
+  const tabs = root.querySelectorAll(".tab");
+
+  function render() {
+    tabs.forEach((t) => t.classList.toggle("active", t.dataset.tab === st.tab));
+    if (st.view === "credits" && variants[v].credits) content.innerHTML = variants[v].credits(st);
+    else if (st.tab === "codex") content.innerHTML = variants[v].codex ? variants[v].codex(st) : codexTab();
+    else if (st.tab === "claude") content.innerHTML = variants[v].claude(st);
+    else if (st.tab === "settings") content.innerHTML = variants[v].settings(st);
+    else content.innerHTML = variants[v].overviewFull ? variants[v].overviewFull(st) : overviewTab(v, st);
+
+    content.querySelectorAll("[data-goto]").forEach((el) =>
+      el.addEventListener("click", () => { st.tab = el.dataset.goto; render(); })
+    );
+    content.querySelectorAll("[data-credits]").forEach((el) =>
+      el.addEventListener("click", (e) => { e.stopPropagation(); st.view = "credits"; render(); })
+    );
+    content.querySelectorAll("[data-back]").forEach((el) =>
+      el.addEventListener("click", () => { st.view = null; render(); })
+    );
+    content.querySelectorAll("[data-grants]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (e.target.matches(".sw")) return; // the inline toggle isn't an expander
+        const id = el.dataset.grants;
+        st.exp.has(id) ? st.exp.delete(id) : st.exp.add(id);
+        render();
+      })
+    );
+    content.querySelectorAll("[data-on]").forEach((el) =>
+      el.addEventListener("change", () => { st.on[el.dataset.on] = el.checked; render(); })
+    );
+  }
+  tabs.forEach((t) => t.addEventListener("click", () => { st.tab = t.dataset.tab; st.view = null; render(); }));
+  if (v === "G") root.querySelector(".panel").classList.add("vivid");
+  render();
+  rerenders.push(render);
+}
+
+// G is F's markup with the vivid palette (applied via a class on the panel).
+variants.G = { ...variants.F };
+
+const rerenders = [];
+for (const v of ["A", "B", "C", "D", "E", "F", "G"]) makeFrame(v);
+
+// ---------- global limit sliders ----------
+document.querySelectorAll('.ctl input[type="range"]').forEach((s) => {
+  s.addEventListener("input", () => {
+    const val = parseFloat(s.value);
+    const [k, f] = s.dataset.bind.split(".");
+    if (k === "cx") CODEX[f] = val;
+    else {
+      const a = ACCTS.find((x) => x.id === k);
+      if (f === "spent") a.spent = val;
+      else a[f].left = val;
+    }
+    const out = document.querySelector(`[data-out="${s.dataset.bind}"]`);
+    if (out) out.textContent = f === "spent" ? usd(val) : val + "%";
+    rerenders.forEach((r) => r());
+  });
+});
+</script>
+</body>
+</html>
