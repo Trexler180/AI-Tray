@@ -8,9 +8,11 @@ mod live;
 mod models;
 mod pricing;
 mod resets;
+mod updates;
 mod util;
 
 use alerts::{AlertState, NotificationSettings};
+use updates::{UpdateSettings, UpdateSnapshot, UpdateState};
 use models::{ClaudeAccountUsage, Usage};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -293,6 +295,33 @@ fn remove_claude_directory(id: String) -> Result<(), String> {
     accounts::remove_dir(&id)
 }
 
+/// Current updater status, app version, and the two update toggles.
+#[tauri::command]
+fn get_update_state(app: tauri::AppHandle, state: tauri::State<'_, UpdateState>) -> UpdateSnapshot {
+    state.snapshot(app.package_info().version.to_string())
+}
+
+#[tauri::command]
+fn set_update_setting(
+    state: tauri::State<'_, UpdateState>,
+    key: String,
+    enabled: bool,
+) -> Result<UpdateSettings, String> {
+    state.set_flag(&key, enabled)
+}
+
+/// User-initiated check. Reports "up to date" explicitly, unlike the silent
+/// background poll.
+#[tauri::command]
+async fn check_for_updates_now(app: tauri::AppHandle) {
+    updates::check(&app, true).await;
+}
+
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    updates::install(&app).await
+}
+
 /// Clear only the derived history indexes. Source logs and credentials are
 /// untouched; the next refresh rebuilds both indexes from local history.
 #[tauri::command]
@@ -370,6 +399,7 @@ pub fn run() {
             None,
         ))
         .manage(AlertState::load())
+        .manage(UpdateState::load())
         .manage(HideGuard(Mutex::new(None)))
         .manage(Glass(AtomicBool::new(false)))
         .manage(Quitting(AtomicBool::new(false)))
@@ -384,9 +414,19 @@ pub fn run() {
             add_claude_directory,
             remove_claude_directory,
             consume_codex_reset,
-            clear_history_cache
+            clear_history_cache,
+            get_update_state,
+            set_update_setting,
+            check_for_updates_now,
+            install_update
         ])
         .setup(|app| {
+            // Registered here rather than in the builder chain because the
+            // updater is desktop-only and this keeps the cfg to one line.
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
+
             register_notification_aumid(
                 &app.config().identifier,
                 app.config()
@@ -407,10 +447,19 @@ pub fn run() {
             alerts::start_alert_ticker(handle.clone());
             alerts::refresh_for_alerts(handle);
 
-            // Right-click menu: manual refresh + quit.
+            updates::start_update_ticker(app.handle().clone());
+
+            // Right-click menu: manual refresh + update check + quit.
             let refresh = MenuItem::with_id(app, "refresh", "Refresh", true, None::<&str>)?;
+            let check_updates = MenuItem::with_id(
+                app,
+                "check_updates",
+                "Check for updates…",
+                true,
+                None::<&str>,
+            )?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&refresh, &quit])?;
+            let menu = Menu::with_items(app, &[&refresh, &check_updates, &quit])?;
 
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().cloned().unwrap())
@@ -426,6 +475,12 @@ pub fn run() {
                         if let Some(w) = app.get_webview_window("main") {
                             let _ = w.emit("refresh", ());
                         }
+                    }
+                    "check_updates" => {
+                        let handle = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            updates::check(&handle, true).await;
+                        });
                     }
                     _ => {}
                 })

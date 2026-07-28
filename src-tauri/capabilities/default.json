@@ -11,6 +11,7 @@
     "core:window:allow-set-position",
     "core:window:allow-start-dragging",
     "notification:default",
-    "opener:default"
+    "opener:default",
+    "updater:default"
   ]
 }

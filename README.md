@@ -135,6 +135,43 @@ cached-input accounting, dynamic scoped quotas, provenance fallback behavior,
 active and archived Codex history, event-date attribution, unchanged and
 append-only scan paths, and atomic cache replacement.
 
+## Updates
+
+The app checks GitHub Releases for a newer signed build about a minute after
+launch and every six hours after that, and tells you when one is found. It does
+not install anything on its own unless you ask it to. Both behaviors are toggles
+in **Settings → About**, and the tray right-click menu has a **Check for
+updates…** item for an immediate check.
+
+Updates are verified against a public key compiled into the app, so a release
+that wasn't signed with the matching private key is refused. That protects the
+integrity of the update itself; it is not a Microsoft code-signing certificate,
+so Windows SmartScreen still shows its "unrecognized app" prompt during install.
+
+### Cutting a release
+
+```powershell
+npm version minor        # bumps package.json, syncs Cargo.toml, commits, tags
+git push --follow-tags   # the tag triggers .github/workflows/release.yml
+```
+
+`package.json` is the single source of truth for the version:
+`tauri.conf.json` reads it via `"version": "../package.json"`, and
+`scripts/sync-version.mjs` keeps `src-tauri/Cargo.toml` in step.
+
+CI builds and signs on `windows-latest` and creates a **draft** release.
+Installed apps only see the update once that draft is published — the manual
+publish step is deliberate, because an auto-updating app otherwise distributes a
+broken build to every install with no way to recall it.
+
+Building signed artifacts locally needs the private key:
+
+```powershell
+$env:TAURI_SIGNING_PRIVATE_KEY_PATH = "$env:USERPROFILE\.tauri\ai-usage-tray.key"
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
+npm run tauri build
+```
+
 ## License
 
 MIT — see [`LICENSE`](LICENSE).

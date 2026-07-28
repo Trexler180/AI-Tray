@@ -635,6 +635,40 @@ body {
   background: var(--card);
 }
 
+/* ---- About (Settings → About) ---- */
+/* Compact inline sibling of .ghost-btn, which is a full-width block button. */
+.row-btn {
+  padding: 5px 10px;
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.row-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--claude-2);
+  background: var(--card);
+}
+.row-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+/* The version line is informational, so it shouldn't invite a click the way
+   the toggle rows do. */
+.grp-row.static-row {
+  cursor: default;
+}
+.grp-row.static-row:hover {
+  background: none;
+}
+
 /* ---- Diagnostics (Settings → Data sources) ---- */
 .diag-row {
   display: flex;

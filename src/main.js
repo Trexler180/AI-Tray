@@ -7,6 +7,8 @@ let notificationSettings = { codex: false, claude: false, codex_resets: false };
 // Whether the model-scoped weekly gauge (e.g. the Fable-only limit) is shown.
 let showModelWeekly = localStorage.getItem("showModelWeekly") !== "0";
 let notifyError = null; // provider whose toggle failed to save, if any
+let updateState = null; // updater status + version, pushed from Rust on change
+let updateError = null; // error from the last update toggle, if any
 let confirmingReset = null; // credit id awaiting the inline "Use reset" confirm
 let resetError = null; // error from the last consume attempt, if any
 let editingAccount = null; // account id whose Claude label is being renamed inline
@@ -617,6 +619,78 @@ function renderSettings() {
   html += diagRow("claude-history", "Claude history", cl.history_health, cl.estimate, true);
   html += `</div>`;
 
+  html += renderAbout();
+
+  return html;
+}
+
+// Settings → About: version, updater status, and the two update toggles.
+function renderAbout() {
+  if (!updateState) return "";
+  const status = updateState.status || { kind: "idle" };
+  const checkBtn = `<button class="row-btn" data-update-check>Check now</button>`;
+  let detail;
+  let action = "";
+
+  switch (status.kind) {
+    case "checking":
+      detail = "Checking…";
+      break;
+    case "up_to_date":
+      detail = "Up to date";
+      action = checkBtn;
+      break;
+    case "available":
+      detail = `Version ${esc(status.version)} available`;
+      action = `<button class="row-btn" data-update-install>Install and restart</button>`;
+      break;
+    case "downloading":
+      detail = `Downloading… ${status.percent}%`;
+      break;
+    case "installing":
+      detail = `Installing ${esc(status.version)}… the app will restart`;
+      break;
+    case "error":
+      detail = `Couldn't check for updates`;
+      action = checkBtn;
+      break;
+    default:
+      detail = updateState.last_checked_at
+        ? `Last checked ${esc(clockTime(updateState.last_checked_at))}`
+        : "Not checked yet";
+      action = checkBtn;
+  }
+
+  let html = `<div class="grp-label">About</div><div class="grp">`;
+  html += `<div class="grp-row static-row">
+      <span class="rlab">Version ${esc(updateState.current_version)}<span class="rsub">${esc(
+        detail
+      )}</span></span>
+      ${action}
+    </div>`;
+  html += settingRow(
+    "Check for updates",
+    "In the background, every few hours",
+    "data-update-toggle=\"check_automatically\"",
+    updateState.settings.check_automatically,
+    false
+  );
+  html += settingRow(
+    "Install automatically",
+    "Update and restart without asking",
+    "data-update-toggle=\"install_automatically\"",
+    updateState.settings.install_automatically,
+    false
+  );
+  html += `</div>`;
+
+  // The raw error is shown separately: it can be long, and the row above keeps
+  // a fixed height.
+  if (status.kind === "error")
+    html += `<div class="banner small">${esc(status.message)}</div>`;
+  if (updateError)
+    html += `<div class="banner small">Couldn't save the update setting — try again.</div>`;
+
   return html;
 }
 
@@ -651,6 +725,23 @@ function render() {
         localStorage.setItem("showModelWeekly", input.checked ? "1" : "0");
       } catch (_) {}
       render();
+    })
+  );
+  content.querySelectorAll("[data-update-toggle]").forEach((input) =>
+    input.addEventListener("change", () =>
+      setUpdateSetting(input.dataset.updateToggle, input.checked)
+    )
+  );
+  content.querySelectorAll("[data-update-check]").forEach((button) =>
+    button.addEventListener("click", () => {
+      invoke("check_for_updates_now").catch(() => {});
+    })
+  );
+  content.querySelectorAll("[data-update-install]").forEach((button) =>
+    button.addEventListener("click", () => {
+      button.disabled = true;
+      button.textContent = "Starting…";
+      invoke("install_update").catch(() => {});
     })
   );
   content.querySelectorAll("[data-health-toggle]").forEach((button) =>
@@ -851,6 +942,28 @@ async function loadNotificationSettings() {
   } catch (_) {}
 }
 
+async function loadUpdateState() {
+  try {
+    updateState = await invoke("get_update_state");
+    render();
+  } catch (_) {}
+}
+
+async function setUpdateSetting(key, enabled) {
+  const previous = updateState.settings;
+  updateState = { ...updateState, settings: { ...previous, [key]: enabled } };
+  updateError = null;
+  render();
+  try {
+    const settings = await invoke("set_update_setting", { key, enabled });
+    updateState = { ...updateState, settings };
+  } catch (_) {
+    updateState = { ...updateState, settings: previous };
+    updateError = key;
+  }
+  render();
+}
+
 async function setNotifyEnabled(provider, enabled) {
   const previous = { ...notificationSettings };
   notificationSettings = { ...notificationSettings, [provider]: enabled };
@@ -957,6 +1070,12 @@ document
   .forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
 
 listen("refresh", refresh);
+// Rust pushes the updater status on every transition, so the About section
+// tracks a background check without polling.
+listen("update-state", (event) => {
+  updateState = event.payload;
+  if (activeTab === "settings") render();
+});
 // Translucent panel only when the native acrylic backdrop is active,
 // otherwise the solid fallback background stays.
 invoke("glass_enabled")
@@ -969,4 +1088,5 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) refresh();
 });
 loadNotificationSettings();
+loadUpdateState();
 refresh();

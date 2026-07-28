@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "AI Usage Tray",
-  "version": "0.1.0",
+  "version": "../package.json",
   "identifier": "com.dev.aiusagetray",
   "build": {
     "frontendDist": "../dist",
@@ -33,12 +33,24 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY1MkY5NDQ3MDkxMUUwQTYKUldTbTRCRUpSNVF2OVlXU2l3ekExb0kyZHhYUEhTQ29wNXN6WkVmL0x4ejBFbW1iOHBnU3NRbmcK",
+      "endpoints": [
+        "https://github.com/Trexler180/AI-Tray/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

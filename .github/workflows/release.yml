@@ -1,0 +1,65 @@
+name: Release
+
+# Cutting a release is two steps on purpose:
+#   npm version minor && git push --follow-tags
+# builds and uploads a DRAFT release here, and the update only reaches installed
+# apps once you press Publish on it. That gap is the safety net: an auto-updating
+# app will happily distribute a broken build to every install, and a draft is the
+# last point at which that is cheap to stop.
+on:
+  push:
+    tags:
+      - "v*"
+  # Lets you re-run a build against an existing tag without re-tagging.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build (e.g. v0.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      - name: Verify before publishing
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the updater artifacts. Without these the build still succeeds
+          # but produces no .sig, and the updater rejects the release.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.event.inputs.tag || github.ref_name }}
+          releaseName: AI Usage Tray __VERSION__
+          releaseBody: |
+            Installed copies with automatic updates enabled will offer this
+            version. To install fresh, download the `.exe` setup file below.
+          releaseDraft: true
+          prerelease: false
+          # Generates latest.json and attaches it to the release. This is the
+          # file the app's configured endpoint resolves to.
+          uploadUpdaterJson: true
