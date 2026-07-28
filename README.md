@@ -134,3 +134,11 @@ The test suite includes sanitized provider-contract fixtures, pricing and
 cached-input accounting, dynamic scoped quotas, provenance fallback behavior,
 active and archived Codex history, event-date attribution, unchanged and
 append-only scan paths, and atomic cache replacement.
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
+
+The app reads provider credentials that already exist on your machine and sends
+them only to the providers' own endpoints. It has no telemetry and no backend of
+its own.
