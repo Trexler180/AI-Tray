@@ -13,6 +13,8 @@
   --claude: #f0a36a;
   --claude-2: #db7f4d;
   --danger: #ef6b6b;
+  --ok: #71cdb0;
+  --warn: #dfa05f;
   /* Matches the native DWM rounded-corner radius so the acrylic backdrop
      and the CSS panel clip on the same curve. */
   --radius: 8px;
@@ -68,6 +70,7 @@ body {
   justify-content: center;
   gap: 6px;
   padding: 5px 6px;
+  font: inherit;
   font-size: 12px;
   font-weight: 600;
   color: var(--muted);
@@ -85,6 +88,10 @@ body {
   color: var(--text);
   background: var(--card);
 }
+.tab:focus-visible {
+  outline: 2px solid var(--codex);
+  outline-offset: -2px;
+}
 .tab.active {
   color: #fff;
   background: rgba(45, 212, 191, 0.16);
@@ -92,15 +99,20 @@ body {
 .tab.active[data-tab="claude"] {
   background: rgba(240, 163, 106, 0.18);
 }
-.tab.active[data-tab="overview"] {
+.tab.active[data-tab="overview"],
+.tab.active[data-tab="settings"] {
   background: rgba(255, 255, 255, 0.1);
+}
+/* Icon-only, so the three named tabs keep their width. */
+.tab.gear {
+  flex: 0 0 40px;
 }
 
 /* ---- Content ---- */
 .content {
   flex: 1;
   overflow-y: auto;
-  padding: 10px 14px 4px;
+  padding: 10px 14px 10px;
 }
 .content::-webkit-scrollbar {
   width: 7px;
@@ -117,21 +129,101 @@ body {
   font-size: 13px;
 }
 
-/* ---- Section header ---- */
-.sec-head {
+/* ---- Panel header ----
+   Carries the title, source status, and the update time + refresh that used to
+   sit in a permanent footer bar. */
+.hd {
   display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  margin: 2px 0 8px;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
 }
-.sec-title {
+.hd-title {
   font-size: 15px;
   font-weight: 700;
   letter-spacing: 0.2px;
 }
+.hd-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 26px hit target with a hover chip; the spin lives on the inner svg so the
+   button's own transform stays free for the press state. */
+.hd-refresh {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  background: transparent;
+  border: none;
+  border-radius: 7px;
+  color: var(--muted);
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, transform 0.08s ease;
+}
+.hd-refresh:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.07);
+}
+.hd-refresh:active {
+  transform: scale(0.9);
+  transition-duration: 0s;
+}
+.hd-refresh:focus-visible {
+  outline: 2px solid var(--codex);
+  outline-offset: 1px;
+}
+.hd-refresh.busy {
+  color: var(--codex);
+  cursor: default;
+  background: transparent;
+}
+.hd-refresh.busy svg {
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hd-refresh.busy svg {
+    animation: none;
+  }
+}
+
+/* ---- Data-source status ----
+   Replaces the full-width health strips: green is live, amber is cached or
+   logs-only. The detail lives in Settings → Data sources. */
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--ok);
+  box-shadow: 0 0 5px rgba(113, 205, 176, 0.5);
+  cursor: help;
+}
+.status-dot.warn {
+  background: var(--warn);
+  box-shadow: 0 0 5px rgba(223, 160, 95, 0.5);
+}
+
 .sec-sub {
   font-size: 11.5px;
   color: var(--faint);
+  margin: 4px 0 2px;
 }
 .pill {
   font-size: 11px;
@@ -140,20 +232,9 @@ body {
   padding: 2px 8px;
   border: 1px solid var(--border);
   border-radius: 999px;
+  flex: 0 0 auto;
 }
 
-.block-label {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text);
-  margin: 11px 0 6px;
-}
-
-.value-label {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
 .info-tip {
   display: inline-grid;
   place-items: center;
@@ -171,97 +252,6 @@ body {
 .info-tip:focus-visible {
   outline: 2px solid var(--codex);
   outline-offset: 2px;
-}
-.value-detail {
-  color: var(--faint);
-  font-weight: 500;
-  letter-spacing: 0;
-  text-transform: none;
-}
-.confidence {
-  margin-left: auto;
-  padding: 2px 5px;
-  border: 1px solid rgba(239, 107, 107, 0.35);
-  border-radius: 999px;
-  color: #ef8a8a;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-.confidence.high {
-  border-color: rgba(91, 198, 164, 0.32);
-  color: #71cdb0;
-}
-.confidence.medium {
-  border-color: rgba(217, 138, 58, 0.35);
-  color: #dfa05f;
-}
-
-.health {
-  margin: 8px 0;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.018);
-}
-.health-summary {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  padding: 7px 9px;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 11px;
-  text-align: left;
-  cursor: pointer;
-}
-.health-dot {
-  width: 6px;
-  height: 6px;
-  margin-right: 7px;
-  border-radius: 50%;
-  background: #71cdb0;
-  box-shadow: 0 0 5px rgba(113, 205, 176, 0.45);
-}
-.health.warn .health-dot {
-  background: #dfa05f;
-  box-shadow: 0 0 5px rgba(223, 160, 95, 0.45);
-}
-.health-chevron {
-  margin-left: auto;
-  transition: transform 0.15s ease;
-}
-.health-summary[aria-expanded="true"] .health-chevron {
-  transform: rotate(180deg);
-}
-.health-detail {
-  padding: 1px 9px 8px 22px;
-  color: var(--faint);
-  font-size: 10px;
-}
-.health-detail > div {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 4px 0;
-}
-.health-detail strong {
-  color: var(--muted);
-  font-weight: 500;
-  text-align: right;
-}
-.health-copy {
-  margin-top: 5px;
-  padding: 4px 7px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: rgba(255, 255, 255, 0.025);
-  color: var(--muted);
-  font: inherit;
-  font-size: 10px;
-  cursor: pointer;
 }
 
 /* ---- Gauge ----
@@ -327,27 +317,16 @@ body {
 }
 
 /* ---- Claude account block ---- */
-.acct {
-  margin-bottom: 4px;
-}
 .acct + .acct {
   border-top: 1px solid var(--border);
-  margin-top: 10px;
-  padding-top: 4px;
+  margin-top: 12px;
+  padding-top: 12px;
 }
 .acct-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin: 7px 0 8px;
-  min-height: 24px;
-}
-.acct-name {
-  display: flex;
-  align-items: center;
   gap: 7px;
-  min-width: 0;
+  margin: 0 0 8px;
   font-size: 13px;
   font-weight: 700;
 }
@@ -355,13 +334,226 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  cursor: text;
+  min-width: 0;
 }
-.acct-label:hover {
-  text-decoration: underline dotted;
-  text-underline-offset: 2px;
+
+/* ---- Rows / stats ---- */
+.row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 2px 0;
+  font-size: 13px;
 }
-.acct-name .pill {
+.row .k {
+  color: var(--muted);
+}
+.row .v {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ---- Merged value + history card ----
+   The old block label, cost card, chart and caption in one container. */
+.stat-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px 12px 8px;
+  margin-top: 12px;
+}
+.stat-card-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+  font-weight: 600;
+  margin-bottom: 7px;
+}
+.stat-card-head .status-dot {
+  margin-left: auto;
+}
+.stat-pair {
+  display: flex;
+  gap: 14px;
+}
+.stat {
+  flex: 1;
+  min-width: 0;
+}
+.stat .stat-lab {
+  font-size: 11px;
+  color: var(--muted);
+}
+.stat .val {
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
+.stat .val small {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--faint);
+}
+
+/* ---- Bar chart ---- */
+.chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 32px;
+  margin: 9px 0 0;
+}
+.chart .bar {
+  flex: 1;
+  min-width: 4px;
+  background: var(--codex);
+  border-radius: 2px 2px 0 0;
+  opacity: 0.85;
+  transition: height 0.3s;
+}
+.chart.claude .bar {
+  background: var(--claude);
+}
+.chart .bar:hover {
+  opacity: 1;
+}
+.chart .bar.empty {
+  background: var(--track);
+  opacity: 1;
+}
+
+/* ---- Settings groups ---- */
+.grp-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin: 14px 0 6px;
+}
+.grp {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.018);
+  overflow: hidden;
+}
+.grp-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 11px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.grp-row:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+.grp-row + .grp-row,
+.acct-row + .acct-row,
+.grp-row + .acct-row,
+.acct-row + .grp-row,
+.diag + .diag {
+  border-top: 1px solid var(--border);
+}
+.rlab {
+  min-width: 0;
+}
+.rsub {
+  display: block;
+  font-size: 10.5px;
+  color: var(--faint);
+  margin-top: 1px;
+}
+
+/* ---- Toggle ---- */
+.sw {
+  appearance: none;
+  position: relative;
+  width: 32px;
+  height: 18px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.075);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  outline: none;
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+.sw::before {
+  content: "";
+  position: absolute;
+  top: 2.5px;
+  left: 2.5px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #c8ced8;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  transition: transform 0.18s ease, background 0.18s ease;
+}
+.sw:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.105);
+}
+.sw:focus-visible {
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.35),
+    0 0 0 3px rgba(45, 212, 191, 0.18);
+}
+.sw:checked {
+  border-color: rgba(45, 212, 191, 0.65);
+  background: linear-gradient(90deg, var(--codex-2), var(--codex));
+}
+.sw:checked::before {
+  transform: translateX(14px);
+  background: #eefdfb;
+}
+.sw.claude:focus-visible {
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.35),
+    0 0 0 3px rgba(240, 163, 106, 0.2);
+}
+.sw.claude:checked {
+  border-color: rgba(240, 163, 106, 0.66);
+  background: linear-gradient(90deg, var(--claude-2), var(--claude));
+}
+
+/* ---- Account rows (Settings) ---- */
+.acct-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  font-size: 12.5px;
+}
+.acct-row .nm {
+  font-weight: 600;
+}
+.acct-row .pill {
+  font-size: 10px;
+  padding: 1px 6px;
+}
+.acct-row .pth {
+  display: block;
+  font-size: 10px;
+  color: var(--faint);
+  margin-top: 1px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+.acct-row .acts {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
   flex: 0 0 auto;
 }
 .acct-actions {
@@ -379,6 +571,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 7px;
   color: var(--muted);
+  font: inherit;
   font-size: 12px;
   line-height: 1;
   cursor: pointer;
@@ -392,6 +585,10 @@ body {
 .acct-btn.save:hover {
   color: var(--claude);
   border-color: var(--claude-2);
+}
+.acct-btn:focus-visible {
+  outline: 2px solid var(--codex);
+  outline-offset: 1px;
 }
 .acct-input {
   flex: 1 1 auto;
@@ -412,26 +609,14 @@ body {
   border-color: var(--claude-2);
   box-shadow: 0 0 0 3px rgba(240, 163, 106, 0.16);
 }
-.banner.small {
-  padding: 7px 10px;
-  font-size: 11.5px;
-  margin-bottom: 11px;
-}
-.acct-path {
-  margin: -7px 0 9px 14px;
-  font-size: 10.5px;
-  color: var(--faint);
-  word-break: break-all;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
 .add-folder {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 12px 0 0;
+  margin: 8px 0 0;
 }
-.add-folder-btn {
-  margin: 12px 0 2px;
+.ghost-btn {
+  margin-top: 8px;
   padding: 6px 10px;
   width: 100%;
   background: transparent;
@@ -444,180 +629,82 @@ body {
   cursor: pointer;
   transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
-.add-folder-btn:hover {
+.ghost-btn:hover {
   color: var(--text);
   border-color: var(--claude-2);
   background: var(--card);
 }
-.ov-acct {
+
+/* ---- Diagnostics (Settings → Data sources) ---- */
+.diag-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin: 7px 0 5px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--muted);
-}
-.ov-acct .pill {
-  font-size: 10px;
-  padding: 1px 6px;
-}
-.ov-acct .ov-dot {
-  width: 6px;
-  height: 6px;
-}
-
-/* ---- Rows / stats ---- */
-.divider {
-  height: 1px;
-  background: var(--border);
-  margin: 10px 0;
-}
-.row {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  padding: 2px 0;
-  font-size: 13px;
-}
-.row .k {
-  color: var(--muted);
-}
-.row .v {
+  gap: 8px;
+  width: 100%;
+  padding: 8px 11px;
+  border: 0;
+  background: transparent;
   color: var(--text);
-  font-weight: 600;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
 }
-.row .v.big {
-  font-size: 15px;
+.diag-row:hover {
+  background: rgba(255, 255, 255, 0.025);
 }
-
-.notify-row {
+.diag-name {
+  flex: 0 0 auto;
+}
+.diag-src {
+  color: var(--faint);
+  font-size: 10.5px;
+  margin-left: auto;
+  text-align: right;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diag-chevron {
+  flex: 0 0 auto;
+  color: var(--faint);
+  transition: transform 0.15s ease;
+}
+.diag-row[aria-expanded="true"] .diag-chevron {
+  transform: rotate(180deg);
+}
+.health-detail {
+  padding: 1px 11px 8px 25px;
+  color: var(--faint);
+  font-size: 10px;
+}
+.health-detail > div {
   display: flex;
-  align-items: center;
   justify-content: space-between;
   gap: 12px;
-  min-height: 30px;
-  padding: 5px 0 9px;
-  margin-bottom: 8px;
-  border-bottom: 1px solid var(--border);
+  margin: 4px 0;
+}
+.health-detail strong {
   color: var(--muted);
-  font-size: 12.5px;
-  line-height: 1.3;
-  cursor: pointer;
-  transition: color 0.15s;
+  font-weight: 500;
+  text-align: right;
 }
-.notify-row:hover {
-  color: var(--text);
-}
-.notify-check {
-  appearance: none;
-  position: relative;
-  width: 36px;
-  height: 20px;
-  flex: 0 0 auto;
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.075);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
-  cursor: pointer;
-  outline: none;
-  transition:
-    background 0.18s ease,
-    border-color 0.18s ease,
-    box-shadow 0.18s ease;
-}
-.notify-check::before {
-  content: "";
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: #c8ced8;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
-  transition:
-    transform 0.18s ease,
-    background 0.18s ease;
-}
-.notify-check:hover {
-  border-color: rgba(255, 255, 255, 0.22);
-  background: rgba(255, 255, 255, 0.105);
-}
-.notify-check:focus-visible {
-  box-shadow:
-    inset 0 1px 2px rgba(0, 0, 0, 0.35),
-    0 0 0 3px rgba(45, 212, 191, 0.18);
-}
-.notify-check:checked {
-  border-color: rgba(45, 212, 191, 0.65);
-  background: linear-gradient(90deg, var(--codex-2), var(--codex));
-  box-shadow:
-    inset 0 1px 2px rgba(0, 0, 0, 0.18),
-    0 0 14px rgba(45, 212, 191, 0.14);
-}
-.notify-check:checked::before {
-  transform: translateX(16px);
-  background: #eefdfb;
-}
-.notify-row.claude .notify-check:focus-visible {
-  box-shadow:
-    inset 0 1px 2px rgba(0, 0, 0, 0.35),
-    0 0 0 3px rgba(240, 163, 106, 0.2);
-}
-.notify-row.claude .notify-check:checked {
-  border-color: rgba(240, 163, 106, 0.66);
-  background: linear-gradient(90deg, var(--claude-2), var(--claude));
-  box-shadow:
-    inset 0 1px 2px rgba(0, 0, 0, 0.18),
-    0 0 14px rgba(240, 163, 106, 0.15);
-}
-
-/* ---- Cost card ---- */
-.cost {
-  background: var(--card);
+.health-copy {
+  margin: 5px 6px 0 0;
+  padding: 4px 7px;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 9px 12px;
-  margin-top: 4px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
 }
-.cost .row + .row {
-  border-top: 1px solid var(--border);
-  margin-top: 5px;
-  padding-top: 7px;
-}
-
-/* ---- Bar chart ---- */
-.chart {
-  display: flex;
-  align-items: flex-end;
-  gap: 3px;
-  height: 44px;
-  margin: 10px 0 4px;
-}
-.chart .bar {
-  flex: 1;
-  min-width: 4px;
-  background: var(--codex);
-  border-radius: 2px 2px 0 0;
-  opacity: 0.85;
-  transition: height 0.3s;
-}
-.chart.claude .bar {
-  background: var(--claude);
-}
-.chart .bar:hover {
-  opacity: 1;
-}
-.chart .bar.empty {
-  background: var(--track);
-  opacity: 1;
-}
-.chart-cap {
-  font-size: 11px;
-  color: var(--faint);
-  text-align: center;
-  margin-bottom: 6px;
+.health-copy:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
 }
 
 /* ---- Banner (limit hit) ---- */
@@ -630,6 +717,11 @@ body {
   font-size: 12px;
   margin-bottom: 10px;
   line-height: 1.4;
+}
+.banner.small {
+  padding: 7px 10px;
+  font-size: 11.5px;
+  margin: 8px 0 0;
 }
 
 .empty-state {
@@ -656,6 +748,9 @@ body {
 .ov-card:active {
   transform: scale(0.99);
 }
+.ov-card .gauge:last-child {
+  margin-bottom: 0;
+}
 .ov-head {
   display: flex;
   justify-content: space-between;
@@ -668,12 +763,14 @@ body {
   display: flex;
   align-items: center;
   gap: 7px;
+  min-width: 0;
 }
 .ov-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--codex);
+  flex: 0 0 auto;
 }
 .ov-dot.claude {
   background: var(--claude);
@@ -681,6 +778,7 @@ body {
 .ov-cost {
   font-size: 12.5px;
   color: var(--muted);
+  flex: 0 0 auto;
 }
 .ov-reset {
   margin-top: 7px;
@@ -688,17 +786,25 @@ body {
   font-weight: 600;
   color: var(--codex);
 }
-
-/* ---- Reset credits ---- */
-.block-label.reset-block {
+.ov-acct {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  margin: 7px 0 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
 }
-.block-label.reset-block .pill {
-  color: var(--codex);
-  border-color: rgba(45, 212, 191, 0.4);
+.ov-acct .pill {
+  font-size: 10px;
+  padding: 1px 6px;
 }
+.ov-acct .ov-dot {
+  width: 6px;
+  height: 6px;
+}
+
+/* ---- Reset credits ---- */
 .reset-card {
   display: flex;
   align-items: center;
@@ -763,35 +869,4 @@ body {
 .reset-confirm .acct-btn.save:hover {
   color: var(--codex);
   border-color: var(--codex-2);
-}
-
-/* ---- Footer ---- */
-.foot {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 6px 12px;
-  border-top: 1px solid var(--border);
-  font-size: 11px;
-  color: var(--faint);
-}
-.refresh {
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  font-size: 15px;
-  cursor: pointer;
-  line-height: 1;
-  transition: transform 0.3s, color 0.15s;
-}
-.refresh:hover {
-  color: var(--text);
-}
-.refresh.spin {
-  animation: spin 0.6s linear;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }

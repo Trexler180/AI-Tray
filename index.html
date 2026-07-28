@@ -12,15 +12,17 @@
         <div class="loading">Loading usage…</div>
       </main>
 
-      <footer class="foot">
-        <span id="updated" class="updated">—</span>
-        <button id="refreshBtn" class="refresh" title="Refresh">⟳</button>
-      </footer>
-
       <nav class="tabs" id="tabs">
         <button class="tab active" data-tab="overview"><span class="ico">▦</span>Overview</button>
         <button class="tab" data-tab="codex"><span class="ico">◍</span>Codex</button>
         <button class="tab" data-tab="claude"><span class="ico">✳</span>Claude</button>
+        <button class="tab gear" data-tab="settings" title="Settings" aria-label="Settings">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
       </nav>
     </div>
     <script type="module" src="/src/main.js"></script>

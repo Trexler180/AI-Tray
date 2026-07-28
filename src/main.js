@@ -16,7 +16,7 @@ let addingFolder = false; // whether the "add Claude folder" input is open
 let addFolderDraft = ""; // in-progress folder path, kept across background re-renders
 let addFolderError = null; // error from the last add attempt, if any
 let addFolderFocusPending = false; // focus the add-folder input once when opened
-const expandedHealth = new Set(); // inline data-health rows currently expanded
+const expandedHealth = new Set(); // diagnostic rows currently expanded (Settings)
 
 // ---------- formatting helpers ----------
 const usd = (n) => "$" + (Number.isFinite(n) ? n : 0).toFixed(2);
@@ -34,27 +34,68 @@ const esc = (s) =>
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]
   );
 
+// Wall-clock time in the machine's own 12/24-hour convention. `hour: "numeric"`
+// rather than "2-digit" so it reads 4:42 pm, never 04:42 pm.
+function clockTime(unix) {
+  return new Date(unix * 1000)
+    .toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+    .toLowerCase();
+}
+
+// "resets 2h 10m · 12:52 pm". Beyond a day the bare clock time is useless on
+// its own, so it picks up a weekday; past a week a weekday would be ambiguous,
+// so it takes a date instead.
+function resetText(g) {
+  if (!g) return "";
+  const relative = g.resets_in ? `resets ${g.resets_in}` : "";
+  if (typeof g.resets_at !== "number") return esc(relative);
+  const when = new Date(g.resets_at * 1000);
+  const away = g.resets_at * 1000 - Date.now();
+  let absolute = clockTime(g.resets_at);
+  if (away >= 24 * 3600 * 1000) {
+    const day =
+      away >= 6.5 * 24 * 3600 * 1000
+        ? when.toLocaleDateString([], { month: "short", day: "numeric" })
+        : when.toLocaleDateString([], { weekday: "short" });
+    absolute = `${day} ${absolute}`;
+  }
+  return esc(relative ? `${relative} · ${absolute}` : `resets ${absolute}`);
+}
+
+// ---------- icons ----------
+// Drawn rather than typed: the ⟳ / ↻ font glyphs render as flattened ellipses
+// and, because their ink sits high in the line box, wobble when rotated.
+function refreshIcon(px = 14, stroke = 1.9) {
+  return `<svg viewBox="0 0 24 24" width="${px}" height="${px}" fill="none"
+    stroke="currentColor" stroke-width="${stroke}" stroke-linecap="round"
+    stroke-linejoin="round" aria-hidden="true">
+    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+    <polyline points="23 4 23 10 17 10" />
+  </svg>`;
+}
+
 // ---------- gauge ----------
 // usedPercent 0..100; we display the remaining "left", and the bar drains to
 // match it. The label row carries the headline number so the whole meter is
 // two lines; the exact used figure lives in the tooltip.
-function gauge(label, usedPercent, resetsIn, opts = {}) {
-  usedPercent = Math.min(100, Math.max(0, Number(usedPercent) || 0));
+function gauge(label, g, opts = {}) {
+  if (!g) return "";
+  const usedPercent = Math.min(100, Math.max(0, Number(g.used_percent) || 0));
   const left = (100 - usedPercent).toFixed(0);
   const warn = usedPercent >= 80;
   const cls = ["gauge"];
   if (opts.claude) cls.push("claude");
   if (warn) cls.push("warn");
   const fill = Math.min(100, Math.max(2, usedPercent));
-  const resetTxt = resetsIn ? `↻ ${esc(resetsIn)}` : "";
+  const resets = resetText(g);
   const tip = `${usedPercent.toFixed(0)}% used · ${left}% left${
-    resetsIn ? ` · resets in ${esc(resetsIn)}` : ""
+    g.resets_in ? ` · resets in ${esc(g.resets_in)}` : ""
   }`;
   return `
     <div class="${cls.join(" ")}" title="${tip}">
       <div class="gauge-head">
         <span class="l">${esc(label)} <b>${left}%</b><span class="sub"> left</span></span>
-        <span class="r">${resetTxt}</span>
+        <span class="r">${resets}</span>
       </div>
       <div class="gauge-bar"><div class="gauge-fill" style="width:${100 - fill}%"></div></div>
     </div>`;
@@ -73,40 +114,10 @@ function chart(daily, claude) {
       return `<div class="${cls}" style="height:${Math.max(4, h)}%" title="${title}"></div>`;
     })
     .join("");
-  return `<div class="chart ${claude ? "claude" : ""}">${bars}</div>
-          <div class="chart-cap">Last ${days.length} days</div>`;
+  return `<div class="chart ${claude ? "claude" : ""}" title="Last ${days.length} days">${bars}</div>`;
 }
 
-function costCard(today, todayTok, m30, tok30) {
-  return `
-    <div class="cost">
-      <div class="row"><span class="k">Today</span>
-        <span class="v big">${usd(today)} <span class="sub" style="color:var(--faint);font-weight:400">· ${tokens(todayTok)}</span></span></div>
-      <div class="row"><span class="k">Last 30 days</span>
-        <span class="v">${usd(m30)} <span class="sub" style="color:var(--faint);font-weight:400">· ${tokens(tok30)}</span></span></div>
-    </div>`;
-}
-
-function equivalentValueLabel(detail, estimate) {
-  const confidence = estimate?.confidence || "low";
-  const reviewed = estimate?.pricing_reviewed_at
-    ? ` Pricing reviewed ${estimate.pricing_reviewed_at}.`
-    : "";
-  const unknown = (estimate?.unknown_models || []).length
-    ? ` Unknown models using fallback pricing: ${estimate.unknown_models.join(", ")}.`
-    : "";
-  const stale = estimate?.pricing_stale ? " Pricing may be stale." : "";
-  const explanation =
-    `Not your subscription bill. Estimated from local token logs using API list prices.${reviewed}${unknown}${stale}`;
-  const badgeClass = confidence === "high" && !estimate?.pricing_stale ? "high" : confidence;
-  return `<div class="block-label value-label">API-equivalent usage value
-    <span class="info-tip" tabindex="0" role="img"
-      aria-label="${esc(explanation)}" title="${esc(explanation)}">i</span>
-    ${detail ? `<span class="value-detail">${esc(detail)}</span>` : ""}
-    <span class="confidence ${esc(badgeClass)}" title="${esc(explanation)}">${esc(confidence)} confidence</span>
-  </div>`;
-}
-
+// ---------- data-source status ----------
 function ageText(seconds) {
   seconds = Math.max(0, Number(seconds) || 0);
   if (seconds < 60) return `${Math.round(seconds)} sec`;
@@ -124,51 +135,72 @@ function healthTitle(health) {
   return "Data unavailable";
 }
 
-function healthRow(key, health, estimate = null) {
-  if (!health) return "";
-  const expanded = expandedHealth.has(key);
-  const error = health.error_message
-    ? `<div><span>Last error</span><strong>${esc(health.error_message)}</strong></div>`
-    : "";
-  const fetched = health.fetched_at
-    ? `<div><span>Last successful update</span><strong>${esc(new Date(health.fetched_at * 1000).toLocaleTimeString())}</strong></div>`
-    : "";
-  const attempted = health.attempted_at
-    ? `<div><span>Last attempt</span><strong>${esc(new Date(health.attempted_at * 1000).toLocaleTimeString())}</strong></div>`
-    : "";
-  const files = health.files_scanned || health.files_cached || health.files_skipped
-    ? `<div><span>Files</span><strong>${health.files_scanned || 0} scanned · ${health.files_cached || 0} cached · ${health.files_skipped || 0} skipped</strong></div>`
-    : "";
-  const pricing = estimate?.pricing_reviewed_at
-    ? `<div><span>Pricing catalog</span><strong>${esc(estimate.catalog_version)} · reviewed ${esc(estimate.pricing_reviewed_at)}</strong></div>`
-    : "";
-  const diagnostic = esc(JSON.stringify({ health, estimate }, null, 2));
-  const clearCache = key.endsWith("history")
-    ? `<button class="health-copy" data-history-cache-clear>Clear scan cache</button>`
-    : "";
-  const warning = health.source === "memory_cache" || health.source === "unavailable";
-  return `<div class="health ${warning ? "warn" : ""}">
-    <button class="health-summary" data-health-toggle="${esc(key)}" aria-expanded="${expanded}">
-      <span class="health-dot"></span><span>${esc(healthTitle(health))}</span><span class="health-chevron">⌄</span>
-    </button>
-    ${expanded ? `<div class="health-detail">${fetched}${attempted}${error}${files}${pricing}
-      <button class="health-copy" data-health-copy="${diagnostic}">Copy diagnostics</button>${clearCache}
-    </div>` : ""}
-  </div>`;
+// Local logs are the expected source for cost history but a fallback for live
+// quotas, so the caller says which reading counts as healthy.
+function healthOk(health, localIsNormal = false) {
+  if (!health) return false;
+  if (health.source === "live_api") return true;
+  if (health.source === "local_logs") return localIsNormal;
+  return false;
 }
 
-function notifyToggle(provider, label = "Notify when limits near, hit, or reset") {
-  const enabled = !!notificationSettings?.[provider];
-  const claude = provider === "claude";
-  const err =
-    notifyError === provider
-      ? `<div class="banner">Couldn't save the notification setting — try again.</div>`
-      : "";
-  return `
-    <label class="notify-row ${claude ? "claude" : ""}">
-      <span>${esc(label)}</span>
-      <input class="notify-check" type="checkbox" data-notify-provider="${provider}" ${enabled ? "checked" : ""} />
-    </label>${err}`;
+// The full-width health strips became a single dot beside the title; the
+// expandable diagnostics moved to Settings → Data sources.
+function statusDot(health, opts = {}) {
+  const ok = healthOk(health, opts.localIsNormal) && !opts.forceWarn;
+  const detail = opts.extra ? ` · ${opts.extra}` : "";
+  return `<span class="status-dot ${ok ? "" : "warn"}"
+    title="${esc(healthTitle(health) + detail)}"></span>`;
+}
+
+// ---------- panel header (absorbs the old footer) ----------
+function header(title, extras = "", opts = {}) {
+  const stamp = data?.generated_at ? clockTime(data.generated_at) : "—";
+  const busy = spinning() ? " busy" : "";
+  const right = opts.hideRefresh
+    ? `<span class="hd-right"><span>${esc(opts.rightText || "")}</span></span>`
+    : `<span class="hd-right"><span title="Last updated">${esc(stamp)}</span>
+        <button class="hd-refresh${busy}" id="refreshBtn" title="Refresh"
+          aria-label="Refresh">${refreshIcon()}</button></span>`;
+  return `<div class="hd"><span class="hd-title">${esc(title)}</span>${extras}${right}</div>`;
+}
+
+// ---------- merged value + history card ----------
+function valueCard(estimate, health, today, todayTok, m30, tok30, daily, claude) {
+  const confidence = estimate?.confidence || "low";
+  const shaky = confidence !== "high" || !!estimate?.pricing_stale;
+  const reviewed = estimate?.pricing_reviewed_at
+    ? ` Pricing reviewed ${estimate.pricing_reviewed_at}.`
+    : "";
+  const unknown = (estimate?.unknown_models || []).length
+    ? ` Unknown models using fallback pricing: ${estimate.unknown_models.join(", ")}.`
+    : "";
+  const stale = estimate?.pricing_stale ? " Pricing may be stale." : "";
+  const explanation =
+    `Not your subscription bill. Estimated from local token logs using API list prices.${reviewed}${unknown}${stale}`;
+  return `<div class="stat-card">
+    <div class="stat-card-head">
+      <span>API-equivalent value</span>
+      <span class="info-tip" tabindex="0" role="img"
+        aria-label="${esc(explanation)}" title="${esc(explanation)}">i</span>
+      ${statusDot(health, {
+        localIsNormal: true,
+        forceWarn: shaky,
+        extra: `${confidence} confidence`,
+      })}
+    </div>
+    <div class="stat-pair">
+      <div class="stat">
+        <div class="stat-lab">Today</div>
+        <div class="val">${usd(today)} <small>${tokens(todayTok)}</small></div>
+      </div>
+      <div class="stat">
+        <div class="stat-lab">Last 30 days</div>
+        <div class="val">${usd(m30)} <small>${tokens(tok30)}</small></div>
+      </div>
+    </div>
+    ${chart(daily, claude)}
+  </div>`;
 }
 
 // Local calendar date like "Jul 18, 2026" from a unix-seconds timestamp.
@@ -186,17 +218,18 @@ function availableResets(c) {
   return ((c.resets && c.resets.credits) || []).filter((x) => x.status === "available");
 }
 
-// One reset-credit card: title, granted/expiry dates, and a Use action that
-// expands into an inline two-step confirm (no native dialog). Tinted amber when
-// it expires within a day.
+// One reset-credit card: title, expiry, and a Use action that expands into an
+// inline two-step confirm (no native dialog). Tinted amber when it expires
+// within a day.
 function resetCard(cr) {
   const soon =
     typeof cr.expires_at === "number" && cr.expires_at * 1000 - Date.now() <= 24 * 3600 * 1000;
   const title = cr.title || "Free rate-limit reset";
-  const granted = cr.granted_at ? `Granted ${fmtDate(cr.granted_at)}` : "";
   const expires = cr.expires_at
     ? `Expires ${fmtDate(cr.expires_at)}${cr.expires_in ? ` · ${esc(cr.expires_in)} left` : ""}`
-    : "";
+    : cr.granted_at
+      ? `Granted ${fmtDate(cr.granted_at)}`
+      : "";
   const action =
     confirmingReset === cr.id
       ? `<div class="reset-confirm">
@@ -208,22 +241,20 @@ function resetCard(cr) {
   return `<div class="reset-card ${soon ? "soon" : ""}">
     <div class="reset-info">
       <div class="reset-title">${esc(title)}</div>
-      ${granted ? `<div class="reset-meta">${esc(granted)}</div>` : ""}
       ${expires ? `<div class="reset-meta ${soon ? "soon" : ""}">${expires}</div>` : ""}
     </div>
     ${action}
   </div>`;
 }
 
-// The "Reset credits" section for the Codex tab: a notify toggle plus a card
-// per available credit (or a quiet empty line).
+// The "Reset credits" section for the Codex tab. The notify toggle that used to
+// live here is in Settings → Notifications.
 function resetSection(c) {
   const r = c.resets;
   const credits = availableResets(c);
-  let html = `<div class="block-label reset-block">Reset credits${
-    credits.length ? ` <span class="pill">${credits.length}</span>` : ""
+  let html = `<div class="grp-label">Reset credits${
+    credits.length ? ` · ${credits.length} available` : ""
   }</div>`;
-  html += notifyToggle("codex_resets", "Notify about reset credits");
   if (resetError)
     html += `<div class="banner small">Couldn't use that reset — ${esc(resetError)}</div>`;
   if (!r) html += `<div class="sec-sub">Live reset-credit info unavailable.</div>`;
@@ -236,45 +267,47 @@ function resetSection(c) {
 function renderCodex() {
   const c = data.codex;
   if (!c.available)
-    return `<div class="sec-head"><div><div class="sec-title">Codex</div></div></div>
-      ${notifyToggle("codex")}
-      <div class="empty-state">No Codex sessions found.<br/>Looked in <code>~/.codex/sessions</code>.</div>`;
+    return (
+      header("Codex") +
+      `<div class="empty-state">No Codex sessions found.<br/>Looked in <code>~/.codex/sessions</code>.</div>`
+    );
 
-  let html = `<div class="sec-head">
-      <div><div class="sec-title">Codex</div></div>
-      ${c.plan_type ? `<span class="pill">${esc(c.plan_type)}</span>` : ""}
-    </div>`;
-  html += notifyToggle("codex");
+  const extras = `${statusDot(c.health)}${
+    c.plan_type ? `<span class="pill">${esc(c.plan_type)}</span>` : ""
+  }`;
+  let html = header("Codex", extras);
 
   if ((c.quotas || []).length) {
-    for (const quota of c.quotas)
-      html += gauge(quota.label, quota.gauge.used_percent, quota.gauge.resets_in);
+    for (const quota of c.quotas) html += gauge(quota.label, quota.gauge);
   } else {
-    if (c.primary)
-      html += gauge("Session (5h)", c.primary.used_percent, c.primary.resets_in);
-    if (c.secondary)
-      html += gauge("Weekly", c.secondary.used_percent, c.secondary.resets_in);
+    html += gauge("Session (5h)", c.primary);
+    html += gauge("Weekly", c.secondary);
   }
   if (!c.live)
     html += `<div class="banner">Live usage unavailable — showing the last numbers from local session logs.</div>`;
-  html += healthRow("codex-quota", c.health);
 
   if (typeof c.credits === "number") {
-    html += `<div class="divider"></div>
-      <div class="row"><span class="k">Credits</span><span class="v">${esc(c.credits.toFixed(2))}</span></div>`;
+    html += `<div class="row"><span class="k">Credits</span><span class="v">${esc(
+      c.credits.toFixed(2)
+    )}</span></div>`;
   }
 
   html += resetSection(c);
-
-  html += equivalentValueLabel("estimated", c.estimate);
-  html += costCard(c.cost_today, c.tokens_today, c.cost_30d, c.tokens_30d);
-  html += chart(c.daily, false);
-  html += healthRow("codex-history", c.history_health, c.estimate);
+  html += valueCard(
+    c.estimate,
+    c.history_health,
+    c.cost_today,
+    c.tokens_today,
+    c.cost_30d,
+    c.tokens_30d,
+    c.daily,
+    false
+  );
   return html;
 }
 
-// One account's 5h + weekly gauges. `sessionLabel` differs between the
-// detailed tab ("Session (5h)") and the compact overview card ("Session").
+// One account's gauges. `sessionLabel` differs between the detailed tab
+// ("Session (5h)") and the compact overview card ("Session").
 function claudeGauges(acct, sessionLabel) {
   let h = "";
   if ((acct.quotas || []).length) {
@@ -282,175 +315,130 @@ function claudeGauges(acct, sessionLabel) {
       const scoped = quota.scope_model || quota.scope_surface;
       if (scoped && !showModelWeekly) continue;
       const label = quota.group === "session" ? sessionLabel : quota.label;
-      h += gauge(label, quota.gauge.used_percent, quota.gauge.resets_in, { claude: true });
+      h += gauge(label, quota.gauge, { claude: true });
     }
     return h;
   }
-  if (acct.five_hour)
-    h += gauge(sessionLabel, acct.five_hour.used_percent, acct.five_hour.resets_in, { claude: true });
-  if (acct.seven_day)
-    h += gauge("Weekly", acct.seven_day.used_percent, acct.seven_day.resets_in, { claude: true });
+  h += gauge(sessionLabel, acct.five_hour, { claude: true });
+  h += gauge("Weekly", acct.seven_day, { claude: true });
   const mg = acct.seven_day_model;
-  if (mg && showModelWeekly)
-    h += gauge(`Weekly (${mg.model})`, mg.gauge.used_percent, mg.gauge.resets_in, { claude: true });
+  if (mg && showModelWeekly) h += gauge(`Weekly (${mg.model})`, mg.gauge, { claude: true });
   return h;
 }
 
-// Toggle for the model-scoped weekly gauge. Only rendered when at least one
-// account actually reports one, so it never shows as dead UI.
-function modelWeeklyToggle(accounts) {
-  const scopes = [...new Set((accounts || []).flatMap((a) =>
-    (a.quotas || [])
-      .filter((q) => q.scope_model || q.scope_surface)
-      .map((q) => q.scope_model || q.scope_surface)
-  ))];
+// The scoped-limit names, used to label the Settings → Display toggle. Empty
+// when no account reports one, so the toggle never shows as dead UI.
+function scopedLimitNames(accounts) {
+  const scopes = [
+    ...new Set(
+      (accounts || []).flatMap((a) =>
+        (a.quotas || [])
+          .filter((q) => q.scope_model || q.scope_surface)
+          .map((q) => q.scope_model || q.scope_surface)
+      )
+    ),
+  ];
   if (!scopes.length) {
     for (const account of accounts || [])
       if (account.seven_day_model) scopes.push(account.seven_day_model.model);
   }
-  if (!scopes.length) return "";
-  return `
-    <label class="notify-row claude">
-      <span>Show scoped limits (${esc(scopes.join(" / "))})</span>
-      <input class="notify-check" type="checkbox" data-model-weekly ${showModelWeekly ? "checked" : ""} />
-    </label>`;
+  return scopes;
 }
 
-// Rename/remove controls. Remove is shown only for user-added folders; the
-// built-in ~/.claude account can't be removed.
-function acctActions(a) {
-  const rename = `<button class="acct-btn" data-rename="${esc(a.id)}" title="Rename">✎</button>`;
-  const remove = a.removable
-    ? `<button class="acct-btn" data-remove="${esc(a.id)}" title="Remove this folder">✕</button>`
-    : "";
-  return `<div class="acct-actions">${rename}${remove}</div>`;
-}
-
-function renameField() {
-  return `<input class="acct-input" data-rename-input type="text" maxlength="40"
-      value="${esc(editingDraft)}" placeholder="Account name" />
-    <div class="acct-actions">
-      <button class="acct-btn save" data-rename-save="${esc(editingAccount)}" title="Save">✓</button>
-      <button class="acct-btn" data-rename-cancel title="Cancel">✕</button>
-    </div>`;
-}
-
-// One account block: a header (name + default pill + controls, or the inline
-// rename field), the folder path, then its live gauges.
+// One account block on the Claude tab: name, status dot, then its gauges.
+// Rename/remove moved to Settings → Claude accounts.
 function renderClaudeAccount(a, multi) {
-  const editing = editingAccount === a.id;
-  const name = editing
-    ? renameField()
-    : `<div class="acct-name">
-        <span class="ov-dot claude"></span>
-        <span class="acct-label" data-rename="${esc(a.id)}" title="Rename">${esc(a.label)}</span>
-        ${a.active ? `<span class="pill">default</span>` : ""}
-      </div>${acctActions(a)}`;
-  // Show the folder each account maps to once more than one is configured.
-  const path = multi && !editing ? `<div class="acct-path">${esc(a.id)}</div>` : "";
-  let body = a.live
+  const head = `<div class="acct-head">
+    <span class="ov-dot claude"></span>
+    <span class="acct-label">${esc(a.label)}</span>
+    ${statusDot(a.health)}
+    ${a.active && multi ? `<span class="pill">default</span>` : ""}
+  </div>`;
+  const body = a.live
     ? claudeGauges(a, "Session (5h)")
     : `<div class="banner small">Live usage unavailable — open Claude Code signed in as this account to refresh it.</div>`;
-  body += healthRow(`claude-account:${a.id}`, a.health);
-  return `<div class="acct" data-acct="${esc(a.id)}">
-    <div class="acct-head">${name}</div>${path}${body}</div>`;
-}
-
-// "Add Claude folder" control: a button that expands into a path input. Lets a
-// user track a second login kept in a separate CLAUDE_CONFIG_DIR folder.
-function addFolderControl() {
-  if (!addingFolder) {
-    return `<button class="add-folder-btn" data-add-folder-open>+ Add Claude folder</button>`;
-  }
-  const err = addFolderError
-    ? `<div class="banner small">${esc(addFolderError)}</div>`
-    : "";
-  return `<div class="add-folder">
-      <input class="acct-input" data-add-folder-input type="text"
-        value="${esc(addFolderDraft)}" placeholder="Path to a Claude config folder" />
-      <div class="acct-actions">
-        <button class="acct-btn save" data-add-folder-save title="Add">✓</button>
-        <button class="acct-btn" data-add-folder-cancel title="Cancel">✕</button>
-      </div>
-    </div>
-    <div class="sec-sub" style="margin:4px 0 0">A folder containing its own <code>.credentials.json</code> (e.g. a second <code>CLAUDE_CONFIG_DIR</code>).</div>
-    ${err}`;
+  return `<div class="acct" data-acct="${esc(a.id)}">${multi ? head : ""}${body}</div>`;
 }
 
 function renderClaude() {
   const c = data.claude;
   if (!c.available)
-    return `<div class="sec-head"><div class="sec-title">Claude</div></div>
-      ${notifyToggle("claude")}
-      <div class="empty-state">No Claude data.<br/>Sign in with Claude Code, or check <code>~/.claude</code>.</div>`;
+    return (
+      header("Claude") +
+      `<div class="empty-state">No Claude data.<br/>Sign in with Claude Code, or check <code>~/.claude</code>.</div>`
+    );
 
   const accounts = c.accounts || [];
   const multi = accounts.length > 1;
+  const primaryHealth = accounts.length ? accounts[0].health : null;
 
-  let html = `<div class="sec-head"><div class="sec-title">Claude</div>
-    <span class="pill">${c.live ? "live" : "logs only"}</span></div>`;
-  html += notifyToggle("claude");
-  html += modelWeeklyToggle(c.accounts);
+  let html = header("Claude", multi ? "" : statusDot(primaryHealth));
 
   if (accounts.length) {
     for (const a of accounts) html += renderClaudeAccount(a, multi);
   } else {
     html += `<div class="banner">Live usage unavailable — token expired or offline. Open Claude Code to refresh it. Showing estimated cost from logs.</div>`;
   }
-  html += addFolderControl();
 
-  html += equivalentValueLabel("estimated from logs", c.estimate);
+  html += valueCard(
+    c.estimate,
+    c.history_health,
+    c.cost_today,
+    c.tokens_today,
+    c.cost_30d,
+    c.tokens_30d,
+    c.daily,
+    true
+  );
   if (multi)
-    html += `<div class="sec-sub" style="margin:-4px 0 8px">Combined across all accounts — local logs aren't per-account.</div>`;
-  html += costCard(c.cost_today, c.tokens_today, c.cost_30d, c.tokens_30d);
-  html += chart(c.daily, true);
-  html += healthRow("claude-history", c.history_health, c.estimate);
+    html += `<div class="sec-sub">Combined across all accounts — local logs aren't per-account.</div>`;
   return html;
 }
 
 function renderOverview() {
   const cx = data.codex,
     cl = data.claude;
-  let html = `<div class="sec-head"><div class="sec-title">Overview</div>
-    <span class="sec-sub">${usd(cx.cost_today + cl.cost_today)} today</span></div>`;
+  let html = header(
+    "Overview",
+    `<span class="pill">${usd(cx.cost_today + cl.cost_today)} today</span>`
+  );
 
   // Codex card
   html += `<div class="ov-card" data-goto="codex">
     <div class="ov-head">
-      <div class="ov-name"><span class="ov-dot"></span>Codex ${cx.plan_type ? `<span class="pill">${esc(cx.plan_type)}</span>` : ""}</div>
+      <div class="ov-name"><span class="ov-dot"></span>Codex ${statusDot(cx.health)}
+        ${cx.plan_type ? `<span class="pill">${esc(cx.plan_type)}</span>` : ""}</div>
       <span class="ov-cost">${usd(cx.cost_today)} today</span>
     </div>`;
   if ((cx.quotas || []).length) {
     for (const quota of cx.quotas)
-      html += gauge(quota.group === "session" ? "Session" : quota.label, quota.gauge.used_percent, quota.gauge.resets_in);
+      html += gauge(quota.group === "session" ? "Session" : quota.label, quota.gauge);
   } else {
-    if (cx.primary)
-      html += gauge("Session", cx.primary.used_percent, cx.primary.resets_in);
-    if (cx.secondary)
-      html += gauge("Weekly", cx.secondary.used_percent, cx.secondary.resets_in);
+    html += gauge("Session", cx.primary);
+    html += gauge("Weekly", cx.secondary);
   }
   if (!cx.available) html += `<div class="sec-sub">No data</div>`;
   const resetCount = availableResets(cx).length;
   if (resetCount)
-    html += `<div class="ov-reset">↻ ${resetCount} reset credit${
+    html += `<div class="ov-reset">${resetCount} reset credit${
       resetCount > 1 ? "s" : ""
     } available</div>`;
   html += `</div>`;
 
   // Claude card
-  html += `<div class="ov-card" data-goto="claude">
-    <div class="ov-head">
-      <div class="ov-name"><span class="ov-dot claude"></span>Claude</div>
-      <span class="ov-cost">${usd(cl.cost_today)} today</span>
-    </div>`;
   const accounts = cl.accounts || [];
   const multi = accounts.length > 1;
+  html += `<div class="ov-card" data-goto="claude">
+    <div class="ov-head">
+      <div class="ov-name"><span class="ov-dot claude"></span>Claude
+        ${multi ? "" : statusDot(accounts.length ? accounts[0].health : null)}</div>
+      <span class="ov-cost">${usd(cl.cost_today)} today</span>
+    </div>`;
   if (accounts.length) {
     for (const a of accounts) {
       if (multi)
-        html += `<div class="ov-acct"><span class="ov-dot claude"></span>${esc(a.label)}${
-          a.active ? ` <span class="pill">active</span>` : ""
-        }</div>`;
+        html += `<div class="ov-acct"><span class="ov-dot claude"></span>${esc(a.label)}
+          ${statusDot(a.health)}${a.active ? ` <span class="pill">active</span>` : ""}</div>`;
       if (a.live) html += claudeGauges(a, "Session");
       else html += `<div class="sec-sub">Live unavailable — open Claude Code</div>`;
     }
@@ -462,6 +450,177 @@ function renderOverview() {
   return html;
 }
 
+// ---------- settings ----------
+function settingRow(label, sub, attrs, enabled, claude) {
+  return `<label class="grp-row">
+    <span class="rlab">${esc(label)}${sub ? `<span class="rsub">${esc(sub)}</span>` : ""}</span>
+    <input class="sw${claude ? " claude" : ""}" type="checkbox" ${attrs} ${
+      enabled ? "checked" : ""
+    } />
+  </label>`;
+}
+
+function renameField() {
+  return `<input class="acct-input" data-rename-input type="text" maxlength="40"
+      value="${esc(editingDraft)}" placeholder="Account name" />
+    <div class="acct-actions">
+      <button class="acct-btn save" data-rename-save="${esc(editingAccount)}" title="Save">✓</button>
+      <button class="acct-btn" data-rename-cancel title="Cancel">✕</button>
+    </div>`;
+}
+
+// "Add Claude folder": a button that expands into a path input. Lets a user
+// track a second login kept in a separate CLAUDE_CONFIG_DIR folder.
+function addFolderControl() {
+  if (!addingFolder)
+    return `<button class="ghost-btn" data-add-folder-open>+ Add Claude folder</button>`;
+  const err = addFolderError ? `<div class="banner small">${esc(addFolderError)}</div>` : "";
+  return `<div class="add-folder">
+      <input class="acct-input" data-add-folder-input type="text"
+        value="${esc(addFolderDraft)}" placeholder="Path to a Claude config folder" />
+      <div class="acct-actions">
+        <button class="acct-btn save" data-add-folder-save title="Add">✓</button>
+        <button class="acct-btn" data-add-folder-cancel title="Cancel">✕</button>
+      </div>
+    </div>
+    <div class="sec-sub">A folder containing its own <code>.credentials.json</code> (e.g. a second <code>CLAUDE_CONFIG_DIR</code>).</div>
+    ${err}`;
+}
+
+// One expandable diagnostic row: the detail that used to sit inline on every
+// data tab.
+function diagRow(key, label, health, estimate = null, localIsNormal = false) {
+  if (!health) return "";
+  const expanded = expandedHealth.has(key);
+  const ok = healthOk(health, localIsNormal);
+  const error = health.error_message
+    ? `<div><span>Last error</span><strong>${esc(health.error_message)}</strong></div>`
+    : "";
+  const fetched = health.fetched_at
+    ? `<div><span>Last successful update</span><strong>${esc(
+        clockTime(health.fetched_at)
+      )}</strong></div>`
+    : "";
+  const attempted = health.attempted_at
+    ? `<div><span>Last attempt</span><strong>${esc(clockTime(health.attempted_at))}</strong></div>`
+    : "";
+  const files =
+    health.files_scanned || health.files_cached || health.files_skipped
+      ? `<div><span>Files</span><strong>${health.files_scanned || 0} scanned · ${
+          health.files_cached || 0
+        } cached · ${health.files_skipped || 0} skipped</strong></div>`
+      : "";
+  const pricing = estimate?.pricing_reviewed_at
+    ? `<div><span>Pricing catalog</span><strong>${esc(estimate.catalog_version)} · reviewed ${esc(
+        estimate.pricing_reviewed_at
+      )}</strong></div>`
+    : "";
+  const diagnostic = esc(JSON.stringify({ health, estimate }, null, 2));
+  const clearCache = key.endsWith("history")
+    ? `<button class="health-copy" data-history-cache-clear>Clear scan cache</button>`
+    : "";
+  return `<div class="diag">
+    <button class="diag-row" data-health-toggle="${esc(key)}" aria-expanded="${expanded}">
+      <span class="status-dot ${ok ? "" : "warn"}"></span>
+      <span class="diag-name">${esc(label)}</span>
+      <span class="diag-src">${esc(healthTitle(health))}</span>
+      <span class="diag-chevron">⌄</span>
+    </button>
+    ${
+      expanded
+        ? `<div class="health-detail">${fetched}${attempted}${error}${files}${pricing}
+      <button class="health-copy" data-health-copy="${diagnostic}">Copy diagnostics</button>${clearCache}
+    </div>`
+        : ""
+    }
+  </div>`;
+}
+
+function renderSettings() {
+  const cx = data.codex,
+    cl = data.claude;
+  let html = header("Settings", "", { hideRefresh: true, rightText: "" });
+
+  html += `<div class="grp-label">Notifications</div><div class="grp">`;
+  html += settingRow(
+    "Codex limits",
+    "Near, hit, and reset",
+    'data-notify-provider="codex"',
+    notificationSettings.codex,
+    false
+  );
+  html += settingRow(
+    "Codex reset credits",
+    "When a free reset is granted",
+    'data-notify-provider="codex_resets"',
+    notificationSettings.codex_resets,
+    false
+  );
+  html += settingRow(
+    "Claude limits",
+    "Near, hit, and reset",
+    'data-notify-provider="claude"',
+    notificationSettings.claude,
+    true
+  );
+  html += `</div>`;
+  if (notifyError)
+    html += `<div class="banner small">Couldn't save the notification setting — try again.</div>`;
+
+  const scopes = scopedLimitNames(cl.accounts);
+  if (scopes.length) {
+    html += `<div class="grp-label">Display</div><div class="grp">`;
+    html += settingRow(
+      "Scoped limits",
+      `Show the ${scopes.join(" / ")} gauge`,
+      "data-model-weekly",
+      showModelWeekly,
+      true
+    );
+    html += `</div>`;
+  }
+
+  const accounts = cl.accounts || [];
+  html += `<div class="grp-label">Claude accounts</div>`;
+  if (accounts.length) {
+    html += `<div class="grp">`;
+    for (const a of accounts) {
+      if (editingAccount === a.id) {
+        html += `<div class="acct-row">${renameField()}</div>`;
+        continue;
+      }
+      html += `<div class="acct-row">
+        <span class="ov-dot claude"></span>
+        <span class="rlab"><span class="nm">${esc(a.label)}</span>${
+          a.active ? ` <span class="pill">default</span>` : ""
+        }<span class="pth">${esc(a.id)}</span></span>
+        <span class="acts">
+          <button class="acct-btn" data-rename="${esc(a.id)}" title="Rename">✎</button>
+          ${
+            a.removable
+              ? `<button class="acct-btn" data-remove="${esc(
+                  a.id
+                )}" title="Remove this folder">✕</button>`
+              : ""
+          }
+        </span>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+  html += addFolderControl();
+
+  html += `<div class="grp-label">Data sources</div><div class="grp">`;
+  html += diagRow("codex-quota", "Codex quota", cx.health);
+  html += diagRow("codex-history", "Codex history", cx.history_health, cx.estimate, true);
+  for (const a of accounts) html += diagRow(`claude-account:${a.id}`, a.label, a.health);
+  html += diagRow("claude-history", "Claude history", cl.history_health, cl.estimate, true);
+  html += `</div>`;
+
+  return html;
+}
+
+// ---------- render ----------
 function render() {
   const content = document.getElementById("content");
   if (!data) {
@@ -471,13 +630,19 @@ function render() {
   }
   if (activeTab === "codex") content.innerHTML = renderCodex();
   else if (activeTab === "claude") content.innerHTML = renderClaude();
+  else if (activeTab === "settings") content.innerHTML = renderSettings();
   else content.innerHTML = renderOverview();
+
+  const refreshBtn = document.getElementById("refreshBtn");
+  if (refreshBtn) refreshBtn.addEventListener("click", refresh);
 
   content.querySelectorAll("[data-goto]").forEach((card) =>
     card.addEventListener("click", () => switchTab(card.dataset.goto))
   );
   content.querySelectorAll("[data-notify-provider]").forEach((input) =>
-    input.addEventListener("change", () => setNotifyEnabled(input.dataset.notifyProvider, input.checked))
+    input.addEventListener("change", () =>
+      setNotifyEnabled(input.dataset.notifyProvider, input.checked)
+    )
   );
   content.querySelectorAll("[data-model-weekly]").forEach((input) =>
     input.addEventListener("change", () => {
@@ -534,7 +699,7 @@ function render() {
     el.addEventListener("click", cancelUseReset)
   );
 
-  // Per-account rename / forget controls.
+  // Per-account rename / forget controls (Settings).
   content.querySelectorAll("[data-rename]").forEach((el) =>
     el.addEventListener("click", () => startRename(el.dataset.rename))
   );
@@ -599,11 +764,6 @@ function render() {
     }
   }
 
-  const updated = document.getElementById("updated");
-  if (data.generated_at) {
-    const d = new Date(data.generated_at * 1000);
-    updated.textContent = "Updated " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }
   fitWindowHeight();
 }
 
@@ -611,8 +771,7 @@ function fitWindowHeight() {
   requestAnimationFrame(() => {
     const tabs = document.getElementById("tabs");
     const content = document.getElementById("content");
-    const foot = document.querySelector(".foot");
-    if (!tabs || !content || !foot) return;
+    if (!tabs || !content) return;
 
     const contentBox = content.getBoundingClientRect();
     const childBottom = [...content.children].reduce((bottom, child) => {
@@ -621,7 +780,7 @@ function fitWindowHeight() {
     const contentStyle = getComputedStyle(content);
     const contentHeight =
       childBottom + Number.parseFloat(contentStyle.paddingBottom || "0") + 2;
-    const height = tabs.offsetHeight + contentHeight + foot.offsetHeight + 2;
+    const height = tabs.offsetHeight + contentHeight + 2;
     invoke("fit_window_height", { height }).catch(() => {});
   });
 }
@@ -634,13 +793,25 @@ function switchTab(tab) {
   render();
 }
 
+// ---------- refresh ----------
+// The spinner is bound to the request rather than a fixed timeout, then rounded
+// up to the next whole rotation so it never stops mid-turn.
+const SPIN_MS = 700;
 let refreshing = false;
+let spinUntil = 0;
+let spinTimer = null;
+
+function spinning() {
+  return refreshing || Date.now() < spinUntil;
+}
+
 async function refresh() {
   if (refreshing) return;
   refreshing = true;
+  const started = Date.now();
   const btn = document.getElementById("refreshBtn");
-  btn.classList.add("spin");
-  setTimeout(() => btn.classList.remove("spin"), 600);
+  if (btn) btn.classList.add("busy");
+
   // Paint the cached snapshot immediately; the fresh numbers replace it
   // below once the (slow) collection finishes.
   invoke("get_cached_usage")
@@ -653,15 +824,24 @@ async function refresh() {
     .catch(() => {});
   try {
     data = await invoke("get_usage");
-    render();
   } catch (e) {
     // Keep stale data on screen if we have any; only blank out on first load.
-    if (!data)
+    if (!data) {
       document.getElementById("content").innerHTML =
         `<div class="empty-state">Failed to load usage.<br/>${esc(e)}</div>`;
-  } finally {
-    refreshing = false;
+      refreshing = false;
+      return;
+    }
   }
+  refreshing = false;
+  const elapsed = Date.now() - started;
+  spinUntil = Date.now() + (SPIN_MS - (elapsed % SPIN_MS));
+  render();
+  clearTimeout(spinTimer);
+  spinTimer = setTimeout(() => {
+    spinUntil = 0;
+    render();
+  }, SPIN_MS - (elapsed % SPIN_MS));
 }
 
 async function loadNotificationSettings() {
@@ -775,7 +955,6 @@ async function addDirectory(path) {
 document
   .querySelectorAll(".tab")
   .forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
-document.getElementById("refreshBtn").addEventListener("click", refresh);
 
 listen("refresh", refresh);
 // Translucent panel only when the native acrylic backdrop is active,
