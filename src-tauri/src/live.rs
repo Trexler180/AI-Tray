@@ -13,7 +13,7 @@
 //! CLI doesn't flip the UI and the alert pipeline to "logs only".
 
 use crate::auth;
-use crate::models::{DataHealth, DataSource, Gauge, ModelGauge, QuotaWindow};
+use crate::models::{DataHealth, DataSource, ExtraUsage, Gauge, ModelGauge, QuotaWindow};
 use crate::util::human_until;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -186,6 +186,7 @@ pub struct ClaudeLive {
     pub seven_day: Option<Gauge>,
     pub seven_day_model: Option<ModelGauge>,
     pub quotas: Vec<QuotaWindow>,
+    pub extra_usage: Option<ExtraUsage>,
 }
 
 /// One account's live gauges, ready for the UI/alerts layer.
@@ -203,6 +204,7 @@ pub struct ClaudeAccountLive {
     pub seven_day: Option<Gauge>,
     pub seven_day_model: Option<ModelGauge>,
     pub quotas: Vec<QuotaWindow>,
+    pub extra_usage: Option<ExtraUsage>,
     pub health: DataHealth,
 }
 
@@ -291,6 +293,22 @@ fn claude_quotas(v: &Value) -> Vec<QuotaWindow> {
     quotas
 }
 
+/// The `extra_usage` block (usage credits). Amounts arrive in cents and are
+/// converted to dollars here, matching what the UI displays.
+fn parse_extra_usage(v: &Value) -> Option<ExtraUsage> {
+    let node = &v["extra_usage"];
+    if !node.is_object() {
+        return None;
+    }
+    Some(ExtraUsage {
+        is_enabled: node["is_enabled"].as_bool().unwrap_or(false),
+        monthly_limit: node["monthly_limit"].as_f64().map(|cents| cents / 100.0),
+        used_credits: node["used_credits"].as_f64().map(|cents| cents / 100.0),
+        utilization: node["utilization"].as_f64(),
+        currency: node["currency"].as_str().map(str::to_string),
+    })
+}
+
 fn parse_claude(v: &Value) -> Option<ClaudeLive> {
     let five_hour = claude_window(&v["five_hour"], 300);
     let seven_day = claude_window(&v["seven_day"], 10080);
@@ -328,6 +346,7 @@ fn parse_claude(v: &Value) -> Option<ClaudeLive> {
         seven_day,
         seven_day_model,
         quotas,
+        extra_usage: parse_extra_usage(v),
     };
     // A response with no recognizable window is a failure, not "no limits";
     // treating it as success would poison the cache with an empty snapshot.
@@ -399,6 +418,9 @@ fn claude_cached(
                     .iter()
                     .filter_map(serve_cached_quota)
                     .collect(),
+                // Credit spend has no reset boundary inside the grace window,
+                // so the cached snapshot serves as-is.
+                extra_usage: cached.value.extra_usage.clone(),
             };
             let value = (live.five_hour.is_some()
                 || live.seven_day.is_some()
@@ -424,9 +446,17 @@ pub fn claude_live_accounts() -> Vec<ClaudeAccountLive> {
             });
             let (served, health) = claude_cached(&acct.id, fetched);
             let live = served.is_some();
-            let (five_hour, seven_day, seven_day_model, quotas) = served
-                .map(|l| (l.five_hour, l.seven_day, l.seven_day_model, l.quotas))
-                .unwrap_or((None, None, None, Vec::new()));
+            let (five_hour, seven_day, seven_day_model, quotas, extra_usage) = served
+                .map(|l| {
+                    (
+                        l.five_hour,
+                        l.seven_day,
+                        l.seven_day_model,
+                        l.quotas,
+                        l.extra_usage,
+                    )
+                })
+                .unwrap_or((None, None, None, Vec::new(), None));
             ClaudeAccountLive {
                 id: acct.id,
                 label: acct.label,
@@ -438,6 +468,7 @@ pub fn claude_live_accounts() -> Vec<ClaudeAccountLive> {
                 seven_day,
                 seven_day_model,
                 quotas,
+                extra_usage,
                 health,
             }
         })
@@ -634,6 +665,44 @@ mod tests {
         .unwrap();
         let live = parse_claude(&v).expect("parses");
         assert!(live.seven_day_model.is_none());
+    }
+
+    /// `extra_usage` amounts arrive in cents; the parsed struct carries
+    /// dollars. A missing block parses to None, and a disabled block still
+    /// surfaces so the UI can say credits exist but are switched off.
+    #[test]
+    fn parses_extra_usage_cents_to_dollars() {
+        let v: Value = serde_json::from_str(
+            r#"{
+              "five_hour": {"utilization": 12.0, "resets_at": "2026-07-05T18:59:59+00:00"},
+              "extra_usage": {"is_enabled": true, "monthly_limit": 2000,
+                              "used_credits": 680, "utilization": 34.0, "currency": "USD"}
+            }"#,
+        )
+        .unwrap();
+        let live = parse_claude(&v).expect("parses");
+        let extra = live.extra_usage.expect("extra usage present");
+        assert!(extra.is_enabled);
+        assert_eq!(extra.monthly_limit, Some(20.0));
+        assert_eq!(extra.used_credits, Some(6.8));
+        assert_eq!(extra.utilization, Some(34.0));
+        assert_eq!(extra.currency.as_deref(), Some("USD"));
+
+        let v: Value = serde_json::from_str(
+            r#"{"five_hour": {"utilization": 1.0, "resets_at": "2026-07-05T18:59:59+00:00"},
+                "extra_usage": {"is_enabled": false, "monthly_limit": null,
+                                "used_credits": null, "utilization": null}}"#,
+        )
+        .unwrap();
+        let extra = parse_claude(&v).unwrap().extra_usage.expect("block present");
+        assert!(!extra.is_enabled);
+        assert_eq!(extra.monthly_limit, None);
+
+        let v: Value = serde_json::from_str(
+            r#"{"five_hour": {"utilization": 1.0, "resets_at": "2026-07-05T18:59:59+00:00"}}"#,
+        )
+        .unwrap();
+        assert!(parse_claude(&v).unwrap().extra_usage.is_none());
     }
 
     #[test]

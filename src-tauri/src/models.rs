@@ -152,6 +152,23 @@ pub struct CodexUsage {
     pub resets: Option<CodexResets>,
 }
 
+/// Usage-credit ("extra usage") state for one Claude account, reported by the
+/// same oauth usage endpoint as the rate-limit windows. The API sends amounts
+/// in cents; they are converted to dollars before they reach the UI.
+#[derive(Serialize, Clone, Default)]
+pub struct ExtraUsage {
+    /// Whether "use credits past plan limits" is switched on for the account.
+    /// Read-only here — the switch itself lives in claude.ai billing settings.
+    pub is_enabled: bool,
+    /// Monthly spend cap in dollars, when one is set.
+    pub monthly_limit: Option<f64>,
+    /// Credits spent so far this month, in dollars.
+    pub used_credits: Option<f64>,
+    /// Percent of the monthly cap spent, straight from the API.
+    pub utilization: Option<f64>,
+    pub currency: Option<String>,
+}
+
 /// Live rate-limit windows for one Claude account. Cost/token history is not
 /// represented here: the local logs carry no account identifier, so that data
 /// stays machine-wide on `ClaudeUsage`.
@@ -174,6 +191,8 @@ pub struct ClaudeAccountUsage {
     /// Model-scoped weekly window (e.g. Fable-only), when the plan has one.
     pub seven_day_model: Option<ModelGauge>,
     pub quotas: Vec<QuotaWindow>,
+    /// Usage-credit state, when the endpoint reported it.
+    pub extra_usage: Option<ExtraUsage>,
     pub health: DataHealth,
 }
 

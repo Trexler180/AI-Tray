@@ -8,6 +8,9 @@ and an API-equivalent value estimate in a compact popover.
   model-aware local token history.
 - **Claude** — live account and scoped quota windows plus model-aware local
   Claude Code history. Multiple Claude config directories are supported.
+- **Credits** — a dedicated screen (opened from the violet meter on any tab)
+  with each account's usage-credit spend, monthly cap, and whether "use
+  credits past plan limits" is switched on, plus the Codex credit balance.
 
 ## What the numbers mean
 

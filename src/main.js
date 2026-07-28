@@ -3,6 +3,7 @@ const { listen } = window.__TAURI__.event;
 
 let data = null;
 let activeTab = "overview";
+let creditsOpen = false; // the Credits detail screen, layered over any tab
 let notificationSettings = { codex: false, claude: false, codex_resets: false };
 // Whether the model-scoped weekly gauge (e.g. the Fable-only limit) is shown.
 let showModelWeekly = localStorage.getItem("showModelWeekly") !== "0";
@@ -76,31 +77,76 @@ function refreshIcon(px = 14, stroke = 1.9) {
   </svg>`;
 }
 
-// ---------- gauge ----------
+// ---------- meters ----------
+// One bar with its text inside: label + headline on the left, reset time on
+// the right. The fill shows what's left and drains toward empty.
+function meterBar(cls, leftPct, leftHtml, rightHtml, tip, attrs = "") {
+  return `
+    <div class="bgauge ${cls}" title="${tip}" ${attrs}>
+      <div class="bfill" style="width:${Math.min(100, Math.max(0, leftPct))}%"></div>
+      <div class="btxt"><span class="bl">${leftHtml}</span><span class="rr">${rightHtml}</span></div>
+    </div>`;
+}
+
 // usedPercent 0..100; we display the remaining "left", and the bar drains to
-// match it. The label row carries the headline number so the whole meter is
-// two lines; the exact used figure lives in the tooltip.
+// match it. The exact used figure lives in the tooltip.
 function gauge(label, g, opts = {}) {
   if (!g) return "";
   const usedPercent = Math.min(100, Math.max(0, Number(g.used_percent) || 0));
   const left = (100 - usedPercent).toFixed(0);
   const warn = usedPercent >= 80;
-  const cls = ["gauge"];
-  if (opts.claude) cls.push("claude");
-  if (warn) cls.push("warn");
-  const fill = Math.min(100, Math.max(2, usedPercent));
-  const resets = resetText(g);
+  const cls = [opts.claude ? "claude" : "", warn ? "warn" : ""].join(" ").trim();
   const tip = `${usedPercent.toFixed(0)}% used · ${left}% left${
     g.resets_in ? ` · resets in ${esc(g.resets_in)}` : ""
   }`;
-  return `
-    <div class="${cls.join(" ")}" title="${tip}">
-      <div class="gauge-head">
-        <span class="l">${esc(label)} <b>${left}%</b><span class="sub"> left</span></span>
-        <span class="r">${resets}</span>
-      </div>
-      <div class="gauge-bar"><div class="gauge-fill" style="width:${100 - fill}%"></div></div>
-    </div>`;
+  return meterBar(
+    cls,
+    100 - usedPercent,
+    `${esc(label)} <b>${left}%</b><span class="sub"> left</span>`,
+    resetText(g),
+    tip
+  );
+}
+
+// ---------- usage credits ----------
+// Accounts whose live snapshot reported an extra_usage block at all.
+function creditAccounts() {
+  return (data?.claude?.accounts || []).filter((a) => a.extra_usage);
+}
+// Credits are worth a meter only when the switch is on and a cap is set.
+function creditsActive(a) {
+  const extra = a.extra_usage;
+  return !!(extra && extra.is_enabled && (extra.monthly_limit || 0) > 0);
+}
+function creditsUsedPercent(extra) {
+  const cap = extra.monthly_limit || 0;
+  const used = Math.min(cap, extra.used_credits || 0);
+  const pct = typeof extra.utilization === "number"
+    ? extra.utilization
+    : cap > 0 ? (used / cap) * 100 : 0;
+  return Math.min(100, Math.max(0, pct));
+}
+
+// The violet money meter: "Credits $13.20 of $20". With `link`, the whole bar
+// navigates to the Credits screen.
+function creditsBar(a, opts = {}) {
+  if (!creditsActive(a)) return "";
+  const extra = a.extra_usage;
+  const cap = extra.monthly_limit;
+  const used = Math.min(cap, extra.used_credits || 0);
+  const usedPct = creditsUsedPercent(extra);
+  const cls = ["credit", usedPct >= 80 ? "warn" : "", opts.link ? "link" : ""]
+    .join(" ").trim();
+  const tip = `${usd(used)} of the ${usd(cap)} monthly cap spent`;
+  const right = `${usedPct.toFixed(0)}% used${opts.link ? ` <span class="go">›</span>` : ""}`;
+  return meterBar(
+    cls,
+    100 - usedPct,
+    `${esc(opts.label || "Credits")} <b>${usd(Math.max(0, cap - used))}</b><span class="sub"> of ${usd(cap)}</span>`,
+    right,
+    tip,
+    opts.link ? "data-credits" : ""
+  );
 }
 
 // ---------- bar chart ----------
@@ -146,13 +192,19 @@ function healthOk(health, localIsNormal = false) {
   return false;
 }
 
-// The full-width health strips became a single dot beside the title; the
-// expandable diagnostics moved to Settings → Data sources.
-function statusDot(health, opts = {}) {
+// Warn-only health: a healthy live source renders nothing, and an amber pill
+// names the problem when data is cached, logs-only, or missing. The full
+// diagnostics stay in Settings → Data sources.
+function healthBadge(health, opts = {}) {
   const ok = healthOk(health, opts.localIsNormal) && !opts.forceWarn;
+  if (ok) return "";
+  let text = "no data";
+  if (health?.source === "memory_cache") text = `cached ${ageText(health.stale_age_seconds)}`;
+  else if (health?.source === "local_logs") text = "logs only";
+  if (opts.warnText && healthOk(health, opts.localIsNormal)) text = opts.warnText;
   const detail = opts.extra ? ` · ${opts.extra}` : "";
-  return `<span class="status-dot ${ok ? "" : "warn"}"
-    title="${esc(healthTitle(health) + detail)}"></span>`;
+  return `<span class="pill warn-pill"
+    title="${esc(healthTitle(health) + detail)}">${esc(text)}</span>`;
 }
 
 // ---------- panel header (absorbs the old footer) ----------
@@ -185,9 +237,10 @@ function valueCard(estimate, health, today, todayTok, m30, tok30, daily, claude)
       <span>API-equivalent value</span>
       <span class="info-tip" tabindex="0" role="img"
         aria-label="${esc(explanation)}" title="${esc(explanation)}">i</span>
-      ${statusDot(health, {
+      ${healthBadge(health, {
         localIsNormal: true,
         forceWarn: shaky,
+        warnText: `${confidence} estimate`,
         extra: `${confidence} confidence`,
       })}
     </div>
@@ -274,7 +327,7 @@ function renderCodex() {
       `<div class="empty-state">No Codex sessions found.<br/>Looked in <code>~/.codex/sessions</code>.</div>`
     );
 
-  const extras = `${statusDot(c.health)}${
+  const extras = `${healthBadge(c.health)}${
     c.plan_type ? `<span class="pill">${esc(c.plan_type)}</span>` : ""
   }`;
   let html = header("Codex", extras);
@@ -289,9 +342,11 @@ function renderCodex() {
     html += `<div class="banner">Live usage unavailable — showing the last numbers from local session logs.</div>`;
 
   if (typeof c.credits === "number") {
-    html += `<div class="row"><span class="k">Credits</span><span class="v">${esc(
-      c.credits.toFixed(2)
-    )}</span></div>`;
+    html += `<button class="row-link" data-credits>
+      <span class="k">Credits</span>
+      <span class="v">${esc(c.credits.toFixed(2))}</span>
+      <span class="go">›</span>
+    </button>`;
   }
 
   html += resetSection(c);
@@ -351,13 +406,12 @@ function scopedLimitNames(accounts) {
 // Rename/remove moved to Settings → Claude accounts.
 function renderClaudeAccount(a, multi) {
   const head = `<div class="acct-head">
-    <span class="ov-dot claude"></span>
     <span class="acct-label">${esc(a.label)}</span>
-    ${statusDot(a.health)}
+    ${healthBadge(a.health)}
     ${a.active && multi ? `<span class="pill">default</span>` : ""}
   </div>`;
   const body = a.live
-    ? claudeGauges(a, "Session (5h)")
+    ? claudeGauges(a, "Session (5h)") + creditsBar(a, { link: true })
     : `<div class="banner small">Live usage unavailable — open Claude Code signed in as this account to refresh it.</div>`;
   return `<div class="acct" data-acct="${esc(a.id)}">${multi ? head : ""}${body}</div>`;
 }
@@ -374,7 +428,7 @@ function renderClaude() {
   const multi = accounts.length > 1;
   const primaryHealth = accounts.length ? accounts[0].health : null;
 
-  let html = header("Claude", multi ? "" : statusDot(primaryHealth));
+  let html = header("Claude", multi ? "" : healthBadge(primaryHealth));
 
   if (accounts.length) {
     for (const a of accounts) html += renderClaudeAccount(a, multi);
@@ -408,7 +462,7 @@ function renderOverview() {
   // Codex card
   html += `<div class="ov-card" data-goto="codex">
     <div class="ov-head">
-      <div class="ov-name"><span class="ov-dot"></span>Codex ${statusDot(cx.health)}
+      <div class="ov-name">Codex ${healthBadge(cx.health)}
         ${cx.plan_type ? `<span class="pill">${esc(cx.plan_type)}</span>` : ""}</div>
       <span class="ov-cost">${usd(cx.cost_today)} today</span>
     </div>`;
@@ -432,22 +486,103 @@ function renderOverview() {
   const multi = accounts.length > 1;
   html += `<div class="ov-card" data-goto="claude">
     <div class="ov-head">
-      <div class="ov-name"><span class="ov-dot claude"></span>Claude
-        ${multi ? "" : statusDot(accounts.length ? accounts[0].health : null)}</div>
+      <div class="ov-name">Claude
+        ${multi ? "" : healthBadge(accounts.length ? accounts[0].health : null)}</div>
       <span class="ov-cost">${usd(cl.cost_today)} today</span>
     </div>`;
   if (accounts.length) {
     for (const a of accounts) {
       if (multi)
-        html += `<div class="ov-acct"><span class="ov-dot claude"></span>${esc(a.label)}
-          ${statusDot(a.health)}${a.active ? ` <span class="pill">active</span>` : ""}</div>`;
+        html += `<div class="ov-acct">${esc(a.label)}
+          ${healthBadge(a.health)}${a.active ? ` <span class="pill">active</span>` : ""}</div>`;
       if (a.live) html += claudeGauges(a, "Session");
       else html += `<div class="sec-sub">Live unavailable — open Claude Code</div>`;
     }
+    html += overviewCreditsBar(accounts);
   } else {
     html += `<div class="sec-sub">Live unavailable — open Claude Code</div>`;
   }
   html += `</div>`;
+
+  return html;
+}
+
+// One combined credits meter across every account with credits switched on.
+function overviewCreditsBar(accounts) {
+  const on = accounts.filter(creditsActive);
+  if (!on.length) return "";
+  const cap = on.reduce((sum, a) => sum + a.extra_usage.monthly_limit, 0);
+  const used = on.reduce(
+    (sum, a) => sum + Math.min(a.extra_usage.monthly_limit, a.extra_usage.used_credits || 0),
+    0
+  );
+  const usedPct = cap > 0 ? Math.min(100, (used / cap) * 100) : 0;
+  const cls = ["credit", usedPct >= 80 ? "warn" : "", "link"].join(" ").trim();
+  return meterBar(
+    cls,
+    100 - usedPct,
+    `Credits <b>${usd(Math.max(0, cap - used))}</b><span class="sub"> left this month</span>`,
+    `${usedPct.toFixed(0)}% used <span class="go">›</span>`,
+    `${usd(used)} of ${usd(cap)} across ${on.length} account${on.length > 1 ? "s" : ""}`,
+    "data-credits"
+  );
+}
+
+// ---------- Credits screen ----------
+// All credit detail and config state lives here, opened from the one-line
+// meters on the tabs, so the tabs themselves stay lean. The past-limits
+// switch is read-only: it can only be changed in claude.ai billing settings.
+function renderCredits() {
+  const cl = data.claude;
+  const cx = data.codex;
+  const stamp = data?.generated_at ? clockTime(data.generated_at) : "—";
+  let html = `<div class="hd">
+    <button class="hd-back" id="creditsBack" title="Back" aria-label="Back">‹</button>
+    <span class="hd-title">Credits</span>
+    <span class="hd-right"><span title="Last updated">${esc(stamp)}</span></span>
+  </div>`;
+
+  const accounts = creditAccounts();
+  const multi = (cl.accounts || []).length > 1;
+  if (accounts.length) {
+    html += `<div class="grp-label">Claude</div>`;
+    for (const a of accounts) {
+      const extra = a.extra_usage;
+      html += `<div class="acct">
+        <div class="acct-head">
+          <span class="acct-label">${esc(a.label)}</span>
+          ${healthBadge(a.health)}
+          ${a.active && multi ? `<span class="pill">default</span>` : ""}
+        </div>`;
+      if (creditsActive(a)) {
+        const cap = extra.monthly_limit;
+        html += creditsBar(a, { label: "This month" });
+        html += `<div class="row"><span class="k">Spent</span>
+          <span class="v">${usd(Math.min(cap, extra.used_credits || 0))}</span></div>`;
+        html += `<div class="row"><span class="k">Monthly cap</span>
+          <span class="v">${usd(cap)}</span></div>`;
+      } else if (extra.is_enabled) {
+        html += `<div class="sec-sub">Credits are on, but no monthly cap was reported.</div>`;
+      }
+      html += `<div class="row"><span class="k">Use credits past plan limits</span>
+        <span class="v">${
+          extra.is_enabled
+            ? `<span class="pill on-pill">On</span>`
+            : `<span class="pill">Off</span>`
+        }</span></div>`;
+      html += `</div>`;
+    }
+    html += `<div class="sec-sub">Caps and the past-limits switch are managed at claude.ai → Settings → Billing.</div>`;
+  } else {
+    html += `<div class="empty-state">No usage-credit info from Claude yet.<br/>It appears after a live refresh on plans with credits.</div>`;
+  }
+
+  if (typeof cx.credits === "number") {
+    html += `<div class="grp-label">Codex</div>`;
+    html += `<div class="row"><span class="k">Balance</span>
+      <span class="v">${esc(cx.credits.toFixed(2))}</span></div>`;
+    html += `<div class="sec-sub">Codex spends credits automatically when a limit is hit.</div>`;
+  }
 
   return html;
 }
@@ -569,6 +704,14 @@ function renderSettings() {
   if (notifyError)
     html += `<div class="banner small">Couldn't save the notification setting — try again.</div>`;
 
+  if (creditAccounts().length || typeof cx.credits === "number") {
+    html += `<div class="grp-label">Usage credits</div><div class="grp">
+      <div class="grp-row" data-credits>
+        <span class="rlab">Manage credits<span class="rsub">Monthly caps and the past-limits switch</span></span>
+        <span class="go">›</span>
+      </div></div>`;
+  }
+
   const scopes = scopedLimitNames(cl.accounts);
   if (scopes.length) {
     html += `<div class="grp-label">Display</div><div class="grp">`;
@@ -592,7 +735,6 @@ function renderSettings() {
         continue;
       }
       html += `<div class="acct-row">
-        <span class="ov-dot claude"></span>
         <span class="rlab"><span class="nm">${esc(a.label)}</span>${
           a.active ? ` <span class="pill">default</span>` : ""
         }<span class="pth">${esc(a.id)}</span></span>
@@ -702,7 +844,8 @@ function render() {
     fitWindowHeight();
     return;
   }
-  if (activeTab === "codex") content.innerHTML = renderCodex();
+  if (creditsOpen) content.innerHTML = renderCredits();
+  else if (activeTab === "codex") content.innerHTML = renderCodex();
   else if (activeTab === "claude") content.innerHTML = renderClaude();
   else if (activeTab === "settings") content.innerHTML = renderSettings();
   else content.innerHTML = renderOverview();
@@ -713,6 +856,21 @@ function render() {
   content.querySelectorAll("[data-goto]").forEach((card) =>
     card.addEventListener("click", () => switchTab(card.dataset.goto))
   );
+  // Credits navigation. stopPropagation so a meter inside an Overview card
+  // opens the Credits screen instead of following the card's tab link.
+  content.querySelectorAll("[data-credits]").forEach((el) =>
+    el.addEventListener("click", (event) => {
+      event.stopPropagation();
+      creditsOpen = true;
+      render();
+    })
+  );
+  const creditsBack = document.getElementById("creditsBack");
+  if (creditsBack)
+    creditsBack.addEventListener("click", () => {
+      creditsOpen = false;
+      render();
+    });
   content.querySelectorAll("[data-notify-provider]").forEach((input) =>
     input.addEventListener("change", () =>
       setNotifyEnabled(input.dataset.notifyProvider, input.checked)
@@ -878,6 +1036,7 @@ function fitWindowHeight() {
 
 function switchTab(tab) {
   activeTab = tab;
+  creditsOpen = false;
   document
     .querySelectorAll(".tab")
     .forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));

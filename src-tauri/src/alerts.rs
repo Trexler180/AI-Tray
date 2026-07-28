@@ -753,6 +753,7 @@ mod tests {
             seven_day: None,
             seven_day_model: None,
             quotas: Vec::new(),
+            extra_usage: None,
             health: Default::default(),
         };
         Usage {

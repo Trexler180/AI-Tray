@@ -205,6 +205,7 @@ pub(crate) fn collect_usage_sync() -> Usage {
                 seven_day: a.seven_day,
                 seven_day_model: a.seven_day_model,
                 quotas: a.quotas,
+                extra_usage: a.extra_usage,
                 health: a.health,
             })
             .collect();
