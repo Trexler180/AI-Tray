@@ -96,7 +96,7 @@ refresh rebuilds them.
 
 Tauri v2 with a Rust backend and vanilla JavaScript/Vite frontend.
 
-- Node.js 18+ and npm
+- Node.js 20.19+ or 22.12+ (Vite 8's requirement) and npm
 - Rust (`rustup`) with the MSVC target
 - WebView2 runtime and MSVC C++ Build Tools
 
