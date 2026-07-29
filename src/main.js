@@ -7,6 +7,9 @@ let creditsOpen = false; // the Credits detail screen, layered over any tab
 let notificationSettings = { codex: false, claude: false, codex_resets: false };
 // Whether the model-scoped weekly gauge (e.g. the Fable-only limit) is shown.
 let showModelWeekly = localStorage.getItem("showModelWeekly") !== "0";
+// Meter direction: false (default) drains a full bar as the allowance is
+// spent; true fills an empty bar instead.
+let meterFillsUp = localStorage.getItem("meterFillsUp") === "1";
 let notifyError = null; // provider whose toggle failed to save, if any
 let updateState = null; // updater status + version, pushed from Rust on change
 let updateError = null; // error from the last update toggle, if any
@@ -79,17 +82,25 @@ function refreshIcon(px = 14, stroke = 1.9) {
 
 // ---------- meters ----------
 // One bar with its text inside: label + headline on the left, reset time on
-// the right. The fill shows what's left and drains toward empty.
-function meterBar(cls, leftPct, leftHtml, rightHtml, tip, attrs = "") {
+// the right.
+//
+// Every meter is driven by the *used* percent, so the warn colouring is the
+// same reading in both fill directions; only the width and the headline flip.
+// Draining (the default) reads as "fuel left"; filling reads as "how much of
+// the allowance is gone".
+function meterBar(cls, usedPct, leftHtml, rightHtml, tip, attrs = "") {
+  const used = Math.min(100, Math.max(0, usedPct));
+  const fill = meterFillsUp ? used : 100 - used;
   return `
     <div class="bgauge ${cls}" title="${tip}" ${attrs}>
-      <div class="bfill" style="width:${Math.min(100, Math.max(0, leftPct))}%"></div>
+      <div class="bfill" style="width:${fill}%"></div>
       <div class="btxt"><span class="bl">${leftHtml}</span><span class="rr">${rightHtml}</span></div>
     </div>`;
 }
 
-// usedPercent 0..100; we display the remaining "left", and the bar drains to
-// match it. The exact used figure lives in the tooltip.
+// usedPercent 0..100. The headline follows the fill direction so the number
+// and the bar always describe the same thing; the other figure is in the
+// tooltip either way.
 function gauge(label, g, opts = {}) {
   if (!g) return "";
   const usedPercent = Math.min(100, Math.max(0, Number(g.used_percent) || 0));
@@ -99,13 +110,10 @@ function gauge(label, g, opts = {}) {
   const tip = `${usedPercent.toFixed(0)}% used · ${left}% left${
     g.resets_in ? ` · resets in ${esc(g.resets_in)}` : ""
   }`;
-  return meterBar(
-    cls,
-    100 - usedPercent,
-    `${esc(label)} <b>${left}%</b><span class="sub"> left</span>`,
-    resetText(g),
-    tip
-  );
+  const headline = meterFillsUp
+    ? `<b>${usedPercent.toFixed(0)}%</b><span class="sub"> used</span>`
+    : `<b>${left}%</b><span class="sub"> left</span>`;
+  return meterBar(cls, usedPercent, `${esc(label)} ${headline}`, resetText(g), tip);
 }
 
 // ---------- usage credits ----------
@@ -139,10 +147,11 @@ function creditsBar(a, opts = {}) {
     .join(" ").trim();
   const tip = `${usd(used)} of the ${usd(cap)} monthly cap spent`;
   const right = `${usedPct.toFixed(0)}% used${opts.link ? ` <span class="go">›</span>` : ""}`;
+  const amount = meterFillsUp ? used : Math.max(0, cap - used);
   return meterBar(
     cls,
-    100 - usedPct,
-    `${esc(opts.label || "Credits")} <b>${usd(Math.max(0, cap - used))}</b><span class="sub"> of ${usd(cap)}</span>`,
+    usedPct,
+    `${esc(opts.label || "Credits")} <b>${usd(amount)}</b><span class="sub"> of ${usd(cap)}</span>`,
     right,
     tip,
     opts.link ? "data-credits" : ""
@@ -518,10 +527,13 @@ function overviewCreditsBar(accounts) {
   );
   const usedPct = cap > 0 ? Math.min(100, (used / cap) * 100) : 0;
   const cls = ["credit", usedPct >= 80 ? "warn" : "", "link"].join(" ").trim();
+  const headline = meterFillsUp
+    ? `<b>${usd(used)}</b><span class="sub"> spent this month</span>`
+    : `<b>${usd(Math.max(0, cap - used))}</b><span class="sub"> left this month</span>`;
   return meterBar(
     cls,
-    100 - usedPct,
-    `Credits <b>${usd(Math.max(0, cap - used))}</b><span class="sub"> left this month</span>`,
+    usedPct,
+    `Credits ${headline}`,
     `${usedPct.toFixed(0)}% used <span class="go">›</span>`,
     `${usd(used)} of ${usd(cap)} across ${on.length} account${on.length > 1 ? "s" : ""}`,
     "data-credits"
@@ -713,8 +725,17 @@ function renderSettings() {
   }
 
   const scopes = scopedLimitNames(cl.accounts);
+  html += `<div class="grp-label">Display</div><div class="grp">`;
+  html += settingRow(
+    "Meters fill as you use",
+    meterFillsUp
+      ? "Bars start empty and grow with usage"
+      : "Bars start full and drain as you use",
+    "data-meter-fill",
+    meterFillsUp,
+    true
+  );
   if (scopes.length) {
-    html += `<div class="grp-label">Display</div><div class="grp">`;
     html += settingRow(
       "Scoped limits",
       `Show the ${scopes.join(" / ")} gauge`,
@@ -722,8 +743,8 @@ function renderSettings() {
       showModelWeekly,
       true
     );
-    html += `</div>`;
   }
+  html += `</div>`;
 
   const accounts = cl.accounts || [];
   html += `<div class="grp-label">Claude accounts</div>`;
@@ -875,6 +896,15 @@ function render() {
     input.addEventListener("change", () =>
       setNotifyEnabled(input.dataset.notifyProvider, input.checked)
     )
+  );
+  content.querySelectorAll("[data-meter-fill]").forEach((input) =>
+    input.addEventListener("change", () => {
+      meterFillsUp = input.checked;
+      try {
+        localStorage.setItem("meterFillsUp", input.checked ? "1" : "0");
+      } catch (_) {}
+      render();
+    })
   );
   content.querySelectorAll("[data-model-weekly]").forEach((input) =>
     input.addEventListener("change", () => {
