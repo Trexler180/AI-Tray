@@ -508,40 +508,17 @@ function renderOverview() {
       if (multi)
         html += `<div class="ov-acct">${esc(a.label)}
           ${healthBadge(a.health)}${a.active ? ` <span class="pill">active</span>` : ""}</div>`;
-      if (a.live) html += claudeGauges(a, "Session");
+      // Credits stay inside the account's own block: a combined bar appended
+      // after the loop reads as belonging to the last account listed.
+      if (a.live) html += claudeGauges(a, "Session") + creditsBar(a, { link: true });
       else html += `<div class="sec-sub">Live unavailable — open Claude Code</div>`;
     }
-    html += overviewCreditsBar(accounts);
   } else {
     html += `<div class="sec-sub">Live unavailable — open Claude Code</div>`;
   }
   html += `</div>`;
 
   return html;
-}
-
-// One combined credits meter across every account with credits switched on.
-function overviewCreditsBar(accounts) {
-  const on = accounts.filter(creditsActive);
-  if (!on.length) return "";
-  const cap = on.reduce((sum, a) => sum + a.extra_usage.monthly_limit, 0);
-  const used = on.reduce(
-    (sum, a) => sum + Math.min(a.extra_usage.monthly_limit, a.extra_usage.used_credits || 0),
-    0
-  );
-  const usedPct = cap > 0 ? Math.min(100, (used / cap) * 100) : 0;
-  const cls = ["credit", usedPct >= 80 ? "warn" : "", "link"].join(" ").trim();
-  const headline = meterFillsUp
-    ? `<b>${usd(used)}</b><span class="sub"> spent this month</span>`
-    : `<b>${usd(Math.max(0, cap - used))}</b><span class="sub"> left this month</span>`;
-  return meterBar(
-    cls,
-    usedPct,
-    `Credits ${headline}`,
-    `${usedPct.toFixed(0)}% used <span class="go">›</span>`,
-    `${usd(used)} of ${usd(cap)} across ${on.length} account${on.length > 1 ? "s" : ""}`,
-    "data-credits"
-  );
 }
 
 // ---------- Credits screen ----------
