@@ -91,9 +91,13 @@ function refreshIcon(px = 14, stroke = 1.9) {
 function meterBar(cls, usedPct, leftHtml, rightHtml, tip, attrs = "") {
   const used = Math.min(100, Math.max(0, usedPct));
   const fill = meterFillsUp ? used : 100 - used;
+  // Anything that rounds to 0% in the headline renders as a bare track: the
+  // fill's edge line would otherwise leave a 2px sliver reading as "nearly
+  // empty" when the meter is empty.
+  const empty = fill < 0.5;
   return `
     <div class="bgauge ${cls}" title="${tip}" ${attrs}>
-      <div class="bfill" style="width:${fill}%"></div>
+      <div class="bfill${empty ? " empty" : ""}" style="width:${empty ? 0 : fill}%"></div>
       <div class="btxt"><span class="bl">${leftHtml}</span><span class="rr">${rightHtml}</span></div>
     </div>`;
 }
