@@ -14,10 +14,10 @@
 
 use crate::auth;
 use crate::models::{DataHealth, DataSource, ExtraUsage, Gauge, ModelGauge, QuotaWindow};
-use crate::util::human_until;
+use crate::util::{codex_window_meta, codex_window_meta_by_slot, human_until};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -504,9 +504,8 @@ fn codex_window(node: &Value) -> Option<Gauge> {
 
 fn parse_codex(v: &Value) -> Option<CodexLive> {
     let rl = &v["rate_limit"];
-    let primary = codex_window(&rl["primary_window"]);
-    let secondary = codex_window(&rl["secondary_window"]);
     let mut quotas = Vec::new();
+    let mut used_ids = HashSet::new();
     if let Some(windows) = rl.as_object() {
         for (key, node) in windows {
             if !key.ends_with("_window") {
@@ -515,15 +514,15 @@ fn parse_codex(v: &Value) -> Option<CodexLive> {
             let Some(gauge) = codex_window(node) else {
                 continue;
             };
-            let (id, label, group) = match key.as_str() {
-                "primary_window" => ("session".to_string(), "Session (5h)".to_string(), "session"),
-                "secondary_window" => ("weekly".to_string(), "Weekly".to_string(), "weekly"),
-                _ => (
-                    key.trim_end_matches("_window").to_string(),
-                    key.trim_end_matches("_window").replace('_', " "),
-                    "other",
-                ),
-            };
+            let slot = key.trim_end_matches("_window");
+            // Named from the window's own length, not its slot: Codex moves
+            // limits between slots when it turns one on or off.
+            let (mut id, label, group) = codex_window_meta(gauge.window_minutes)
+                .unwrap_or_else(|| codex_window_meta_by_slot(slot));
+            if !used_ids.insert(id.clone()) {
+                id = format!("{id}:{slot}");
+                used_ids.insert(id.clone());
+            }
             quotas.push(QuotaWindow {
                 id,
                 label,
@@ -534,10 +533,16 @@ fn parse_codex(v: &Value) -> Option<CodexLive> {
             });
         }
     }
+    let by_group = |group: &str| {
+        quotas
+            .iter()
+            .find(|quota| quota.group == group)
+            .map(|quota| quota.gauge.clone())
+    };
     let live = CodexLive {
         plan_type: v["plan_type"].as_str().map(|s| s.to_string()),
-        primary,
-        secondary,
+        primary: by_group("session"),
+        secondary: by_group("weekly"),
         quotas,
     };
     (live.primary.is_some() || live.secondary.is_some() || !live.quotas.is_empty())
@@ -703,6 +708,75 @@ mod tests {
         )
         .unwrap();
         assert!(parse_claude(&v).unwrap().extra_usage.is_none());
+    }
+
+    /// Both windows on: named by their own lengths, not their slots.
+    #[test]
+    fn parses_both_codex_windows() {
+        let v: Value = serde_json::from_str(
+            r#"{"plan_type": "pro", "rate_limit": {
+                 "primary_window": {"used_percent": 12.0, "limit_window_seconds": 18000,
+                                    "reset_at": 1784077200},
+                 "secondary_window": {"used_percent": 44.0, "limit_window_seconds": 604800,
+                                      "reset_at": 1784592000}}}"#,
+        )
+        .unwrap();
+        let live = parse_codex(&v).expect("parses");
+        assert_eq!(live.quotas.len(), 2);
+        let labels: Vec<_> = live.quotas.iter().map(|q| q.label.as_str()).collect();
+        assert!(labels.contains(&"Session (5h)"));
+        assert!(labels.contains(&"Weekly"));
+        assert_eq!(live.primary.as_ref().unwrap().used_percent, 12.0);
+        assert_eq!(live.secondary.as_ref().unwrap().used_percent, 44.0);
+    }
+
+    /// The 5h limit switched off: the weekly window is the only one reported
+    /// and it arrives in the *primary* slot. It must still read "Weekly", and
+    /// must not leave a phantom session gauge behind.
+    #[test]
+    fn lone_weekly_window_in_the_primary_slot_is_labelled_weekly() {
+        let v: Value = serde_json::from_str(
+            r#"{"plan_type": "pro", "rate_limit": {
+                 "primary_window": {"used_percent": 61.0, "limit_window_seconds": 604800,
+                                    "reset_at": 1784592000},
+                 "secondary_window": null}}"#,
+        )
+        .unwrap();
+        let live = parse_codex(&v).expect("parses");
+        assert_eq!(live.quotas.len(), 1);
+        assert_eq!(live.quotas[0].id, "weekly");
+        assert_eq!(live.quotas[0].label, "Weekly");
+        assert_eq!(live.quotas[0].group, "weekly");
+        assert!(live.primary.is_none());
+        assert_eq!(live.secondary.as_ref().unwrap().used_percent, 61.0);
+    }
+
+    /// No duration reported: fall back to the slot, and don't invent an hour
+    /// count for the session bar.
+    #[test]
+    fn codex_window_without_a_duration_falls_back_to_its_slot() {
+        let v: Value = serde_json::from_str(
+            r#"{"rate_limit": {"primary_window": {"used_percent": 5.0, "reset_at": 1784077200}}}"#,
+        )
+        .unwrap();
+        let live = parse_codex(&v).expect("parses");
+        assert_eq!(live.quotas[0].label, "Session");
+        assert_eq!(live.quotas[0].group, "session");
+    }
+
+    /// Two windows of the same length would collide on one id, which alert
+    /// state and display prefs key off; the slot disambiguates them.
+    #[test]
+    fn same_length_codex_windows_keep_distinct_ids() {
+        let v: Value = serde_json::from_str(
+            r#"{"rate_limit": {
+                 "primary_window": {"used_percent": 1.0, "limit_window_seconds": 604800},
+                 "secondary_window": {"used_percent": 2.0, "limit_window_seconds": 604800}}}"#,
+        )
+        .unwrap();
+        let live = parse_codex(&v).expect("parses");
+        let ids: std::collections::HashSet<_> = live.quotas.iter().map(|q| &q.id).collect();
+        assert_eq!(ids.len(), 2);
     }
 
     #[test]

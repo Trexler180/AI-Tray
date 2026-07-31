@@ -53,9 +53,71 @@ pub fn human_until(resets_at: i64) -> String {
     }
 }
 
+/// Name a Codex rate-limit window from the duration it actually covers.
+///
+/// Codex reports its windows positionally (`primary_window`/`secondary_window`
+/// live, `primary`/`secondary` in the session logs) and which limits exist has
+/// changed over time — with the 5h session limit switched off, the weekly
+/// window is the only one reported and arrives in the *primary* slot. Naming
+/// from the reported length keeps the bar honest in either arrangement.
+///
+/// Returns `(id, label, group)`, or `None` when the response carries no usable
+/// duration and the caller has to fall back to position.
+pub fn codex_window_meta(window_minutes: i64) -> Option<(String, String, &'static str)> {
+    if window_minutes <= 0 {
+        return None;
+    }
+    // Anything under a day is the short rolling window users call the
+    // "session" limit, whatever length Codex currently sets it to.
+    if window_minutes < 1_440 {
+        let label = if window_minutes % 60 == 0 {
+            format!("Session ({}h)", window_minutes / 60)
+        } else {
+            format!("Session ({window_minutes}m)")
+        };
+        return Some(("session".to_string(), label, "session"));
+    }
+    let days = window_minutes / 1_440;
+    Some(match days {
+        1 => ("daily".to_string(), "Daily".to_string(), "daily"),
+        6..=8 => ("weekly".to_string(), "Weekly".to_string(), "weekly"),
+        28..=31 => ("monthly".to_string(), "Monthly".to_string(), "monthly"),
+        n => (format!("window_{n}d"), format!("{n}-day limit"), "other"),
+    })
+}
+
+/// Fallback naming for a Codex window whose duration the response omitted,
+/// derived from its slot name (`primary`, `secondary`, or anything newer).
+/// The session label carries no hour count here because it isn't known.
+pub fn codex_window_meta_by_slot(slot: &str) -> (String, String, &'static str) {
+    match slot {
+        "primary" => ("session".to_string(), "Session".to_string(), "session"),
+        "secondary" => ("weekly".to_string(), "Weekly".to_string(), "weekly"),
+        other => (other.to_string(), other.replace('_', " "), "other"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_windows_are_named_by_duration_not_slot() {
+        assert_eq!(codex_window_meta(300).unwrap().1, "Session (5h)");
+        assert_eq!(codex_window_meta(180).unwrap().1, "Session (3h)");
+        assert_eq!(codex_window_meta(10_080).unwrap().0, "weekly");
+        assert_eq!(codex_window_meta(10_080).unwrap().1, "Weekly");
+        assert_eq!(codex_window_meta(43_200).unwrap().1, "Monthly");
+        assert_eq!(codex_window_meta(0), None);
+        // A length nobody has shipped yet still gets a truthful label.
+        assert_eq!(codex_window_meta(3 * 1_440).unwrap().1, "3-day limit");
+    }
+
+    #[test]
+    fn slot_fallback_drops_the_unknown_hour_count() {
+        assert_eq!(codex_window_meta_by_slot("primary").1, "Session");
+        assert_eq!(codex_window_meta_by_slot("secondary").1, "Weekly");
+    }
 
     #[test]
     fn human_until_past_is_now() {

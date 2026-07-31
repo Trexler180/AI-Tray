@@ -348,7 +348,9 @@ function renderCodex() {
   if ((c.quotas || []).length) {
     for (const quota of c.quotas) html += gauge(quota.label, quota.gauge);
   } else {
-    html += gauge("Session (5h)", c.primary);
+    // No quota list means no reported window length, so the session label
+    // can't name its own hours here.
+    html += gauge("Session", c.primary);
     html += gauge("Weekly", c.secondary);
   }
   if (!c.live)

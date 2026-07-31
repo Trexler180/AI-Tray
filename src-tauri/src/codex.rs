@@ -1,6 +1,8 @@
-use crate::models::{CodexUsage, DataHealth, DataSource, EstimateConfidence, Gauge, ModelUsage};
+use crate::models::{
+    CodexUsage, DataHealth, DataSource, EstimateConfidence, Gauge, ModelUsage, QuotaWindow,
+};
 use crate::pricing;
-use crate::util::{human_until, today_str};
+use crate::util::{codex_window_meta, codex_window_meta_by_slot, human_until, today_str};
 use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -149,6 +151,44 @@ fn gauge_from(window: &Value) -> Option<Gauge> {
         resets_at,
         resets_in: resets_at.map(human_until),
     })
+}
+
+/// The `rate_limits` block a session log carries, turned into named windows.
+/// Same duration-first naming as the live endpoint, so an offline tab labels
+/// the bars exactly as an online one does.
+fn quotas_from_limits(limits: &Value) -> Vec<QuotaWindow> {
+    let Some(entries) = limits.as_object() else {
+        return Vec::new();
+    };
+    let mut quotas = Vec::new();
+    let mut used_ids = HashSet::new();
+    for (slot, node) in entries {
+        let Some(gauge) = gauge_from(node) else {
+            continue;
+        };
+        let (mut id, label, group) = codex_window_meta(gauge.window_minutes)
+            .unwrap_or_else(|| codex_window_meta_by_slot(slot));
+        if !used_ids.insert(id.clone()) {
+            id = format!("{id}:{slot}");
+            used_ids.insert(id.clone());
+        }
+        quotas.push(QuotaWindow {
+            id,
+            label,
+            kind: slot.clone(),
+            group: group.to_string(),
+            gauge,
+            ..Default::default()
+        });
+    }
+    quotas
+}
+
+fn gauge_for_group(quotas: &[QuotaWindow], group: &str) -> Option<Gauge> {
+    quotas
+        .iter()
+        .find(|quota| quota.group == group)
+        .map(|quota| quota.gauge.clone())
 }
 
 fn scan_file(candidate: &Candidate, existing: Option<FileRecord>) -> std::io::Result<FileRecord> {
@@ -314,8 +354,9 @@ fn collect_from_root(root: &Path, persist: bool) -> CodexUsage {
         usage.plan_type = latest.plan_type.clone();
         usage.updated_at = latest.last_ts;
         if let Some(limits) = &latest.rate_limits {
-            usage.primary = gauge_from(&limits["primary"]);
-            usage.secondary = gauge_from(&limits["secondary"]);
+            usage.quotas = quotas_from_limits(limits);
+            usage.primary = gauge_for_group(&usage.quotas, "session");
+            usage.secondary = gauge_for_group(&usage.quotas, "weekly");
             usage.credits = limits["credits"].as_f64();
         }
     }
@@ -416,6 +457,36 @@ mod tests {
         assert_eq!(used_days.len(), 2);
         assert_ne!(used_days[0].date, used_days[1].date);
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// The offline path names its windows by duration too, so the tab reads
+    /// the same whether or not the live endpoint answered.
+    #[test]
+    fn log_rate_limits_are_named_by_duration() {
+        let limits = serde_json::json!({
+            "primary": {"used_percent": 10.0, "window_minutes": 300, "resets_at": 1_784_077_200i64},
+            "secondary": {"used_percent": 20.0, "window_minutes": 10_080, "resets_at": 1_784_592_000i64},
+            "plan_type": "pro",
+        });
+        let quotas = quotas_from_limits(&limits);
+        assert_eq!(quotas.len(), 2, "plan_type is not a window");
+        assert_eq!(
+            gauge_for_group(&quotas, "session").unwrap().used_percent,
+            10.0
+        );
+        assert_eq!(
+            gauge_for_group(&quotas, "weekly").unwrap().used_percent,
+            20.0
+        );
+
+        // 5h limit off: the weekly window sits in the primary slot alone.
+        let limits = serde_json::json!({
+            "primary": {"used_percent": 61.0, "window_minutes": 10_080, "resets_at": 1_784_592_000i64},
+        });
+        let quotas = quotas_from_limits(&limits);
+        assert_eq!(quotas.len(), 1);
+        assert_eq!(quotas[0].label, "Weekly");
+        assert!(gauge_for_group(&quotas, "session").is_none());
     }
 
     #[test]

@@ -155,12 +155,11 @@ pub(crate) fn collect_usage_sync() -> Usage {
         if l.plan_type.is_some() {
             codex.plan_type = l.plan_type;
         }
-        if l.primary.is_some() {
-            codex.primary = l.primary;
-        }
-        if l.secondary.is_some() {
-            codex.secondary = l.secondary;
-        }
+        // Replaced wholesale, gaps included: which windows Codex enforces
+        // changes over time, and a log-derived window the endpoint no longer
+        // reports is a limit that no longer exists.
+        codex.primary = l.primary;
+        codex.secondary = l.secondary;
         codex.quotas = l.quotas;
     }
     // Reset credits come from a separate live endpoint. Having reachable credit
