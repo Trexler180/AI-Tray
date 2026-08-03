@@ -26,7 +26,7 @@ const POLL_INTERVAL_SECS: i64 = 300;
 const TICK: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-enum Provider {
+pub(crate) enum Provider {
     Codex,
     Claude,
 }
@@ -38,24 +38,43 @@ impl Provider {
             Provider::Claude => "Claude",
         }
     }
+
+    /// Stable identifier for anything persisted or sent to the frontend, where
+    /// the display title must be free to change.
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Provider::Codex => "codex",
+            Provider::Claude => "claude",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct WindowKey {
-    provider: Provider,
-    window: String,
+pub(crate) struct WindowKey {
+    pub(crate) provider: Provider,
+    pub(crate) window: String,
     /// Per-account discriminator: the Claude account id (its config-dir path),
     /// empty for Codex. Keeps each account's exhaustion/warn state independent.
-    account: String,
+    pub(crate) account: String,
 }
 
-struct WindowSnapshot<'a> {
-    key: WindowKey,
+/// One live quota window in a snapshot. Shared with the timeline recorder so
+/// that a window kind added in `live.rs` reaches alerts and history together.
+pub(crate) struct WindowSnapshot<'a> {
+    pub(crate) key: WindowKey,
     /// Provider-level display name for notifications, e.g. "Claude · Work"
     /// when more than one Claude account is signed in, else just "Claude".
     name: String,
+    /// Lowercased for notification sentences ("weekly limit almost used up").
     label: String,
-    gauge: &'a Gauge,
+    /// The provider's own capitalisation, for anything that shows the window as
+    /// a heading rather than mid-sentence.
+    pub(crate) display_label: String,
+    /// "session" / "weekly" / … — the grouping `live.rs` assigns.
+    pub(crate) group: String,
+    /// Account label on its own, without the provider prefix `name` carries.
+    pub(crate) account_label: String,
+    pub(crate) gauge: &'a Gauge,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -170,6 +189,9 @@ impl AlertState {
     }
 
     pub fn observe_usage(&self, app: &AppHandle, usage: &Usage, generation: u64) {
+        // Independent of the notification settings: the timeline needs the
+        // record whether or not this user wants to be told about limits.
+        crate::windows_history::record(usage);
         for (title, body) in self.notification_events(usage, generation) {
             send_notification(app, &title, &body);
         }
@@ -422,7 +444,7 @@ fn send_notification(app: &AppHandle, title: &str, body: &str) {
     }
 }
 
-fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
+pub(crate) fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
     let mut out = Vec::new();
     if usage.codex.live {
         let name = Provider::Codex.title();
@@ -436,6 +458,9 @@ fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
                     },
                     name: name.to_string(),
                     label: quota.label.to_ascii_lowercase(),
+                    display_label: quota.label.clone(),
+                    group: quota.group.clone(),
+                    account_label: name.to_string(),
                     gauge: &quota.gauge,
                 });
             }
@@ -448,6 +473,9 @@ fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
                 },
                 name: name.to_string(),
                 label: "session".to_string(),
+                display_label: "Session".to_string(),
+                group: "session".to_string(),
+                account_label: name.to_string(),
                 gauge,
             });
         }
@@ -461,6 +489,9 @@ fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
                 },
                 name: name.to_string(),
                 label: "weekly".to_string(),
+                display_label: "Weekly".to_string(),
+                group: "weekly".to_string(),
+                account_label: name.to_string(),
                 gauge,
             });
             }
@@ -487,6 +518,9 @@ fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
                     },
                     name: name.clone(),
                     label: quota.label.to_ascii_lowercase(),
+                    display_label: quota.label.clone(),
+                    group: quota.group.clone(),
+                    account_label: acct.label.clone(),
                     gauge: &quota.gauge,
                 });
             }
@@ -501,6 +535,9 @@ fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
                 },
                 name: name.clone(),
                 label: "session".to_string(),
+                display_label: "Session".to_string(),
+                group: "session".to_string(),
+                account_label: acct.label.clone(),
                 gauge,
             });
         }
@@ -513,6 +550,9 @@ fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
                 },
                 name: name.clone(),
                 label: "weekly".to_string(),
+                display_label: "Weekly".to_string(),
+                group: "weekly".to_string(),
+                account_label: acct.label.clone(),
                 gauge,
             });
         }
@@ -527,6 +567,9 @@ fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
                 },
                 name,
                 label: format!("{} weekly", mg.model),
+                display_label: format!("Weekly ({})", mg.model),
+                group: "weekly".to_string(),
+                account_label: acct.label.clone(),
                 gauge: &mg.gauge,
             });
         }

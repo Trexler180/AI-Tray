@@ -8,6 +8,17 @@ and an API-equivalent value estimate in a compact popover.
   model-aware local token history.
 - **Claude** — live account and scoped quota windows plus model-aware local
   Claude Code history. Multiple Claude config directories are supported.
+- **Windows** — a timeline of every quota window: bar length is the window's
+  span, the fill is what was spent inside it, and a notch marks now, so a fill
+  running ahead of the notch means the allowance is going faster than the
+  window refills it. **Today** is an hour axis where five-hour windows are
+  full-size bars — finished ones dim, the live one bright, the next dashed.
+  **Week** and **2 weeks** start on the day the earliest window in view opened,
+  so a weekly bar shows both where it began and where it resets, with the window
+  after it dashed alongside. Week sizes itself to the windows you are currently
+  in rather than to a literal seven days, which could not hold a seven-day
+  window and its start at once. `⤢` widens the panel to a full-width version
+  that stays open until you close it.
 - **Credits** — a dedicated screen (opened from the violet meter on any tab)
   with each account's usage-credit spend, monthly cap, and whether "use
   credits past plan limits" is switched on, plus the Codex credit balance.
@@ -80,10 +91,34 @@ To rebuild the indexes, expand either local-history Data health row and choose
 logs, credentials, settings, and provider data are untouched. The subsequent
 refresh rebuilds them.
 
+## Recorded quota windows
+
+The usage endpoints only describe the window that is live right now, so the
+Windows timeline would have nothing to draw behind "now". Every refresh
+therefore samples each live window into a third cache:
+
+```text
+%APPDATA%\AI Usage Tray\windows-history-cache.json
+```
+
+Each entry is a window occurrence — when it started, when it resets, and the
+percentages observed while it ran. Readings are stored when the number moves or
+every fifteen minutes, occurrences older than fifteen days are dropped, and
+recording does not depend on the notification settings.
+
+Nothing is back-filled. A window that closed before the app was watching stays
+absent rather than being drawn as idle: the day view draws those stretches
+hollow and says how far back the record goes. Unlike the log indexes this
+cannot be rebuilt, which is why
+**Settings → Data sources → Quota window history** reports how much exists
+before offering to clear it.
+
 ## Behavior
 
 - Left-click the tray icon to toggle the panel; it auto-hides on blur and is
-  clamped to the monitor work area.
+  clamped to the monitor work area. The expanded timeline is the exception —
+  it stays open until you collapse it (`⤢`, Esc, or the tray icon), so it can be
+  read alongside other windows.
 - Right-click the tray icon for Refresh or Quit.
 - The panel refreshes when opened and every 60 seconds while visible.
 - When notifications are enabled, a lightweight background refresh checks

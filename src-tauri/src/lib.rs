@@ -10,10 +10,12 @@ mod pricing;
 mod resets;
 mod updates;
 mod util;
+mod windows_history;
 
 use alerts::{AlertState, NotificationSettings};
 use updates::{UpdateSettings, UpdateSnapshot, UpdateState};
 use models::{ClaudeAccountUsage, Usage};
+use windows_history::WindowHistory;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -37,16 +39,37 @@ struct Glass(AtomicBool);
 /// the app alive in the tray).
 struct Quitting(AtomicBool);
 
+/// True while the timeline is showing its wide layout. The panel is a popover
+/// everywhere else, so this flag is what suspends the popover behaviours:
+/// auto-hide on blur and the height auto-fit that owns the compact width.
+struct Expanded(AtomicBool);
+
 #[tauri::command]
 fn glass_enabled(state: tauri::State<'_, Glass>) -> bool {
     state.0.load(Ordering::Relaxed)
 }
 
+/// Compact popover width. Also the width the panel returns to when the
+/// timeline collapses.
+const WIDTH: f64 = 380.0;
+/// Preferred size of the expanded timeline, before the work area clamps it.
+const EXPANDED_WIDTH: f64 = 940.0;
+const EXPANDED_HEIGHT: f64 = 580.0;
+
 #[tauri::command]
-fn fit_window_height(window: tauri::WebviewWindow, height: f64) {
-    const WIDTH: f64 = 380.0;
+fn fit_window_height(
+    window: tauri::WebviewWindow,
+    expanded: tauri::State<'_, Expanded>,
+    height: f64,
+) {
     const MIN_HEIGHT: f64 = 420.0;
     const MAX_HEIGHT: f64 = 640.0;
+
+    // The expanded timeline sets its own size; letting the content fit run
+    // would immediately snap the panel back to popover width.
+    if expanded.0.load(Ordering::Relaxed) {
+        return;
+    }
 
     let next_height = height.clamp(MIN_HEIGHT, MAX_HEIGHT).round();
     let scale = window.scale_factor().unwrap_or(1.0);
@@ -61,6 +84,50 @@ fn fit_window_height(window: tauri::WebviewWindow, height: f64) {
         if delta != 0 {
             let _ = window.set_position(PhysicalPosition::new(pos.x, pos.y + delta));
         }
+    }
+}
+
+/// Grow the panel to the timeline's wide layout, or put it back. The expanded
+/// size is clamped to the monitor's work area, and `position_window` then pulls
+/// the wider panel back inside it — a popover anchored near the tray would
+/// otherwise hang off the screen edge once it triples in width.
+#[tauri::command]
+fn set_panel_expanded(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Expanded>,
+    expanded: bool,
+) {
+    if state.0.swap(expanded, Ordering::Relaxed) == expanded {
+        return;
+    }
+    if !expanded {
+        // Height is left to the frontend's next fit_window_height call, which
+        // knows how tall the compact content actually is.
+        let _ = window.set_size(Size::Logical(LogicalSize::new(WIDTH, EXPANDED_HEIGHT)));
+        position_window(&window, None);
+        return;
+    }
+
+    let (mut width, mut height) = (EXPANDED_WIDTH, EXPANDED_HEIGHT);
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        let scale = monitor.scale_factor();
+        let area = monitor.work_area();
+        width = width.min(area.size.width as f64 / scale - 24.0);
+        height = height.min(area.size.height as f64 / scale - 24.0);
+    }
+    let _ = window.set_size(Size::Logical(LogicalSize::new(width, height)));
+    position_window(&window, None);
+}
+
+/// Drop the expanded layout when the panel goes away, so the next tray click
+/// opens the familiar popover rather than a full-width window.
+fn collapse_panel(app: &tauri::AppHandle) {
+    if !app.state::<Expanded>().0.swap(false, Ordering::Relaxed) {
+        return;
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_size(Size::Logical(LogicalSize::new(WIDTH, EXPANDED_HEIGHT)));
+        let _ = window.emit("collapse", ());
     }
 }
 
@@ -330,6 +397,20 @@ fn clear_history_cache() -> Result<(), String> {
     claude::clear_history_cache().map_err(|error| error.to_string())
 }
 
+/// Every quota window the app has recorded, for the timeline screen.
+#[tauri::command]
+fn get_window_history() -> WindowHistory {
+    windows_history::history()
+}
+
+/// Forget the recorded windows. Unlike the log indexes this can't be rebuilt —
+/// the providers only report the window that is live now — so the timeline
+/// starts over from this moment.
+#[tauri::command]
+fn clear_window_history() -> Result<(), String> {
+    windows_history::clear().map_err(|error| error.to_string())
+}
+
 /// Place the popover near the tray click, or at the bottom-right of the
 /// current monitor when no click position is known. The panel is always
 /// clamped into the monitor's work area (the screen minus the taskbar), so a
@@ -368,6 +449,7 @@ fn toggle_window(app: &tauri::AppHandle, click: Option<PhysicalPosition<f64>>) {
         return;
     };
     if window.is_visible().unwrap_or(false) {
+        collapse_panel(app);
         let _ = window.hide();
         return;
     }
@@ -403,6 +485,7 @@ pub fn run() {
         .manage(HideGuard(Mutex::new(None)))
         .manage(Glass(AtomicBool::new(false)))
         .manage(Quitting(AtomicBool::new(false)))
+        .manage(Expanded(AtomicBool::new(false)))
         .invoke_handler(tauri::generate_handler![
             get_usage,
             get_cached_usage,
@@ -415,6 +498,9 @@ pub fn run() {
             remove_claude_directory,
             consume_codex_reset,
             clear_history_cache,
+            get_window_history,
+            clear_window_history,
+            set_panel_expanded,
             get_update_state,
             set_update_setting,
             check_for_updates_now,
@@ -518,6 +604,11 @@ pub fn run() {
                 let handle = app.handle().clone();
                 window.on_window_event(move |event| {
                     if let WindowEvent::Focused(false) = event {
+                        // The expanded timeline is meant to be read alongside
+                        // other windows, so it stays put until it's closed.
+                        if handle.state::<Expanded>().0.load(Ordering::Relaxed) {
+                            return;
+                        }
                         *handle.state::<HideGuard>().0.lock().unwrap() = Some(Instant::now());
                         let _ = w.hide();
                     }

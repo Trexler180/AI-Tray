@@ -71,10 +71,12 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 5px 6px;
+  gap: 5px;
+  padding: 5px 4px;
   font: inherit;
-  font-size: 12px;
+  /* Four named tabs share 380px, so the label sits a shade smaller than the
+     three-tab layout allowed. */
+  font-size: 11.5px;
   font-weight: 600;
   color: var(--muted);
   background: transparent;
@@ -103,12 +105,13 @@ body {
   background: rgba(240, 163, 106, 0.18);
 }
 .tab.active[data-tab="overview"],
+.tab.active[data-tab="windows"],
 .tab.active[data-tab="settings"] {
   background: rgba(255, 255, 255, 0.1);
 }
-/* Icon-only, so the three named tabs keep their width. */
+/* Icon-only, so the named tabs keep their width. */
 .tab.gear {
-  flex: 0 0 40px;
+  flex: 0 0 34px;
 }
 
 /* ---- Content ---- */
@@ -973,4 +976,544 @@ body {
 .reset-confirm .acct-btn.save:hover {
   color: var(--codex);
   border-color: var(--codex-2);
+}
+
+/* ---- Quota windows (timeline) ----
+   Everything here is drawn on a time axis: horizontal position is when, bar
+   length is how long a window lasts, and the fill inside it is how much of the
+   allowance went. The dashed notch marks now *inside* a window; the solid line
+   marks now on the axis itself. Colours are the provider colours the meters
+   already use, so a red bar means the same thing in both places. */
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--codex);
+}
+.dot.claude {
+  background: var(--claude);
+}
+.pill.tiny {
+  font-size: 9.5px;
+  padding: 1px 6px;
+}
+.pill.hot {
+  color: var(--danger);
+  border-color: rgba(239, 107, 107, 0.4);
+}
+.pill.warm {
+  color: var(--warn);
+  border-color: rgba(223, 160, 95, 0.4);
+}
+/* Expand / collapse, sized like the header's refresh button. */
+.hd-expand {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  background: transparent;
+  border: none;
+  border-radius: 7px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.hd-expand:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+/* Range switch, compact form. */
+.tsegs {
+  display: flex;
+  gap: 3px;
+  padding: 2px;
+  margin-bottom: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+}
+.tsegs button {
+  flex: 1;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.tsegs button:hover {
+  color: var(--text);
+}
+.tsegs button.on {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Compact rows. The 20px gutter carries the window length ("5h", "7d") so the
+   plot itself keeps the full width for time. */
+.tw-axis {
+  display: flex;
+  margin-left: 26px;
+  font-size: 9px;
+  letter-spacing: 0.3px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.tw-axis span {
+  flex: 1 1 0;
+}
+.tw-axis span.on {
+  color: var(--text);
+  font-weight: 700;
+}
+.tw-cred {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 5px;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+.tw-cred .nm {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.tw-cred .rt {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.tw-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.tw-row .k {
+  width: 20px;
+  flex: 0 0 20px;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--faint);
+}
+.tw-plot {
+  position: relative;
+  flex: 1 1 auto;
+  height: 20px;
+  border-radius: 3px;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.05) 0 1px,
+    transparent 1px var(--col)
+  );
+}
+.tw-plot.tall {
+  height: 26px;
+}
+.tw-seg {
+  position: absolute;
+  top: 3px;
+  height: 14px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.07);
+}
+.tw-seg .f {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, rgba(14, 165, 163, 0.6), rgba(45, 226, 203, 0.75));
+}
+.tw-seg.claude .f {
+  background: linear-gradient(90deg, rgba(219, 127, 77, 0.6), rgba(248, 168, 106, 0.75));
+}
+.tw-seg.warn .f {
+  background: linear-gradient(90deg, rgba(214, 62, 62, 0.6), rgba(244, 110, 110, 0.75));
+}
+/* A window that has closed keeps its final figure but steps back visually. */
+.tw-seg.done {
+  opacity: 0.55;
+}
+.tw-seg .n {
+  position: absolute;
+  left: 5px;
+  top: 0;
+  line-height: 14px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+}
+/* Dashed: either a window still to come, or one the app wasn't running for. */
+.tw-ghost {
+  position: absolute;
+  top: 3px;
+  height: 14px;
+  border-radius: 999px;
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+}
+.tw-ghost.unrecorded {
+  border-style: dotted;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+.tw-band {
+  position: absolute;
+  inset: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.tw-band-txt {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 9.5px;
+  color: var(--faint);
+}
+.tw-burn {
+  position: absolute;
+  bottom: 3px;
+  border-radius: 1px 1px 0 0;
+  background: linear-gradient(180deg, rgba(45, 226, 203, 0.8), rgba(14, 165, 163, 0.4));
+}
+.tw-burn.claude {
+  background: linear-gradient(180deg, rgba(248, 168, 106, 0.8), rgba(219, 127, 77, 0.4));
+}
+.tw-now {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.45);
+  pointer-events: none;
+}
+.tw-chip {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(12, 15, 21, 0.85);
+  font-size: 9.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.tw-chip b {
+  color: var(--text);
+}
+/* ---- Expanded timeline ----
+   Same drawing at a size where a fortnight of windows is readable. The panel
+   widens for it (see set_panel_expanded in lib.rs), so these rules only apply
+   while .panel.expanded is on. */
+.panel.expanded .content {
+  padding: 16px 18px 18px;
+  overflow: auto;
+}
+.wide-hd {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.wide-hd h2 {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+.wide-sub {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.segs {
+  margin-left: auto;
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+}
+.segs button {
+  padding: 5px 14px;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.segs button:hover {
+  color: var(--text);
+}
+.segs button.on {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+.gantt {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.gantt-hd {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+}
+.gantt .cred-col {
+  width: 216px;
+  flex: 0 0 216px;
+  padding: 12px 14px;
+}
+.gantt-hd .cred-col {
+  align-self: center;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--faint);
+}
+.gantt-hd .cols {
+  flex: 1 1 auto;
+  display: flex;
+}
+.gantt-hd .col {
+  flex: 1 1 0;
+  padding: 8px 0 10px;
+  text-align: center;
+  border-left: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+.gantt-hd .col .c1 {
+  font-size: 10px;
+  color: var(--faint);
+}
+.gantt-hd .col .c2 {
+  margin-top: 2px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.gantt-hd .col.on .c1,
+.gantt-hd .col.on .c2 {
+  color: #fff;
+}
+.grow {
+  display: flex;
+  border-top: 1px solid var(--border);
+}
+.grow.first {
+  border-top: 1px solid var(--border-strong);
+}
+.grow:first-child {
+  border-top: none;
+}
+/* Continuation rows: the credential is named once, above. */
+.grow.sub .cred-col {
+  padding-left: 28px;
+}
+.cred-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.cred-line .nm {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cred-sub {
+  margin-top: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.cred-sub b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.kind {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.kmeta {
+  margin-top: 5px;
+  font-size: 10px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.kmeta b {
+  color: var(--muted);
+  font-weight: 600;
+}
+.gantt .plot {
+  position: relative;
+  flex: 1 1 auto;
+  background: repeating-linear-gradient(90deg, var(--border) 0 1px, transparent 1px var(--col));
+}
+.gantt .nowline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.42);
+  pointer-events: none;
+  z-index: 3;
+}
+.gantt .bar {
+  position: absolute;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.08);
+}
+.gantt .bar .bf {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, rgba(14, 165, 163, 0.6), rgba(45, 226, 203, 0.72));
+}
+.gantt .bar.claude .bf {
+  background: linear-gradient(90deg, rgba(219, 127, 77, 0.6), rgba(248, 168, 106, 0.72));
+}
+.gantt .bar.warn .bf {
+  background: linear-gradient(90deg, rgba(214, 62, 62, 0.6), rgba(244, 110, 110, 0.75));
+}
+.gantt .bar.done {
+  background: rgba(255, 255, 255, 0.05);
+}
+.gantt .bar.done .bf {
+  opacity: 0.45;
+}
+.gantt .bar .bt {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+.gantt .bar.done .bt {
+  color: var(--muted);
+  font-weight: 500;
+}
+.gantt .bar .notch {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px dashed rgba(255, 255, 255, 0.5);
+}
+/* Squared end + chevron where a window runs past the visible range. */
+.gantt .clipL {
+  border-top-left-radius: 3px;
+  border-bottom-left-radius: 3px;
+}
+.gantt .clipR {
+  border-top-right-radius: 3px;
+  border-bottom-right-radius: 3px;
+}
+.gantt .chev {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+  z-index: 2;
+}
+.gantt .chev.l {
+  left: 4px;
+}
+.gantt .chev.r {
+  right: 4px;
+}
+.gantt .ghost {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+}
+.gantt .ghost.unrecorded {
+  border-style: dotted;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+.gantt .dens-base {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.gantt .burn {
+  position: absolute;
+  bottom: 12px;
+  border-radius: 2px 2px 0 0;
+  background: linear-gradient(180deg, rgba(45, 226, 203, 0.75), rgba(14, 165, 163, 0.45));
+}
+.gantt .burn.claude {
+  background: linear-gradient(180deg, rgba(248, 168, 106, 0.75), rgba(219, 127, 77, 0.45));
+}
+.wide-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+  margin-top: 12px;
+  font-size: 10.5px;
+  color: var(--faint);
+}
+.wide-legend i {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-style: normal;
+}
+.wide-legend .key {
+  display: inline-block;
+  width: 22px;
+  height: 9px;
+  border-radius: 999px;
+}
+.wide-legend .key.used {
+  background: linear-gradient(90deg, rgba(14, 165, 163, 0.6), rgba(45, 226, 203, 0.72));
+}
+.wide-legend .key.span {
+  background: rgba(255, 255, 255, 0.1);
+}
+.wide-legend .key.next {
+  height: 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.28);
 }

@@ -23,6 +23,9 @@ let addFolderDraft = ""; // in-progress folder path, kept across background re-r
 let addFolderError = null; // error from the last add attempt, if any
 let addFolderFocusPending = false; // focus the add-folder input once when opened
 const expandedHealth = new Set(); // diagnostic rows currently expanded (Settings)
+let windowHistory = null; // recorded quota windows, from the Rust recorder
+let windowRange = localStorage.getItem("windowRange") || "day"; // day | week | two
+let panelExpanded = false; // timeline showing its wide layout in a widened panel
 
 // ---------- formatting helpers ----------
 const usd = (n) => "$" + (Number.isFinite(n) ? n : 0).toFixed(2);
@@ -224,9 +227,12 @@ function healthBadge(health, opts = {}) {
 function header(title, extras = "", opts = {}) {
   const stamp = data?.generated_at ? clockTime(data.generated_at) : "—";
   const busy = spinning() ? " busy" : "";
+  // `rightExtra` sits with the timestamp and refresh rather than beside the
+  // title, for controls that act on the panel itself (the timeline's expand).
+  const lead = opts.rightExtra || "";
   const right = opts.hideRefresh
-    ? `<span class="hd-right"><span>${esc(opts.rightText || "")}</span></span>`
-    : `<span class="hd-right"><span title="Last updated">${esc(stamp)}</span>
+    ? `<span class="hd-right">${lead}<span>${esc(opts.rightText || "")}</span></span>`
+    : `<span class="hd-right">${lead}<span title="Last updated">${esc(stamp)}</span>
         <button class="hd-refresh${busy}" id="refreshBtn" title="Refresh"
           aria-label="Refresh">${refreshIcon()}</button></span>`;
   return `<div class="hd"><span class="hd-title">${esc(title)}</span>${extras}${right}</div>`;
@@ -582,6 +588,654 @@ function renderCredits() {
   return html;
 }
 
+// ---------- Quota windows (timeline) ----------
+// Every bar is a window in time: its length is the window's span (start →
+// reset), the fill is the quota spent inside it, and the notch marks now. Fill
+// running ahead of the notch means the allowance is going faster than the
+// window refills it — the reading a flat meter can't give.
+//
+// The range decides which windows can be drawn honestly. On the day axis a
+// 5-hour window is a full-size bar and a chain of them shows the shape of the
+// day; at week scale the same window is three pixels wide, so it drops to one
+// tick per window instead.
+
+const MINUTE = 60000;
+const HOUR = 3600000;
+const DAY = 86400000;
+// `fit` sizes the range to the windows themselves. A seven-day column count
+// can't hold a seven-day window *and* the day it started, so a literal week
+// would clip every reset off the right edge; "Week" instead means "the windows
+// you're currently in", which for weekly limits lands around 8–11 days.
+const RANGES = {
+  day: { label: "Today", days: 1, cols: 6 },
+  week: { label: "Week", fit: true, min: 7, max: 12 },
+  two: { label: "2 weeks", days: 14 },
+};
+/// Windows this short are "sessions": too brief to read at week scale.
+const SESSION_MAX_MS = 12 * HOUR;
+
+const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
+const clampPct = (n) => clamp(Number(n) || 0, 0, 100);
+const pad2 = (n) => String(n).padStart(2, "0");
+// 12-hour, matching the clock times the rest of the panel prints (clockTime).
+const hhmm = (ms) =>
+  new Date(ms)
+    .toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true })
+    .toLowerCase();
+// Axis ticks have no room for minutes that are always :00 — "8am", "12pm".
+const hourTick = (ms) => {
+  const hour = new Date(ms).getHours();
+  return `${((hour + 11) % 12) + 1}${hour < 12 ? "am" : "pm"}`;
+};
+const mmdd = (ms) => `${pad2(new Date(ms).getMonth() + 1)}/${pad2(new Date(ms).getDate())}`;
+const startOfDay = (ms) => new Date(ms).setHours(0, 0, 0, 0);
+const sameDay = (a, b) => startOfDay(a) === startOfDay(b);
+// Inside today the date adds nothing; past midnight it's the only thing that
+// disambiguates "resets 9:18 am".
+const whenText = (ms) => (sameDay(ms, Date.now()) ? hhmm(ms) : `${mmdd(ms)} ${hhmm(ms)}`);
+
+function durText(ms) {
+  const m = Math.max(0, Math.round(ms / MINUTE));
+  const d = Math.floor(m / 1440);
+  const h = Math.floor((m % 1440) / 60);
+  if (d) return `${d}d ${h}h`;
+  if (h) return `${h}h ${m % 60}m`;
+  return `${m}m`;
+}
+const pctText = (n) => (n >= 99.95 ? "100%" : `${n < 10 ? n.toFixed(1) : n.toFixed(0)}%`);
+// "5h" / "7d" — the row's own key, derived from the length the provider reports
+// rather than assumed.
+function spanShort(span) {
+  if (span < DAY) return `${Math.round(span / HOUR)}h`;
+  return `${Math.round(span / DAY)}d`;
+}
+
+// Every live window in the current snapshot, keyed the same way the Rust
+// recorder keys them so the two can be matched up.
+function liveWindows() {
+  const out = [];
+  const add = (provider, account, accountLabel, id, label, group, gauge) => {
+    if (!gauge || typeof gauge.resets_at !== "number") return;
+    const span = (Number(gauge.window_minutes) || 0) * MINUTE;
+    if (span <= 0) return;
+    const end = gauge.resets_at * 1000;
+    out.push({
+      key: `${provider}|${account}|${id}`,
+      credential: `${provider}|${account}`,
+      provider,
+      accountLabel,
+      label,
+      group,
+      span,
+      start: end - span,
+      end,
+      used: clampPct(gauge.used_percent),
+      live: true,
+    });
+  };
+
+  const cx = data?.codex;
+  if (cx?.live) {
+    if ((cx.quotas || []).length) {
+      for (const q of cx.quotas) add("codex", "", "Codex", q.id, q.label, q.group, q.gauge);
+    } else {
+      add("codex", "", "Codex", "session", "Session", "session", cx.primary);
+      add("codex", "", "Codex", "weekly", "Weekly", "weekly", cx.secondary);
+    }
+  }
+  for (const a of (data?.claude?.accounts || []).filter((x) => x.live)) {
+    if ((a.quotas || []).length) {
+      for (const q of a.quotas) {
+        // Scoped limits follow the same Display setting as the gauges.
+        if ((q.scope_model || q.scope_surface) && !showModelWeekly) continue;
+        add("claude", a.id, a.label, q.id, q.label, q.group, q.gauge);
+      }
+      continue;
+    }
+    add("claude", a.id, a.label, "session", "Session", "session", a.five_hour);
+    add("claude", a.id, a.label, "weekly", "Weekly", "weekly", a.seven_day);
+    if (a.seven_day_model && showModelWeekly) {
+      const mg = a.seven_day_model;
+      add("claude", a.id, a.label, "weekly_model", `Weekly (${mg.model})`, "weekly", mg.gauge);
+    }
+  }
+  return out;
+}
+
+// Recorded instances of one window, newest last. Unix seconds on the wire.
+function recordedInstances(key) {
+  const series = (windowHistory?.series || []).find((s) => s.key === key);
+  return (series?.instances || []).map((i) => ({
+    start: i.start * 1000,
+    end: i.end * 1000,
+    used: clampPct(i.used),
+    samples: (i.samples || []).map((s) => ({ at: s.at * 1000, used: clampPct(s.used) })),
+  }));
+}
+
+// The multi-day ranges begin on the day the earliest window in view opened, so
+// a weekly bar shows where it started as well as where it resets. Nothing is
+// reserved for history the windows don't reach into. A fixed range then runs
+// its full length from there — a fortnight holds a seven-day window and the
+// dashed one after it — while a `fit` range stops at the last reset. The floor
+// keeps today on the chart if a window opened further back than the range runs.
+function axisFor(range, now, rows = []) {
+  const spec = RANGES[range];
+  const today = startOfDay(now);
+  if (spec.days === 1) return { from: today, to: today + DAY, days: 1, cols: spec.cols };
+
+  const earliest = rows.reduce((first, row) => Math.min(first, row.start), now);
+  const furthest = rows.reduce((last, row) => Math.max(last, row.end), now);
+  const longest = spec.days || spec.max;
+  const from = Math.max(Math.min(startOfDay(earliest), today), today - (longest - 1) * DAY);
+  const days = spec.days
+    ? spec.days
+    : clamp(Math.ceil((startOfDay(furthest) + DAY - from) / DAY), spec.min, spec.max);
+  return { from, to: from + days * DAY, days, cols: days };
+}
+const axisPos = (axis, t) => ((t - axis.from) / (axis.to - axis.from)) * 100;
+const axisClamp = (axis, t) => Math.min(100, Math.max(0, axisPos(axis, t)));
+
+// The window occurrences visible in `axis`.
+//
+// What was recorded is drawn where it actually happened — rolling windows start
+// when you first use them, so real occurrences don't sit on a neat grid. The
+// leftover space is then filled from the grid, which is only a guess about
+// where windows would fall: ahead of now that's the next reset, behind it it's
+// a stretch the app wasn't running for.
+function windowSlots(row, axis, now) {
+  const span = row.span;
+  const inRange = (start, end) => end > axis.from && start < axis.to;
+  const slots = [];
+
+  if (row.live && inRange(row.start, row.end)) {
+    slots.push({
+      start: row.start,
+      end: row.end,
+      used: row.used,
+      state: now < row.end ? "live" : "done",
+    });
+  }
+  for (const instance of recordedInstances(row.key)) {
+    if (!inRange(instance.start, instance.end)) continue;
+    // The newest instance is usually the live window seen a moment ago.
+    if (slots.some((s) => s.start < instance.end && instance.start < s.end)) continue;
+    slots.push({ start: instance.start, end: instance.end, used: instance.used, state: "done" });
+  }
+
+  const anchor = slots.length ? slots[slots.length - 1].end : row.live ? row.end : 0;
+  if (anchor) {
+    const first = Math.floor((axis.from - anchor) / span);
+    const last = Math.ceil((axis.to - anchor) / span);
+    for (let k = first; k <= last && slots.length < 80; k++) {
+      const end = anchor + k * span;
+      const start = end - span;
+      if (!inRange(start, end)) continue;
+      // Only the next couple of windows are worth sketching; past that the
+      // dashes are just noise.
+      if (start > now + 2 * span) continue;
+      if (slots.some((s) => s.start < end && start < s.end)) continue;
+      slots.push({ start, end, used: 0, state: start > now ? "ghost" : "unrecorded" });
+    }
+  }
+
+  return slots.sort((a, b) => a.start - b.start);
+}
+
+// Spend per bucket, read off the recorded samples: what the percentage climbed
+// by, hour to hour (day view) or day to day. A fall means the window rolled,
+// not that quota came back, so only rises count.
+function burnBuckets(row, axis) {
+  const bucketMs = axis.days === 1 ? HOUR : DAY;
+  const count = Math.round((axis.to - axis.from) / bucketMs);
+  const samples = recordedInstances(row.key)
+    .flatMap((i) => i.samples)
+    .filter((s) => s.at >= axis.from - bucketMs && s.at <= axis.to)
+    .sort((a, b) => a.at - b.at);
+  if (samples.length < 3) return null;
+
+  const buckets = new Array(count).fill(0);
+  for (let i = 1; i < samples.length; i++) {
+    const rise = samples[i].used - samples[i - 1].used;
+    if (rise <= 0) continue;
+    const index = Math.floor((samples[i].at - axis.from) / bucketMs);
+    if (index >= 0 && index < count) buckets[index] += rise;
+  }
+  return buckets.some((v) => v > 0.01) ? buckets : null;
+}
+
+// Which of a credential's windows belong in a range. A five-hour window is 1.5%
+// of a fortnight — unreadable at that scale — so the multi-day ranges carry the
+// long windows only and Today keeps the short ones.
+const rowsForRange = (credential, range) =>
+  credential.rows.filter((row) => RANGES[range].days === 1 || row.span > SESSION_MAX_MS);
+
+// One credential per Codex install / Claude account, with its windows split
+// into the short ones and the long ones.
+function timelineCredentials() {
+  const groups = new Map();
+  for (const w of liveWindows()) {
+    if (!groups.has(w.credential)) {
+      groups.set(w.credential, {
+        id: w.credential,
+        provider: w.provider,
+        label: w.accountLabel,
+        rows: [],
+      });
+    }
+    groups.get(w.credential).rows.push(w);
+  }
+  for (const credential of groups.values()) {
+    credential.rows.sort((a, b) => a.span - b.span);
+    credential.next = credential.rows.reduce(
+      (soonest, row) => (soonest === null || row.end < soonest ? row.end : soonest),
+      null
+    );
+  }
+  return [...groups.values()];
+}
+
+function pace(slot, now) {
+  const elapsed = ((now - slot.start) / (slot.end - slot.start)) * 100;
+  const delta = slot.used - elapsed;
+  if (slot.used >= 99.95) return { cls: "hot", text: "exhausted", elapsed };
+  if (delta > 20) return { cls: "hot", text: "burning fast", elapsed };
+  if (delta > 8) return { cls: "warm", text: "ahead of pace", elapsed };
+  if (delta < -8) return { cls: "", text: "under pace", elapsed };
+  return { cls: "", text: "on pace", elapsed };
+}
+
+const barClass = (row, slot) =>
+  [
+    row.provider === "claude" ? "claude" : "codex",
+    slot.used >= 80 ? "warn" : "",
+    slot.state === "done" ? "done" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+function slotTitle(row, slot, now) {
+  if (slot.state === "unrecorded")
+    return `${row.label} · ${whenText(slot.start)} → ${whenText(slot.end)} · not recorded`;
+  if (slot.state === "ghost")
+    return `next ${row.label.toLowerCase()} window · ${whenText(slot.start)} → ${whenText(slot.end)}`;
+  const p = pace(slot, now);
+  const tail = slot.state === "live" ? ` · ${p.text}` : " · final";
+  return `${row.label} · ${whenText(slot.start)} → ${whenText(slot.end)} · ${pctText(
+    slot.used
+  )} used${tail}`;
+}
+
+// ---------- compact timeline (the popover) ----------
+function windowRangeControl() {
+  return `<div class="tsegs">${Object.entries(RANGES)
+    .map(
+      ([key, r]) =>
+        `<button data-window-range="${key}" class="${key === windowRange ? "on" : ""}">${esc(
+          r.label
+        )}</button>`
+    )
+    .join("")}</div>`;
+}
+
+function compactAxis(axis) {
+  const today = startOfDay(Date.now());
+  let out = "";
+  for (let i = 0; i < axis.cols; i++) {
+    const t = axis.from + i * DAY;
+    const label =
+      axis.days === 1
+        ? hourTick(axis.from + (i * DAY) / axis.cols)
+        : axis.cols > 7 && i % 2
+          ? ""
+          : mmdd(t);
+    const on = axis.days > 1 && t === today ? " class=\"on\"" : "";
+    out += `<span${on}>${esc(label)}</span>`;
+  }
+  return `<div class="tw-axis">${out}</div>`;
+}
+
+// Dim what's finished, bright what's running, dashed what's next. Stretches the
+// app wasn't watching are marked on the day view, where the gap is small and
+// tells you something; across a fortnight they'd be a wall of dashes, so the
+// multi-day ranges just leave that space empty.
+function compactChain(row, axis, now) {
+  let html = "";
+  for (const slot of windowSlots(row, axis, now)) {
+    if (slot.state === "unrecorded" && axis.days > 1) continue;
+    const left = axisClamp(axis, slot.start);
+    const width = Math.max(1, axisClamp(axis, slot.end) - left);
+    const title = esc(slotTitle(row, slot, now));
+    if (slot.state === "ghost" || slot.state === "unrecorded") {
+      html += `<div class="tw-ghost ${slot.state}" style="left:${left}%;width:${width}%"
+        title="${title}"></div>`;
+      continue;
+    }
+    const label = width > 13 ? `<span class="n">${pctText(slot.used)}</span>` : "";
+    html += `<div class="tw-seg ${barClass(row, slot)}" style="left:${left}%;width:${width}%"
+      title="${title}">
+      <div class="f" style="width:${slot.used}%"></div>${label}</div>`;
+  }
+  return html;
+}
+
+function compactBurn(row, axis, buckets) {
+  const max = Math.max(...buckets, 0.5);
+  const width = 100 / buckets.length;
+  return buckets
+    .map((v, i) =>
+      v <= 0.01
+        ? ""
+        : `<div class="tw-burn ${row.provider === "claude" ? "claude" : "codex"}"
+             style="left:${i * width + width * 0.12}%;width:${width * 0.76}%;height:${
+               3 + (v / max) * 15
+             }px"
+             title="${esc(
+               `${axis.days === 1 ? hhmm(axis.from + i * HOUR) : mmdd(axis.from + i * DAY)} · ${v.toFixed(
+                 1
+               )}% of ${row.label.toLowerCase()}`
+             )}"></div>`
+    )
+    .join("");
+}
+
+function compactRow(row, axis, now, colPct) {
+  const nowMark = `<div class="tw-now" style="left:${axisClamp(axis, now)}%"></div>`;
+  const short = spanShort(row.span);
+  const session = row.span <= SESSION_MAX_MS;
+
+  // Day view, long window: it runs off both edges of a single day, so the row
+  // shows what was actually spent hour by hour and keeps the total in a chip.
+  if (axis.days === 1 && !session) {
+    const buckets = burnBuckets(row, axis);
+    const chip = `<span class="tw-chip"><b>${pctText(row.used)}</b> · ${esc(
+      durText(row.end - now)
+    )}</span>`;
+    const body = buckets
+      ? compactBurn(row, axis, buckets)
+      : `<div class="tw-band" title="${esc(
+          `${row.label} · ${whenText(row.start)} → ${whenText(row.end)}`
+        )}"><span class="tw-band-txt">window continues</span></div>`;
+    return `<div class="tw-row"><span class="k">${esc(short)}</span>
+      <div class="tw-plot tall" style="--col:${colPct}%">${body}${nowMark}${chip}</div></div>`;
+  }
+
+  return `<div class="tw-row"><span class="k">${esc(short)}</span>
+    <div class="tw-plot" style="--col:${colPct}%">${compactChain(
+      row,
+      axis,
+      now
+    )}${nowMark}</div></div>`;
+}
+
+function renderWindows() {
+  const now = Date.now();
+  const credentials = timelineCredentials()
+    .map((credential) => ({ ...credential, visible: rowsForRange(credential, windowRange) }))
+    .filter((credential) => credential.visible.length);
+  const axis = axisFor(windowRange, now, credentials.flatMap((c) => c.visible));
+  const colPct = 100 / axis.cols;
+
+  const expand = `<button class="hd-expand" id="windowExpand"
+    title="Expand" aria-label="Expand">⤢</button>`;
+  let html = header("Quota windows", "", { rightExtra: expand });
+  html += windowRangeControl();
+
+  if (!credentials.length) {
+    html += `<div class="empty-state">${
+      timelineCredentials().length
+        ? "Only short windows are live — see Today."
+        : "No live quota windows.<br/>Sign in to Codex or Claude Code and refresh."
+    }</div>`;
+    return html;
+  }
+
+  html += compactAxis(axis);
+  for (const credential of credentials) {
+    html += `<div class="tw-cred">
+      <span class="dot${credential.provider === "claude" ? " claude" : ""}"></span>
+      <span class="nm">${esc(credential.label)}</span>
+      <span class="rt">next ${esc(durText(credential.next - now))}</span>
+    </div>`;
+    for (const row of credential.visible) html += compactRow(row, axis, now, colPct);
+  }
+  html += `<div class="sec-sub">${
+    axis.days === 1
+      ? "Each bar is one window — dim is finished, bright is live, dashed is next."
+      : "Bars run to their reset; dashed is the window after it. Short windows are on Today."
+  }</div>`;
+  html += historyNote(now);
+  return html;
+}
+
+// Says how far back the record can speak for, so an empty stretch reads as
+// "wasn't watching" rather than "nothing happened".
+function historyNote(now) {
+  const since = windowHistory?.recording_since;
+  if (!since) {
+    return `<div class="sec-sub">History starts now — past windows fill in as the app runs.</div>`;
+  }
+  const age = now - since * 1000;
+  if (age > 3 * DAY) return "";
+  return `<div class="sec-sub">Recording since ${esc(
+    sameDay(since * 1000, now) ? hhmm(since * 1000) : mmdd(since * 1000)
+  )}; anything earlier is drawn hollow.</div>`;
+}
+
+// ---------- expanded timeline ----------
+function wideAxisHead(axis) {
+  let out = "";
+  if (axis.days === 1) {
+    const step = 24 / 12;
+    for (let i = 0; i < 12; i++) {
+      const t = axis.from + i * step * HOUR;
+      const on = Date.now() >= t && Date.now() < t + step * HOUR;
+      out += `<div class="col${on ? " on" : ""}"><div class="c1">&nbsp;</div>
+        <div class="c2">${esc(hourTick(t))}</div></div>`;
+    }
+    return out;
+  }
+  const today = startOfDay(Date.now());
+  for (let i = 0; i < axis.days; i++) {
+    const t = axis.from + i * DAY;
+    out += `<div class="col${t === today ? " on" : ""}">
+      <div class="c1">${esc(new Date(t).toLocaleDateString([], { weekday: "short" }))}</div>
+      <div class="c2">${esc(mmdd(t))}</div></div>`;
+  }
+  return out;
+}
+
+function wideBars(row, axis, now, top, height) {
+  let html = "";
+  for (const slot of windowSlots(row, axis, now)) {
+    if (slot.state === "unrecorded" && axis.days > 1) continue;
+    const left = axisClamp(axis, slot.start);
+    const width = Math.max(0.6, axisClamp(axis, slot.end) - left);
+    const clipL = axisPos(axis, slot.start) < -0.01;
+    const clipR = axisPos(axis, slot.end) > 100.01;
+    const edges = `${clipL ? " clipL" : ""}${clipR ? " clipR" : ""}`;
+    const chevrons = `${clipL ? `<span class="chev l">‹</span>` : ""}${
+      clipR ? `<span class="chev r">›</span>` : ""
+    }`;
+    const title = esc(slotTitle(row, slot, now));
+    const style = `left:${left}%;width:${width}%;top:${top}px;height:${height}px`;
+
+    if (slot.state === "ghost" || slot.state === "unrecorded") {
+      html += `<div class="ghost ${slot.state}${edges}" style="${style}" title="${title}">${
+        width > 11 ? esc(slot.state === "ghost" ? whenText(slot.end) : "not recorded") : ""
+      }</div>`;
+      continue;
+    }
+    const label =
+      width > 5
+        ? `<div class="bt"${clipL ? ` style="padding-left:20px"` : ""}><b>${pctText(
+            slot.used
+          )}</b>&nbsp;· ${esc(slot.state === "live" ? whenText(slot.end) : "spent")}</div>`
+        : "";
+    const notch =
+      slot.state === "live"
+        ? `<div class="notch" style="left:${pace(slot, now).elapsed}%"></div>`
+        : "";
+    html += `<div class="bar ${barClass(row, slot)}${edges}" style="${style}" title="${title}">
+      <div class="bf" style="width:${slot.used}%"></div>${notch}${chevrons}${label}</div>`;
+  }
+  return html;
+}
+
+function wideBurn(row, axis, buckets) {
+  const max = Math.max(...buckets, 0.5);
+  const width = 100 / buckets.length;
+  return buckets
+    .map((v, i) =>
+      v <= 0.01
+        ? ""
+        : `<div class="burn ${row.provider === "claude" ? "claude" : "codex"}" style="left:${
+            i * width + width * 0.12
+          }%;width:${width * 0.76}%;height:${3 + (v / max) * 27}px" title="${esc(
+            `${axis.days === 1 ? hhmm(axis.from + i * HOUR) : mmdd(axis.from + i * DAY)} · ${v.toFixed(
+              1
+            )}% of ${row.label.toLowerCase()}`
+          )}"></div>`
+    )
+    .join("");
+}
+
+function wideRow(credential, row, axis, now, first) {
+  const nowMark = `<div class="nowline" style="left:${axisClamp(axis, now)}%"></div>`;
+  const session = row.span <= SESSION_MAX_MS;
+  const p = pace(row, now);
+  const head = first
+    ? `<div class="cred-line">
+        <span class="dot${credential.provider === "claude" ? " claude" : ""}"></span>
+        <span class="nm">${esc(credential.label)}</span>
+        <span class="pill tiny ${p.cls}">${esc(p.text)}</span>
+      </div>
+      <div class="cred-sub">${esc(row.label)} <b>${pctText(row.used)}</b> · resets in ${esc(
+        durText(row.end - now)
+      )}</div>`
+    : `<div class="kind">${esc(row.label)} · ${esc(spanShort(row.span))}</div>
+       <div class="kmeta">now <b>${pctText(row.used)}</b> · resets ${esc(whenText(row.end))}</div>`;
+
+  let body;
+  let height = 62;
+  if (axis.days === 1 && !session) {
+    const buckets = burnBuckets(row, axis);
+    height = 58;
+    body = buckets
+      ? `<div class="dens-base"></div>${wideBurn(row, axis, buckets)}`
+      : wideBars(row, axis, now, 14, 30);
+  } else {
+    body = wideBars(row, axis, now, 16, 30);
+  }
+
+  return `<div class="grow${first ? " first" : " sub"}">
+    <div class="cred-col">${head}</div>
+    <div class="plot" style="--col:${100 / axis.cols}%;height:${height}px">${body}${nowMark}</div>
+  </div>`;
+}
+
+function renderWindowsWide() {
+  const now = Date.now();
+  const all = timelineCredentials();
+  const credentials = all
+    .map((credential) => ({ ...credential, visible: rowsForRange(credential, windowRange) }))
+    .filter((credential) => credential.visible.length);
+  const axis = axisFor(windowRange, now, credentials.flatMap((c) => c.visible));
+
+  const segs = Object.entries(RANGES)
+    .map(
+      ([key, r]) =>
+        `<button data-window-range="${key}" class="${key === windowRange ? "on" : ""}">${esc(
+          r.label
+        )}</button>`
+    )
+    .join("");
+  const sub =
+    axis.days === 1
+      ? `${mmdd(axis.from)} · 24 hours · short windows full size`
+      : `${mmdd(axis.from)} – ${mmdd(axis.to - DAY)} · ${axis.days} days · long windows`;
+
+  let html = `<div class="wide-hd">
+    <div>
+      <h2>Quota windows</h2>
+      <div class="wide-sub">${esc(sub)} · now ${esc(hhmm(now))}</div>
+    </div>
+    <div class="segs">${segs}</div>
+    <button class="hd-expand" id="windowCollapse" title="Collapse" aria-label="Collapse">⤡</button>
+  </div>`;
+
+  if (!credentials.length) {
+    return (
+      html +
+      `<div class="empty-state">${
+        all.length
+          ? "Only short windows are live — see Today."
+          : "No live quota windows.<br/>Sign in to Codex or Claude Code and refresh."
+      }</div>`
+    );
+  }
+
+  let rows = "";
+  for (const credential of credentials) {
+    credential.visible.forEach((row, index) => {
+      rows += wideRow(credential, row, axis, now, index === 0);
+    });
+  }
+  html += `<div class="gantt">
+    <div class="gantt-hd">
+      <div class="cred-col">CREDENTIAL</div>
+      <div class="cols">${wideAxisHead(axis)}</div>
+    </div>
+    ${rows}
+  </div>`;
+  html += `<div class="wide-legend">
+    <i><span class="key used"></span> quota spent</i>
+    <i><span class="key span"></span> window span (start → reset)</i>
+    <i><span class="key next"></span> next window, or a stretch not recorded</i>
+    <i>┆ notch = now inside the window · │ line = now on the axis · ‹ › = continues past the range</i>
+  </div>`;
+  return html;
+}
+
+// Settings → Data sources. Unlike the log indexes this record can't be
+// rebuilt, so the row says how much of it exists before offering to bin it.
+function windowHistoryRow() {
+  const series = windowHistory?.series || [];
+  const recorded = series.reduce((total, s) => total + (s.instances || []).length, 0);
+  const since = windowHistory?.recording_since;
+  const detail = recorded
+    ? `${recorded} window${recorded === 1 ? "" : "s"} across ${series.length} limit${
+        series.length === 1 ? "" : "s"
+      }`
+    : "Nothing recorded yet";
+  const sub = since ? `${detail} · since ${fmtDate(since)}` : detail;
+  return `<div class="grp-row static-row">
+    <span class="rlab">Quota window history<span class="rsub">${esc(sub)}</span></span>
+    <button class="row-btn" data-window-history-clear>Clear</button>
+  </div>`;
+}
+
+async function loadWindowHistory() {
+  try {
+    windowHistory = await invoke("get_window_history");
+  } catch (_) {
+    // The screen still works from live gauges alone.
+  }
+  if (activeTab === "windows") render();
+}
+
+async function setPanelExpanded(expanded) {
+  if (panelExpanded === expanded) return;
+  panelExpanded = expanded;
+  try {
+    await invoke("set_panel_expanded", { expanded });
+  } catch (_) {
+    // Falls back to the compact layout in a compact window — still usable.
+    panelExpanded = false;
+  }
+  render();
+}
+
 // ---------- settings ----------
 function settingRow(label, sub, attrs, enabled, claude) {
   return `<label class="grp-row">
@@ -763,6 +1417,7 @@ function renderSettings() {
   html += diagRow("codex-history", "Codex history", cx.history_health, cx.estimate, true);
   for (const a of accounts) html += diagRow(`claude-account:${a.id}`, a.label, a.health);
   html += diagRow("claude-history", "Claude history", cl.history_health, cl.estimate, true);
+  html += windowHistoryRow();
   html += `</div>`;
 
   html += renderAbout();
@@ -848,14 +1503,32 @@ function render() {
     fitWindowHeight();
     return;
   }
+  const wide = panelExpanded && activeTab === "windows";
+  document.getElementById("app").classList.toggle("expanded", wide);
   if (creditsOpen) content.innerHTML = renderCredits();
   else if (activeTab === "codex") content.innerHTML = renderCodex();
   else if (activeTab === "claude") content.innerHTML = renderClaude();
+  else if (activeTab === "windows") content.innerHTML = wide ? renderWindowsWide() : renderWindows();
   else if (activeTab === "settings") content.innerHTML = renderSettings();
   else content.innerHTML = renderOverview();
 
   const refreshBtn = document.getElementById("refreshBtn");
   if (refreshBtn) refreshBtn.addEventListener("click", refresh);
+
+  // Timeline: range switch, and the expand/collapse pair.
+  content.querySelectorAll("[data-window-range]").forEach((button) =>
+    button.addEventListener("click", () => {
+      windowRange = button.dataset.windowRange;
+      try {
+        localStorage.setItem("windowRange", windowRange);
+      } catch (_) {}
+      render();
+    })
+  );
+  const expandBtn = document.getElementById("windowExpand");
+  if (expandBtn) expandBtn.addEventListener("click", () => setPanelExpanded(true));
+  const collapseBtn = document.getElementById("windowCollapse");
+  if (collapseBtn) collapseBtn.addEventListener("click", () => setPanelExpanded(false));
 
   content.querySelectorAll("[data-goto]").forEach((card) =>
     card.addEventListener("click", () => switchTab(card.dataset.goto))
@@ -931,6 +1604,21 @@ function render() {
         button.textContent = "Copied";
       } catch (_) {
         button.textContent = "Copy failed";
+      }
+    })
+  );
+  content.querySelectorAll("[data-window-history-clear]").forEach((button) =>
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      button.disabled = true;
+      button.textContent = "Clearing…";
+      try {
+        await invoke("clear_window_history");
+        windowHistory = null;
+        render();
+      } catch (_) {
+        button.disabled = false;
+        button.textContent = "Clear failed";
       }
     })
   );
@@ -1030,6 +1718,8 @@ function render() {
 }
 
 function fitWindowHeight() {
+  // The expanded timeline sizes the window itself.
+  if (panelExpanded) return;
   requestAnimationFrame(() => {
     const tabs = document.getElementById("tabs");
     const content = document.getElementById("content");
@@ -1050,6 +1740,9 @@ function fitWindowHeight() {
 function switchTab(tab) {
   activeTab = tab;
   creditsOpen = false;
+  // The wide layout belongs to the timeline; leaving it puts the popover back.
+  if (panelExpanded && tab !== "windows") setPanelExpanded(false);
+  if (tab === "windows") loadWindowHistory();
   document
     .querySelectorAll(".tab")
     .forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
@@ -1097,6 +1790,9 @@ async function refresh() {
     }
   }
   refreshing = false;
+  // The collection just fed the recorder, so the timeline's copy is a sample
+  // behind until it re-reads it.
+  loadWindowHistory();
   const elapsed = Date.now() - started;
   spinUntil = Date.now() + (SPIN_MS - (elapsed % SPIN_MS));
   render();
@@ -1242,6 +1938,17 @@ document
   .forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
 
 listen("refresh", refresh);
+// Rust collapses the panel whenever it hides, so the next tray click opens the
+// familiar popover rather than a full-width window.
+listen("collapse", () => {
+  if (!panelExpanded) return;
+  panelExpanded = false;
+  render();
+});
+// Esc leaves the expanded timeline — the panel has no title bar to close.
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && panelExpanded) setPanelExpanded(false);
+});
 // Rust pushes the updater status on every transition, so the About section
 // tracks a background check without polling.
 listen("update-state", (event) => {
@@ -1261,4 +1968,5 @@ document.addEventListener("visibilitychange", () => {
 });
 loadNotificationSettings();
 loadUpdateState();
+loadWindowHistory();
 refresh();
