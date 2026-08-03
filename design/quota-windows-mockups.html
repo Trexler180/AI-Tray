@@ -1,0 +1,936 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Quota windows — timeline</title>
+<style>
+/* ============================================================
+   Tokens, copied from src/styles.css so the mockups read like the app
+   ============================================================ */
+:root {
+  --bg-top: #161b24;
+  --bg-bot: #0c0f15;
+  --card: rgba(255, 255, 255, 0.035);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --text: #e7ebf2;
+  --muted: #8b95a6;
+  --faint: #5c6577;
+  --track: rgba(255, 255, 255, 0.08);
+  --codex: #2dd4bf;
+  --codex-2: #0ea5a3;
+  --claude: #f0a36a;
+  --claude-2: #db7f4d;
+  --credit: #b3a5f0;
+  --danger: #ef6b6b;
+  --ok: #71cdb0;
+  --warn: #dfa05f;
+  --radius: 8px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: #080b10;
+  font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+.dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--codex); }
+.dot.claude { background: var(--claude); }
+.pill {
+  font-size: 11px; font-weight: 600; color: var(--muted);
+  padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px; flex: 0 0 auto;
+}
+.pill.tiny { font-size: 9.5px; padding: 1px 6px; }
+.pill.hot { color: var(--danger); border-color: rgba(239, 107, 107, 0.4); }
+.pill.warm { color: var(--warn); border-color: rgba(223, 160, 95, 0.4); }
+
+/* ============================================================
+   The timeline surface
+   ============================================================ */
+.wide {
+  border: 1px solid var(--border-strong); border-radius: 14px;
+  background: linear-gradient(180deg, #14181f, #0d1014);
+  padding: 20px 22px 22px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+.wide-hd { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 16px; }
+.wide-hd h2 { font-size: 21px; font-weight: 700; letter-spacing: 0.2px; }
+.wide-hd .sub { font-size: 12px; color: var(--faint); margin-top: 5px; font-variant-numeric: tabular-nums; }
+.segs { margin-left: auto; display: flex; gap: 3px; padding: 3px; background: rgba(255, 255, 255, 0.05); border-radius: 999px; }
+.segs button {
+  font: inherit; font-size: 11.5px; font-weight: 600; color: var(--muted);
+  padding: 6px 15px; border: none; border-radius: 999px; background: transparent; cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.segs button:hover { color: var(--text); }
+.segs button.on { color: #fff; background: rgba(255, 255, 255, 0.1); }
+
+.gantt { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.gantt-hd { display: flex; border-bottom: 1px solid var(--border); background: rgba(255, 255, 255, 0.02); }
+.cred-col { width: 224px; flex: 0 0 224px; }
+.gantt-hd .cred-col {
+  padding: 14px 16px; align-self: center;
+  font-size: 10px; font-weight: 700; letter-spacing: 1.4px; color: var(--faint);
+}
+.gantt-hd .cols { flex: 1 1 auto; display: flex; }
+.gantt-hd .col {
+  flex: 1 1 0; text-align: center; padding: 9px 0 11px;
+  border-left: 1px solid var(--border); font-variant-numeric: tabular-nums;
+}
+.gantt-hd .col .c1 { font-size: 10.5px; color: var(--faint); }
+.gantt-hd .col .c2 { font-size: 12px; font-weight: 600; margin-top: 3px; }
+.gantt-hd .col.on .c1, .gantt-hd .col.on .c2 { color: #fff; }
+
+.grow { display: flex; border-top: 1px solid var(--border); }
+.grow.first { border-top: 1px solid var(--border-strong); }
+.grow:first-child { border-top: none; }
+.grow .cred-col { padding: 13px 16px; }
+.cred-line { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; }
+.cred-line .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cred-sub {
+  margin-top: 7px; display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--muted); background: rgba(255, 255, 255, 0.05);
+  padding: 3px 8px; border-radius: 6px;
+}
+.cred-sub b { color: var(--text); font-variant-numeric: tabular-nums; }
+/* Continuation rows: the credential is already named above, so these only
+   carry the window kind. */
+.grow.sub .cred-col { padding-left: 30px; }
+.kind { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.kind::before {
+  content: ""; width: 9px; height: 9px; margin-right: 1px;
+  border-left: 1px solid var(--border-strong); border-bottom: 1px solid var(--border-strong);
+  margin-top: -6px;
+}
+.kmeta { margin-top: 6px; margin-left: 17px; font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.kmeta b { color: var(--muted); font-weight: 600; }
+
+.plot {
+  position: relative; flex: 1 1 auto;
+  background: repeating-linear-gradient(90deg, var(--border) 0 1px, transparent 1px var(--col));
+}
+.nowline {
+  position: absolute; top: 0; bottom: 0; width: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.45); pointer-events: none; z-index: 4;
+}
+
+/* A window: track = its time span, fill = quota spent, notch = now. */
+.bar { position: absolute; border-radius: 999px; overflow: hidden; background: rgba(255, 255, 255, 0.08); }
+.bar .bf { position: absolute; inset: 0 auto 0 0; background: rgba(255, 255, 255, 0.16); }
+.bar.codex .bf { background: linear-gradient(90deg, rgba(14, 165, 163, 0.6), rgba(45, 226, 203, 0.72)); }
+.bar.claude .bf { background: linear-gradient(90deg, rgba(219, 127, 77, 0.6), rgba(248, 168, 106, 0.72)); }
+.bar.warn .bf { background: linear-gradient(90deg, rgba(214, 62, 62, 0.6), rgba(244, 110, 110, 0.75)); }
+.bar.done { background: rgba(255, 255, 255, 0.05); }
+.bar.done .bf { opacity: 0.4; }
+.bar .bt {
+  position: absolute; inset: 0; display: flex; align-items: center; padding: 0 12px;
+  font-size: 11.5px; font-weight: 600; white-space: nowrap; overflow: hidden;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+.bar.done .bt { color: var(--muted); font-weight: 500; }
+.bar .notch { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed rgba(255, 255, 255, 0.5); }
+/* Squared-off end + chevron where a window runs past the visible range. */
+.bar.clipL, .ghost.clipL { border-top-left-radius: 3px; border-bottom-left-radius: 3px; }
+.bar.clipR, .ghost.clipR { border-top-right-radius: 3px; border-bottom-right-radius: 3px; }
+.chev {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  font-size: 11px; color: rgba(255, 255, 255, 0.45); z-index: 2;
+}
+.chev.l { left: 3px; } .chev.r { right: 3px; }
+.ghost {
+  position: absolute; border-radius: 999px; border: 1px dashed rgba(255, 255, 255, 0.16);
+  display: flex; align-items: center; padding: 0 12px;
+  font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Session density: one tick per 5h window, height = how much of it was spent.
+   Keeps short windows legible at week scale without pretending to be bars. */
+.tick { position: absolute; bottom: 12px; border-radius: 2px 2px 0 0; background: rgba(45, 212, 191, 0.45); }
+.tick.claude { background: rgba(240, 163, 106, 0.45); }
+.tick.warn { background: rgba(239, 107, 107, 0.55); }
+.tick.future { background: rgba(255, 255, 255, 0.07); }
+.dens-base { position: absolute; left: 0; right: 0; bottom: 12px; border-bottom: 1px solid var(--border); }
+
+/* Burn strip: quota spent per hour (day view) or per day (week views),
+   drawn on the same axis so everything in the chart is time-anchored. */
+.burn { position: absolute; bottom: 12px; border-radius: 2px 2px 0 0; background: rgba(255, 255, 255, 0.22); }
+.burn.codex { background: linear-gradient(180deg, rgba(45, 226, 203, 0.75), rgba(14, 165, 163, 0.45)); }
+.burn.claude { background: linear-gradient(180deg, rgba(248, 168, 106, 0.75), rgba(219, 127, 77, 0.45)); }
+.spanband {
+  position: absolute; border-radius: 4px; background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+}
+.spanband .lbl {
+  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.spanband .lbl b { color: var(--text); }
+
+.wide-legend {
+  display: flex; gap: 20px; flex-wrap: wrap; margin-top: 14px;
+  font-size: 11px; color: var(--faint); align-items: center;
+}
+.wide-legend i { font-style: normal; display: inline-flex; align-items: center; gap: 6px; }
+.key { width: 22px; height: 9px; border-radius: 999px; display: inline-block; }
+.key.used { background: linear-gradient(90deg, rgba(14, 165, 163, 0.6), rgba(45, 226, 203, 0.72)); }
+.key.span { background: rgba(255, 255, 255, 0.1); }
+.key.next { border: 1px dashed rgba(255, 255, 255, 0.28); height: 10px; }
+
+/* ============================================================
+   Tray panel (340 × 640, the real window size)
+   ============================================================ */
+.panel {
+  height: 100%; display: flex; flex-direction: column;
+  border: 1px solid var(--border-strong); border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--bg-top), var(--bg-bot));
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55); overflow: hidden; user-select: none;
+}
+.content { flex: 1; overflow: hidden; padding: 10px 14px; }
+.tabs { display: flex; gap: 4px; padding: 5px 6px 6px; border-top: 1px solid var(--border); }
+.tab {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;
+  padding: 5px 4px; font: inherit; font-size: 11.5px; font-weight: 600;
+  color: var(--muted); background: transparent; border: none; border-radius: 6px; cursor: pointer;
+}
+.tab .ico { font-size: 12.5px; opacity: 0.8; }
+.tab.active { color: #fff; background: rgba(255, 255, 255, 0.1); }
+.tab.gear { flex: 0 0 34px; }
+.hd {
+  display: flex; align-items: center; gap: 7px;
+  margin: 0 0 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
+}
+.hd-title { font-size: 15px; font-weight: 700; letter-spacing: 0.2px; }
+.hd-right {
+  margin-left: auto; display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums;
+}
+.sec-sub { font-size: 10.5px; color: var(--faint); margin: 8px 0 0; line-height: 1.45; }
+.tsegs { display: flex; gap: 3px; padding: 2px; background: rgba(255, 255, 255, 0.05); border-radius: 999px; margin-bottom: 10px; }
+.tsegs button {
+  flex: 1; font: inherit; font-size: 10.5px; font-weight: 600; color: var(--muted);
+  padding: 4px 6px; border: none; border-radius: 999px; background: transparent; cursor: pointer;
+}
+.tsegs button.on { color: #fff; background: rgba(255, 255, 255, 0.1); }
+
+/* Tray timeline */
+.tw-axis { display: flex; margin-left: 26px; font-size: 9px; color: var(--faint); letter-spacing: 0.3px; }
+.tw-axis span { flex: 1 1 0; text-align: left; }
+.tw-cred {
+  display: flex; align-items: center; gap: 6px; margin: 10px 0 5px;
+  font-size: 11.5px; font-weight: 700;
+}
+.tw-cred .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tw-cred .rt { margin-left: auto; font-size: 10px; font-weight: 500; color: var(--faint); font-variant-numeric: tabular-nums; }
+.tw-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.tw-row .k { width: 20px; flex: 0 0 20px; font-size: 9.5px; color: var(--faint); font-weight: 600; }
+.tw-plot {
+  position: relative; flex: 1 1 auto; height: 20px;
+  background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.05) 0 1px, transparent 1px var(--col));
+  border-radius: 3px;
+}
+.tw-plot.tall { height: 26px; }
+.tw-seg { position: absolute; top: 3px; height: 14px; border-radius: 999px; overflow: hidden; background: rgba(255, 255, 255, 0.07); }
+.tw-seg .f { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, rgba(14, 165, 163, 0.6), rgba(45, 226, 203, 0.75)); }
+.tw-seg.claude .f { background: linear-gradient(90deg, rgba(219, 127, 77, 0.6), rgba(248, 168, 106, 0.75)); }
+.tw-seg.warn .f { background: linear-gradient(90deg, rgba(214, 62, 62, 0.6), rgba(244, 110, 110, 0.75)); }
+.tw-seg.done { opacity: 0.55; }
+.tw-seg .n { position: absolute; left: 5px; top: 0; line-height: 14px; font-size: 9px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px #000; }
+.tw-ghost { position: absolute; top: 3px; height: 14px; border-radius: 999px; border: 1px dashed rgba(255, 255, 255, 0.16); }
+.tw-burn { position: absolute; bottom: 3px; border-radius: 1px 1px 0 0; background: linear-gradient(180deg, rgba(45, 226, 203, 0.8), rgba(14, 165, 163, 0.4)); }
+.tw-burn.claude { background: linear-gradient(180deg, rgba(248, 168, 106, 0.8), rgba(219, 127, 77, 0.4)); }
+.tw-now { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px solid rgba(255, 255, 255, 0.45); }
+.tw-chip {
+  position: absolute; right: 3px; top: 50%; transform: translateY(-50%);
+  font-size: 9.5px; color: var(--muted); background: rgba(12, 15, 21, 0.85);
+  padding: 1px 5px; border-radius: 4px; font-variant-numeric: tabular-nums;
+}
+.tw-chip b { color: var(--text); }
+
+/* Entry point row on an existing tab */
+.entry {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 9px 10px; margin-top: 10px; font: inherit; font-size: 11.5px; text-align: left;
+  color: var(--text); background: var(--card); border: 1px solid var(--border);
+  border-radius: 7px; cursor: pointer;
+}
+.entry:hover { border-color: var(--border-strong); }
+.entry .sp { margin-left: auto; color: var(--faint); font-variant-numeric: tabular-nums; }
+.entry .go { color: var(--muted); }
+.spark { display: flex; align-items: flex-end; gap: 1.5px; height: 14px; }
+.spark i { width: 3px; border-radius: 1px; background: rgba(45, 212, 191, 0.5); }
+.spark.claude i { background: rgba(240, 163, 106, 0.5); }
+.bgauge {
+  position: relative; height: 24px; border-radius: 6px;
+  background: rgba(255, 255, 255, 0.055); overflow: hidden; margin: 0 0 8px;
+}
+.bgauge .bfill {
+  position: absolute; inset: 0 auto 0 0;
+  background: linear-gradient(90deg, rgba(14, 165, 163, 0.55), rgba(45, 226, 203, 0.7));
+  border-right: 2px solid #43f5da;
+}
+.bgauge.claude .bfill { background: linear-gradient(90deg, rgba(219, 127, 77, 0.55), rgba(248, 168, 106, 0.7)); border-right-color: #ffb478; }
+.bgauge.warn .bfill { background: linear-gradient(90deg, rgba(214, 62, 62, 0.55), rgba(244, 110, 110, 0.7)); border-right-color: #ff8a8a; }
+.bgauge .btxt {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 0 9px; font-size: 11.5px; font-weight: 600; white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+.bgauge .btxt b { color: #fff; font-variant-numeric: tabular-nums; }
+.bgauge .btxt .sub { color: #cdd5e1; font-weight: 400; }
+.bgauge .btxt .rr { font-size: 10.5px; font-weight: 500; color: #cdd5e1; }
+.acct-head { display: flex; align-items: center; gap: 7px; margin: 0 0 8px; font-size: 13px; font-weight: 700; }
+.acct + .acct { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px; }
+
+/* ============================================================
+   Page chrome
+   ============================================================ */
+body { padding: 30px 22px 60px; user-select: auto; }
+.intro { max-width: 1240px; margin: 0 auto 22px; }
+.intro h1 { font-size: 17px; font-weight: 700; letter-spacing: 0.2px; }
+.intro p { font-size: 12.5px; color: var(--muted); margin-top: 6px; line-height: 1.55; max-width: 940px; }
+.ctl {
+  max-width: 1240px; margin: 0 auto 26px; display: flex; gap: 12px 28px; flex-wrap: wrap;
+  align-items: center; padding: 11px 16px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--card); font-size: 11.5px; color: var(--muted);
+}
+.ctl label { display: flex; align-items: center; gap: 7px; }
+.ctl input[type="range"] { width: 170px; accent-color: var(--codex); }
+.ctl input[type="checkbox"] { accent-color: var(--codex); }
+.ctl b { color: var(--text); font-size: 12px; }
+.ctl .out { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; min-width: 96px; }
+.wrap { max-width: 1240px; margin: 0 auto; }
+.cap { font-size: 12.5px; color: var(--muted); margin: 0 2px 12px; line-height: 1.55; }
+.cap b { color: var(--text); }
+.h2 { font-size: 13px; font-weight: 700; letter-spacing: 0.3px; color: var(--text); margin: 42px 2px 10px; }
+.board { display: flex; gap: 30px; flex-wrap: wrap; align-items: flex-start; }
+.frame { width: 340px; }
+.frame .cap { min-height: 92px; }
+.shot { height: 640px; }
+</style>
+</head>
+<body>
+
+<div class="intro">
+  <h1>Quota windows — timeline</h1>
+  <p>
+    An extra screen, not a replacement: the tabs keep doing what they do, and this answers
+    "when does what reset, and am I burning it too fast?". A bar's <b>length is a window's span</b>
+    (start → reset), the fill is the <b>quota spent</b> in it, and the dashed notch is <b>now</b> —
+    fill ahead of the notch means you're outrunning the window. The range switcher decides which
+    windows can be drawn honestly: <b>Today</b> puts 5-hour sessions on an hour axis where they're
+    full-size bars, while <b>Week</b> and <b>2 weeks</b> are the 7-day view you sketched, with
+    sessions dropping to a density strip instead of unreadable slivers.
+  </p>
+</div>
+
+<div class="ctl">
+  <label><b>Now</b> <input type="range" id="shift" min="0" max="168" step="1" value="0" /><span class="out" id="shiftOut">+0h</span></label>
+  <label><input type="checkbox" id="showSession" checked /> Session rows</label>
+  <label><input type="checkbox" id="showBurn" checked /> Burn strip</label>
+  <label><input type="checkbox" id="showGhost" checked /> Next windows (dashed)</label>
+</div>
+
+<div class="wrap">
+  <div class="cap"><b>The full view.</b> Switch ranges in the header — the row set changes with the
+    range, because a 5-hour window is a bar at day scale and a tick at week scale.</div>
+  <div id="wide"></div>
+</div>
+
+<div class="wrap">
+  <div class="h2">IN THE TRAY (340 × 640, the real window)</div>
+  <div class="board">
+    <div class="frame">
+      <div class="cap"><b>Tray · Today.</b> The day view survives the squeeze: 24 hours across
+        312&nbsp;px is 13&nbsp;px an hour, so a 5-hour window is still a 65&nbsp;px bar. Finished
+        sessions dimmed, the live one bright, next one dashed. The weekly row keeps the hourly burn
+        plus a chip for its own total.</div>
+      <div class="shot" id="tray-day"></div>
+    </div>
+    <div class="frame">
+      <div class="cap"><b>Tray · 2 weeks.</b> The same screen at week scale: weekly bars read fine,
+        sessions collapse to the density strip. This is the one that wants a wider window — the
+        header link pops it out.</div>
+      <div class="shot" id="tray-week"></div>
+    </div>
+    <div class="frame">
+      <div class="cap"><b>Where it's reached from.</b> Nothing on Overview / Codex / Claude changes;
+        a single row at the bottom summarises the next reset and opens the timeline. The sparkline
+        is today's sessions, so the row is useful even if you never click it.</div>
+      <div class="shot" id="tray-entry"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------- sample data ----------
+// Offsets are hours relative to "now" so the mockup always looks live.
+const H = 3600e3, D = 24 * H;
+const BASE = Date.now();
+
+const CREDS = [
+  {
+    id: "cx", name: "codex-max@gmail.com", prov: "codex",
+    weekly: { kind: "Weekly", short: "7d", span: 168, startH: -30, used: 26 },
+    // Final spend of each 5h window, cycled by window index; [0] is the live one.
+    session: { kind: "Session", short: "5h", span: 5, startH: -2.1, pattern: [100, 62, 31, 88, 0, 44, 73, 18] },
+    // Share of the weekly allowance spent in each hour of the day.
+    burn: [0, 0, 0, 0, 0, 0, 0, 0.4, 1.1, 2.3, 1.8, 0.9, 0, 0.6, 2.7, 3.1, 1.4, 0.8, 0, 0, 0.3, 0, 0, 0],
+  },
+  {
+    id: "c1", name: "abcd12@icloud.com", prov: "claude",
+    weekly: { kind: "Weekly", short: "7d", span: 168, startH: -8, used: 96.2 },
+    session: { kind: "Session", short: "5h", span: 5, startH: -4.2, pattern: [95, 40, 100, 57, 22, 78, 100, 12] },
+    burn: [0, 0, 0, 0, 0, 1.2, 3.4, 4.1, 2.8, 0, 0, 1.9, 5.2, 4.4, 3.0, 1.1, 0, 0, 0, 0, 0, 0, 0, 0],
+  },
+  {
+    // Weekly-only credential: shows the view coping with a missing window kind.
+    id: "c2", name: "xyz10@email.me", prov: "claude",
+    weekly: { kind: "Weekly", short: "7d", span: 168, startH: -160, used: 100 },
+    session: null,
+    burn: [0.2, 0, 0, 0, 0, 0, 0, 0, 0.5, 1.4, 0.7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  },
+];
+
+const RANGES = {
+  day:  { label: "Today",   days: 1,  cols: 12 },
+  week: { label: "Week",    days: 7,  cols: 7 },
+  two:  { label: "2 weeks", days: 14, cols: 14 },
+};
+
+// ---------- state ----------
+const state = { shift: 0, range: "day", trayRange: { day: "day", week: "two" }, session: true, burn: true, ghost: true };
+const now = () => BASE + state.shift * H;
+
+// ---------- helpers ----------
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
+const pad = (n) => String(n).padStart(2, "0");
+const startOfDay = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+
+const hhmm = (t) => { const d = new Date(t); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const dayStamp = (t) => { const d = new Date(t); return `${pad(d.getMonth() + 1)}/${pad(d.getDate())}`; };
+const stamp = (t) => `${dayStamp(t)} ${hhmm(t)}`;
+const weekday = (t) => new Date(t).toLocaleDateString([], { weekday: "short" });
+// Inside a single day the date adds nothing; past midnight it's the only thing
+// that disambiguates.
+const resetStamp = (t) => (startOfDay(t) === startOfDay(now()) ? hhmm(t) : stamp(t));
+
+function dur(ms) {
+  const m = Math.max(0, Math.round(ms / 60000));
+  const d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60), mm = m % 60;
+  if (d) return `${d}d ${h}h`;
+  if (h) return `${h}h ${mm}m`;
+  return `${mm}m`;
+}
+const pct = (n) => (n >= 99.95 ? "100%" : `${n < 10 ? n.toFixed(1) : n.toFixed(0)}%`);
+
+// ---------- window maths ----------
+// The weekly window that contains `t`, rolled forward from the sample anchor.
+function weeklyAt(w, t) {
+  const span = w.span * H;
+  let start = BASE + w.startH * H, used = w.used;
+  while (t >= start + span) {
+    start += span;
+    // A fresh window fills at roughly the old one's average rate.
+    used = clamp((w.used / 100) * ((t - start) / span) * 100 * 1.1, 0, 100);
+  }
+  return finish({ ...w, start, span, used }, t);
+}
+// Session window number `k`, counting from the one live at load time.
+function sessionAt(s, k, t) {
+  const span = s.span * H;
+  const anchor = BASE + s.startH * H;
+  const start = anchor + k * span;
+  const final = s.pattern[((k % s.pattern.length) + s.pattern.length) % s.pattern.length];
+  const done = t >= start + span;
+  const frac = clamp((t - start) / span, 0, 1);
+  // An in-progress window is only partway to its final figure; spend front-loads
+  // a little, hence the square root rather than a straight ramp.
+  const used = done ? final : final * Math.sqrt(frac);
+  return finish({ ...s, start, span, used, done, future: t < start }, t);
+}
+const sessionIndexAt = (s, t) => Math.floor((t - (BASE + s.startH * H)) / (s.span * H));
+
+function finish(r, t) {
+  const end = r.start + r.span;
+  const elapsed = clamp(((t - r.start) / r.span) * 100, 0, 100);
+  return { ...r, end, elapsed, left: end - t, warn: r.used >= 80, delta: r.used - elapsed };
+}
+function paceOf(r) {
+  if (r.used >= 99.95) return { cls: "hot", txt: "exhausted" };
+  if (r.delta > 20) return { cls: "hot", txt: "burning fast" };
+  if (r.delta > 8) return { cls: "warm", txt: "ahead of pace" };
+  if (r.delta < -8) return { cls: "", txt: "under pace" };
+  return { cls: "", txt: "on pace" };
+}
+const provClass = (c) => (c.prov === "claude" ? "claude" : "");
+
+// ---------- axis ----------
+function axisFor(range) {
+  const r = RANGES[range];
+  const a0 = startOfDay(now());
+  const a1 = a0 + r.days * D;
+  return {
+    r, a0, a1,
+    at: (t) => ((t - a0) / (a1 - a0)) * 100,
+    clampAt: (t) => clamp(((t - a0) / (a1 - a0)) * 100, 0, 100),
+  };
+}
+function axisHead(ax, range) {
+  const { r, a0 } = ax;
+  let out = "";
+  if (range === "day") {
+    const step = D / r.cols;
+    const hourNow = now() - a0;
+    for (let i = 0; i < r.cols; i++) {
+      const t = a0 + i * step;
+      const on = hourNow >= i * step && hourNow < (i + 1) * step;
+      out += `<div class="col ${on ? "on" : ""}"><div class="c1">${i === 0 ? "start" : ""}&nbsp;</div><div class="c2">${hhmm(t)}</div></div>`;
+    }
+  } else {
+    for (let i = 0; i < r.cols; i++) {
+      const t = a0 + i * D;
+      out += `<div class="col ${i === 0 ? "on" : ""}"><div class="c1">${weekday(t)}</div><div class="c2">${dayStamp(t)}</div></div>`;
+    }
+  }
+  return out;
+}
+
+// ---------- wide rows ----------
+// A window bar clipped to the axis, with chevrons where it runs off the edge.
+function barHtml(ax, c, r, opts) {
+  const { at, clampAt } = ax;
+  const l = clampAt(r.start), w = Math.max(0.6, clampAt(r.end) - l);
+  const clipL = at(r.start) < -0.01, clipR = at(r.end) > 100.01;
+  const cls = [
+    c.prov === "codex" ? "codex" : "claude",
+    r.warn ? "warn" : "",
+    r.done ? "done" : "",
+    clipL ? "clipL" : "", clipR ? "clipR" : "",
+  ].filter(Boolean).join(" ");
+  const label = w > (opts.labelMin || 5)
+    ? `<div class="bt" style="${clipL ? "padding-left:18px" : ""}"><b>${pct(r.used)}</b>&nbsp;· ${opts.done ? "spent" : resetStamp(r.end)}</div>`
+    : "";
+  const tip = `${r.kind} · ${stamp(r.start)} → ${stamp(r.end)} · ${pct(r.used)} used · ${pct(r.elapsed)} of the window elapsed · ${paceOf(r).txt}`;
+  return `
+    <div class="bar ${cls}" style="left:${l}%;width:${w}%;top:${opts.top}px;height:${opts.h}px" title="${esc(tip)}">
+      <div class="bf" style="width:${r.used}%"></div>
+      ${r.done || r.future ? "" : `<div class="notch" style="left:${r.elapsed}%"></div>`}
+      ${clipL ? `<span class="chev l">‹</span>` : ""}${clipR ? `<span class="chev r">›</span>` : ""}
+      ${label}
+    </div>`;
+}
+function ghostHtml(ax, r, top, h, count) {
+  if (!state.ghost) return "";
+  let out = "";
+  for (let g = 0; g < count; g++) {
+    const gs = r.end + g * r.span, ge = gs + r.span;
+    if (ax.at(gs) >= 100) break;
+    const l = ax.clampAt(gs), w = Math.max(0.6, ax.clampAt(ge) - l);
+    const clipR = ax.at(ge) > 100.01;
+    out += `<div class="ghost ${clipR ? "clipR" : ""}" style="left:${l}%;width:${w}%;top:${top}px;height:${h}px"
+      title="${esc(`next window · ${stamp(gs)} → ${stamp(ge)}`)}">${w > 11 ? resetStamp(ge) : ""}</div>`;
+  }
+  return out;
+}
+
+// Weekly row: the bar the concept is built around.
+function weeklyRow(ax, c) {
+  const r = weeklyAt(c.weekly, now());
+  const p = paceOf(r);
+  const plot = `
+    ${ghostHtml(ax, r, 16, 30, 2)}
+    ${barHtml(ax, c, r, { top: 16, h: 30, labelMin: 5 })}
+    <div class="nowline" style="left:${ax.clampAt(now())}%"></div>`;
+  return `
+    <div class="grow first">
+      <div class="cred-col">
+        <div class="cred-line">
+          <span class="dot ${provClass(c)}"></span>
+          <span class="nm">${esc(c.name)}</span>
+          <span class="pill tiny ${p.cls}">${esc(p.txt)}</span>
+        </div>
+        <div class="cred-sub">Weekly <b>${pct(r.used)}</b> · resets in ${esc(dur(r.left))}</div>
+      </div>
+      <div class="plot" style="--col:${100 / ax.r.cols}%;height:62px">${plot}</div>
+    </div>`;
+}
+
+// Session row, day scale: the chain of 5h windows across the visible range.
+function sessionRowDay(ax, c) {
+  const s = c.session;
+  if (!s) return "";
+  const k0 = sessionIndexAt(s, ax.a0) - 1, k1 = sessionIndexAt(s, ax.a1) + 1;
+  const live = sessionAt(s, sessionIndexAt(s, now()), now());
+  let plot = "";
+  let count = 0, spent = 0;
+  for (let k = k0; k <= k1; k++) {
+    const r = sessionAt(s, k, now());
+    if (r.end <= ax.a0 || r.start >= ax.a1) continue;
+    if (r.future) {
+      plot += state.ghost
+        ? `<div class="ghost" style="left:${ax.clampAt(r.start)}%;width:${Math.max(0.6, ax.clampAt(r.end) - ax.clampAt(r.start))}%;top:16px;height:30px"
+             title="${esc(`next window · ${stamp(r.start)} → ${stamp(r.end)}`)}">${resetStamp(r.end)}</div>`
+        : "";
+    } else {
+      plot += barHtml(ax, c, r, { top: 16, h: 30, labelMin: 5, done: r.done });
+      count++; spent += r.used;
+    }
+  }
+  plot += `<div class="nowline" style="left:${ax.clampAt(now())}%"></div>`;
+  return `
+    <div class="grow sub">
+      <div class="cred-col">
+        <div class="kind">Session · 5h</div>
+        <div class="kmeta">live <b>${pct(live.used)}</b> · resets ${esc(resetStamp(live.end))} · ${count} today</div>
+      </div>
+      <div class="plot" style="--col:${100 / ax.r.cols}%;height:62px">${plot}</div>
+    </div>`;
+}
+
+// Session row, week scale: one tick per window, height = spend. Bars would be
+// 3 px wide here; ticks stay honest and still show the rhythm.
+function sessionRowDensity(ax, c) {
+  const s = c.session;
+  if (!s) return "";
+  const k0 = sessionIndexAt(s, ax.a0), k1 = sessionIndexAt(s, ax.a1);
+  const w = 100 / ((ax.a1 - ax.a0) / (s.span * H));
+  let ticks = "", exhausted = 0, done = 0;
+  for (let k = k0; k <= k1; k++) {
+    const r = sessionAt(s, k, now());
+    if (r.end <= ax.a0 || r.start >= ax.a1) continue;
+    const h = 2 + (r.used / 100) * 28;
+    const cls = [provClass(c), r.future ? "future" : "", r.used >= 99.95 ? "warn" : ""].filter(Boolean).join(" ");
+    ticks += `<div class="tick ${cls}" style="left:${ax.clampAt(r.start) + w * 0.12}%;width:${w * 0.76}%;height:${r.future ? 3 : h}px"
+      title="${esc(`${stamp(r.start)} → ${stamp(r.end)} · ${pct(r.used)} used`)}"></div>`;
+    if (!r.future) { done++; if (r.used >= 99.95) exhausted++; }
+  }
+  return `
+    <div class="grow sub">
+      <div class="cred-col">
+        <div class="kind">Session · 5h</div>
+        <div class="kmeta">${done} windows${exhausted ? ` · <b>${exhausted} maxed out</b>` : ""}</div>
+      </div>
+      <div class="plot" style="--col:${100 / ax.r.cols}%;height:54px">
+        <div class="dens-base"></div>
+        ${ticks}
+        <div class="nowline" style="left:${ax.clampAt(now())}%"></div>
+      </div>
+    </div>`;
+}
+
+// Burn strip: quota spent per hour (day) or per day (week), on the same axis.
+function burnRow(ax, c, range) {
+  if (!state.burn) return "";
+  const n = now();
+  let bars = "", total = 0;
+  if (range === "day") {
+    const hourNow = (n - ax.a0) / H;
+    const max = Math.max(...c.burn, 1);
+    for (let i = 0; i < 24; i++) {
+      const v = i <= hourNow ? c.burn[i] : 0;
+      total += v;
+      if (!v) continue;
+      const h = 3 + (v / max) * 27;
+      bars += `<div class="burn ${provClass(c) || "codex"}" style="left:${(i / 24) * 100 + 0.5}%;width:${100 / 24 - 1}%;height:${h}px"
+        title="${esc(`${pad(i)}:00 · ${v.toFixed(1)}% of the weekly allowance`)}"></div>`;
+    }
+  } else {
+    // Same series, folded into a day per column so the strip keeps working.
+    const daily = c.burn.reduce((a, v) => a + v, 0);
+    for (let i = 0; i < ax.r.days; i++) {
+      const t = ax.a0 + i * D;
+      if (t > n) break;
+      const v = daily * (0.45 + 0.5 * Math.abs(Math.sin(i * 1.7 + c.name.length)));
+      total += v;
+      const h = 3 + (v / (daily * 1.1)) * 27;
+      bars += `<div class="burn ${provClass(c) || "codex"}" style="left:${(i / ax.r.days) * 100 + 0.6}%;width:${100 / ax.r.days - 1.2}%;height:${h}px"
+        title="${esc(`${dayStamp(t)} · ${v.toFixed(1)}% of the weekly allowance`)}"></div>`;
+    }
+  }
+  return `
+    <div class="grow sub">
+      <div class="cred-col">
+        <div class="kind">Burn</div>
+        <div class="kmeta">${range === "day" ? "per hour" : "per day"} · <b>+${total.toFixed(1)}%</b> ${range === "day" ? "today" : "this range"}</div>
+      </div>
+      <div class="plot" style="--col:${100 / ax.r.cols}%;height:54px">
+        <div class="dens-base"></div>
+        ${bars}
+        <div class="nowline" style="left:${ax.clampAt(now())}%"></div>
+      </div>
+    </div>`;
+}
+
+// Day view: the weekly window can't be a bar (it runs off both edges), so it
+// becomes a band with chevrons plus its own figure — the burn strip underneath
+// is what carries the day's shape.
+function weeklyBandRow(ax, c) {
+  const r = weeklyAt(c.weekly, now());
+  const p = paceOf(r);
+  const clipL = ax.at(r.start) < -0.01, clipR = ax.at(r.end) > 100.01;
+  const l = ax.clampAt(r.start), w = Math.max(2, ax.clampAt(r.end) - l);
+  return `
+    <div class="grow first">
+      <div class="cred-col">
+        <div class="cred-line">
+          <span class="dot ${provClass(c)}"></span>
+          <span class="nm">${esc(c.name)}</span>
+          <span class="pill tiny ${p.cls}">${esc(p.txt)}</span>
+        </div>
+        <div class="cred-sub">Weekly <b>${pct(r.used)}</b> · resets in ${esc(dur(r.left))}</div>
+      </div>
+      <div class="plot" style="--col:${100 / ax.r.cols}%;height:54px">
+        <div class="spanband" style="left:${l}%;width:${w}%;top:14px;height:26px"
+             title="${esc(`Weekly window · ${stamp(r.start)} → ${stamp(r.end)}`)}">
+          ${clipL ? `<span class="chev l">‹</span>` : ""}${clipR ? `<span class="chev r">›</span>` : ""}
+          <span class="lbl">weekly window continues · resets <b>${esc(stamp(r.end))}</b></span>
+        </div>
+        <div class="nowline" style="left:${ax.clampAt(now())}%"></div>
+      </div>
+    </div>`;
+}
+
+// ---------- the wide surface ----------
+function wide() {
+  const range = state.range;
+  const ax = axisFor(range);
+  const rows = CREDS.map((c) => {
+    if (range === "day") {
+      return weeklyBandRow(ax, c)
+        + (state.session ? sessionRowDay(ax, c) : "")
+        + burnRow(ax, c, range);
+    }
+    return weeklyRow(ax, c)
+      + (state.session ? sessionRowDensity(ax, c) : "")
+      + burnRow(ax, c, range);
+  }).join("");
+
+  const segs = Object.entries(RANGES)
+    .map(([k, v]) => `<button data-range="${k}" class="${k === range ? "on" : ""}">${v.label}</button>`)
+    .join("");
+  const sub = range === "day"
+    ? `${dayStamp(ax.a0)} · 24 hours · 5-hour sessions full size`
+    : `${dayStamp(ax.a0)} – ${dayStamp(ax.a1 - D)} · ${RANGES[range].days} days · sessions as density`;
+
+  return `
+    <div class="wide">
+      <div class="wide-hd">
+        <div>
+          <h2>Quota windows</h2>
+          <div class="sub">${sub} · now ${stamp(now())}</div>
+        </div>
+        <div class="segs" id="segs">${segs}</div>
+      </div>
+      <div class="gantt">
+        <div class="gantt-hd">
+          <div class="cred-col">CREDENTIAL</div>
+          <div class="cols">${axisHead(ax, range)}</div>
+        </div>
+        ${rows}
+      </div>
+      <div class="wide-legend">
+        <i><span class="key used"></span> quota spent</i>
+        <i><span class="key span"></span> window span (start → reset)</i>
+        <i><span class="key next"></span> next window</i>
+        <i>┆ notch = now inside the window · │ line = now on the axis · ‹ › = window continues past the range</i>
+      </div>
+    </div>`;
+}
+
+// ---------- tray ----------
+function trayTimeline(which) {
+  const range = state.trayRange[which];
+  const ax = axisFor(range);
+  const cols = range === "day" ? 6 : RANGES[range].days;
+  const colPct = 100 / cols;
+
+  let axisLbl = "";
+  for (let i = 0; i < cols; i++) {
+    axisLbl += `<span>${range === "day" ? pad(i * 4) : dayStamp(ax.a0 + i * D).slice(0, 2) === dayStamp(ax.a0).slice(0, 2) && i % 2 ? "" : dayStamp(ax.a0 + i * D)}</span>`;
+  }
+
+  const body = CREDS.map((c) => {
+    const wk = weeklyAt(c.weekly, now());
+    let rows = "";
+
+    if (range === "day") {
+      // 5h sessions as real bars — the whole point of the day view.
+      if (c.session && state.session) {
+        const s = c.session;
+        let segs = "";
+        for (let k = sessionIndexAt(s, ax.a0) - 1; k <= sessionIndexAt(s, ax.a1) + 1; k++) {
+          const r = sessionAt(s, k, now());
+          if (r.end <= ax.a0 || r.start >= ax.a1) continue;
+          const l = ax.clampAt(r.start), w = Math.max(1, ax.clampAt(r.end) - l);
+          if (r.future) {
+            if (state.ghost) segs += `<div class="tw-ghost" style="left:${l}%;width:${w}%"></div>`;
+            continue;
+          }
+          const cls = [provClass(c), r.warn ? "warn" : "", r.done ? "done" : ""].filter(Boolean).join(" ");
+          segs += `<div class="tw-seg ${cls}" style="left:${l}%;width:${w}%"
+            title="${esc(`${hhmm(r.start)} → ${hhmm(r.end)} · ${pct(r.used)} used`)}">
+            <div class="f" style="width:${r.used}%"></div>${w > 12 ? `<span class="n">${pct(r.used)}</span>` : ""}</div>`;
+        }
+        rows += `<div class="tw-row"><span class="k">5h</span>
+          <div class="tw-plot" style="--col:${colPct}%">${segs}<div class="tw-now" style="left:${ax.clampAt(now())}%"></div></div></div>`;
+      }
+      // Weekly: hourly burn on the same axis, with the total as a chip.
+      if (state.burn) {
+        const max = Math.max(...c.burn, 1);
+        const hourNow = (now() - ax.a0) / H;
+        let bars = "";
+        for (let i = 0; i < 24; i++) {
+          const v = i <= hourNow ? c.burn[i] : 0;
+          if (!v) continue;
+          bars += `<div class="tw-burn ${provClass(c)}" style="left:${(i / 24) * 100 + 0.4}%;width:${100 / 24 - 0.8}%;height:${3 + (v / max) * 15}px"
+            title="${esc(`${pad(i)}:00 · ${v.toFixed(1)}% of the weekly allowance`)}"></div>`;
+        }
+        rows += `<div class="tw-row"><span class="k">7d</span>
+          <div class="tw-plot tall" style="--col:${colPct}%">${bars}
+            <div class="tw-now" style="left:${ax.clampAt(now())}%"></div>
+            <span class="tw-chip"><b>${pct(wk.used)}</b> · ${esc(dur(wk.left))}</span></div></div>`;
+      }
+    } else {
+      // Week scale: weekly bar + session density, same as the wide view.
+      const l = ax.clampAt(wk.start), w = Math.max(1, ax.clampAt(wk.end) - l);
+      const cls = [provClass(c), wk.warn ? "warn" : ""].filter(Boolean).join(" ");
+      const gh = state.ghost && ax.at(wk.end) < 100
+        ? `<div class="tw-ghost" style="left:${ax.clampAt(wk.end)}%;width:${Math.max(1, ax.clampAt(wk.end + wk.span) - ax.clampAt(wk.end))}%"></div>` : "";
+      rows += `<div class="tw-row"><span class="k">7d</span>
+        <div class="tw-plot" style="--col:${colPct}%">${gh}
+          <div class="tw-seg ${cls}" style="left:${l}%;width:${w}%" title="${esc(`${pct(wk.used)} used · resets ${stamp(wk.end)}`)}">
+            <div class="f" style="width:${wk.used}%"></div>${w > 16 ? `<span class="n">${pct(wk.used)}</span>` : ""}</div>
+          <div class="tw-now" style="left:${ax.clampAt(now())}%"></div></div></div>`;
+      if (c.session && state.session) {
+        const s = c.session, tw = 100 / ((ax.a1 - ax.a0) / (s.span * H));
+        let ticks = "";
+        for (let k = sessionIndexAt(s, ax.a0); k <= sessionIndexAt(s, ax.a1); k++) {
+          const r = sessionAt(s, k, now());
+          if (r.end <= ax.a0 || r.start >= ax.a1) continue;
+          const h = 2 + (r.used / 100) * 14;
+          const tc = [provClass(c), r.future ? "future" : "", r.used >= 99.95 ? "warn" : ""].filter(Boolean).join(" ");
+          ticks += `<div class="tick ${tc}" style="left:${ax.clampAt(r.start) + tw * 0.1}%;width:${tw * 0.8}%;height:${r.future ? 2 : h}px;bottom:2px"
+            title="${esc(`${stamp(r.start)} · ${pct(r.used)} used`)}"></div>`;
+        }
+        rows += `<div class="tw-row"><span class="k">5h</span>
+          <div class="tw-plot" style="--col:${colPct}%">${ticks}<div class="tw-now" style="left:${ax.clampAt(now())}%"></div></div></div>`;
+      }
+    }
+
+    return `
+      <div class="tw-cred">
+        <span class="dot ${provClass(c)}"></span>
+        <span class="nm">${esc(c.name)}</span>
+        <span class="rt">${esc(dur(wk.left))}</span>
+      </div>
+      ${rows}`;
+  }).join("");
+
+  const segs = ["day", "week", "two"]
+    .map((k) => `<button data-tray="${which}" data-range="${k}" class="${k === range ? "on" : ""}">${RANGES[k].label}</button>`)
+    .join("");
+
+  return panel(`
+    <div class="hd">
+      <span class="hd-title">Quota windows</span>
+      <span class="hd-right">⤢</span>
+    </div>
+    <div class="tsegs">${segs}</div>
+    <div class="tw-axis">${axisLbl}</div>
+    ${body}
+    <div class="sec-sub">${range === "day"
+      ? "Bar = one 5-hour window; dim = finished, bright = live, dashed = next. The 7d row is spend per hour."
+      : "Bar = the weekly window; the 5h row is one tick per session, height = how much of it went."}</div>`,
+    "timeline");
+}
+
+function trayEntry() {
+  const c = CREDS[0], s = c.session;
+  const wk = weeklyAt(c.weekly, now());
+  const live = sessionAt(s, sessionIndexAt(s, now()), now());
+  const soonest = CREDS.map((x) => weeklyAt(x.weekly, now())).sort((a, b) => a.left - b.left)[0];
+  const spark = Array.from({ length: 6 }, (_, i) => {
+    const r = sessionAt(s, sessionIndexAt(s, now()) - 5 + i, now());
+    return `<i style="height:${2 + (r.used / 100) * 12}px"></i>`;
+  }).join("");
+
+  const acct = (x, sessionUsed, weeklyUsed, resets) => `
+    <div class="acct">
+      <div class="acct-head"><span class="dot ${provClass(x)}"></span>${esc(x.name)}</div>
+      <div class="bgauge ${provClass(x)} ${sessionUsed >= 80 ? "warn" : ""}">
+        <div class="bfill" style="width:${sessionUsed}%"></div>
+        <div class="btxt"><span>Session <b>${pct(sessionUsed)}</b><span class="sub"> used</span></span><span class="rr">${esc(resets)}</span></div>
+      </div>
+      <div class="bgauge ${provClass(x)} ${weeklyUsed >= 80 ? "warn" : ""}">
+        <div class="bfill" style="width:${weeklyUsed}%"></div>
+        <div class="btxt"><span>Weekly <b>${pct(weeklyUsed)}</b><span class="sub"> used</span></span><span class="rr">${esc(dur(weeklyAt(x.weekly, now()).left))}</span></div>
+      </div>
+    </div>`;
+
+  const c1 = CREDS[1], live1 = sessionAt(c1.session, sessionIndexAt(c1.session, now()), now());
+  return panel(`
+    <div class="hd">
+      <span class="hd-title">Overview</span>
+      <span class="hd-right">${esc(hhmm(now()))}</span>
+    </div>
+    ${acct(c, live.used, wk.used, `resets ${resetStamp(live.end)}`)}
+    ${acct(c1, live1.used, weeklyAt(c1.weekly, now()).used, `resets ${resetStamp(live1.end)}`)}
+    <button class="entry">
+      <span class="spark ${provClass(c)}">${spark}</span>
+      <span>Quota windows</span>
+      <span class="sp">next reset ${esc(dur(soonest.left))}</span>
+      <span class="go">›</span>
+    </button>
+    <div class="sec-sub">One new row. Everything above it is the tab exactly as it ships today.</div>`,
+    "overview");
+}
+
+function panel(inner, active) {
+  const tab = (k, ico, label) =>
+    `<button class="tab ${active === k ? "active" : ""}"><span class="ico">${ico}</span>${label}</button>`;
+  return `
+    <div class="panel">
+      <main class="content">${inner}</main>
+      <nav class="tabs">
+        ${tab("overview", "▦", "Overview")}
+        ${tab("codex", "◍", "Codex")}
+        ${tab("claude", "✳", "Claude")}
+        ${tab("timeline", "⏱", "Windows")}
+        <button class="tab gear">⚙</button>
+      </nav>
+    </div>`;
+}
+
+// ---------- render ----------
+function render() {
+  document.getElementById("wide").innerHTML = wide();
+  document.getElementById("tray-day").innerHTML = trayTimeline("day");
+  document.getElementById("tray-week").innerHTML = trayTimeline("week");
+  document.getElementById("tray-entry").innerHTML = trayEntry();
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-range]");
+  if (!b) return;
+  if (b.dataset.tray) state.trayRange[b.dataset.tray] = b.dataset.range;
+  else state.range = b.dataset.range;
+  render();
+});
+document.getElementById("shift").addEventListener("input", (e) => {
+  state.shift = Number(e.target.value);
+  document.getElementById("shiftOut").textContent =
+    state.shift ? `+${state.shift}h · ${stamp(now())}` : "+0h";
+  render();
+});
+for (const [id, key] of [["showSession", "session"], ["showBurn", "burn"], ["showGhost", "ghost"]]) {
+  document.getElementById(id).addEventListener("change", (e) => {
+    state[key] = e.target.checked;
+    render();
+  });
+}
+render();
+</script>
+</body>
+</html>
