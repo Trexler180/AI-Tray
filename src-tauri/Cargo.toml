@@ -1,6 +1,6 @@
 [package]
 name = "ai-usage-tray"
-version = "0.4.0"
+version = "0.4.1"
 description = "Tray app for Claude & Codex usage"
 authors = ["dev"]
 edition = "2021"
