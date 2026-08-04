@@ -162,8 +162,10 @@ body {
 }
 
 /* 26px hit target with a hover chip; the spin lives on the inner svg so the
-   button's own transform stays free for the press state. */
-.hd-refresh {
+   button's own transform stays free for the press state. Every header button
+   shares this chip so a row of them reads as one control cluster. */
+.hd-refresh,
+.hd-expand {
   width: 26px;
   height: 26px;
   padding: 0;
@@ -178,15 +180,18 @@ body {
   cursor: pointer;
   transition: background 0.15s, color 0.15s, transform 0.08s ease;
 }
-.hd-refresh:hover {
+.hd-refresh:hover,
+.hd-expand:hover {
   color: var(--text);
   background: rgba(255, 255, 255, 0.07);
 }
-.hd-refresh:active {
+.hd-refresh:active,
+.hd-expand:active {
   transform: scale(0.9);
   transition-duration: 0s;
 }
-.hd-refresh:focus-visible {
+.hd-refresh:focus-visible,
+.hd-expand:focus-visible {
   outline: 2px solid var(--codex);
   outline-offset: 1px;
 }
@@ -1006,28 +1011,6 @@ body {
   color: var(--warn);
   border-color: rgba(223, 160, 95, 0.4);
 }
-/* Expand / collapse, sized like the header's refresh button. */
-.hd-expand {
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  flex: 0 0 auto;
-  display: inline-grid;
-  place-items: center;
-  background: transparent;
-  border: none;
-  border-radius: 7px;
-  color: var(--muted);
-  font: inherit;
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-.hd-expand:hover {
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.07);
-}
 
 /* Range switch, compact form. */
 .tsegs {
@@ -1248,6 +1231,17 @@ body {
   padding: 3px;
   background: rgba(255, 255, 255, 0.05);
   border-radius: 999px;
+}
+/* The range switch and the panel controls ride together on the right, both
+   centred against the title rather than pinned to its top line. `.hd-right`
+   drops its own auto margin here — two of them would split the gap and strand
+   the switch mid-header. */
+.wide-hd .segs,
+.wide-hd .hd-right {
+  align-self: center;
+}
+.wide-hd .hd-right {
+  margin-left: 10px;
 }
 .segs button {
   padding: 5px 14px;

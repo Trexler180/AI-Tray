@@ -74,6 +74,30 @@ function resetText(g) {
 // ---------- icons ----------
 // Drawn rather than typed: the ⟳ / ↻ font glyphs render as flattened ellipses
 // and, because their ink sits high in the line box, wobble when rotated.
+// Expand and shrink as a mirrored pair: arrows out to the corners, arrows back
+// in from them. The ⤢/⤡ glyphs both read as "enlarge" — same diagonal, same
+// outward heads — so the shrink control looked like a second expand button.
+function expandIcon(px = 14, stroke = 1.9) {
+  return `<svg viewBox="0 0 24 24" width="${px}" height="${px}" fill="none"
+    stroke="currentColor" stroke-width="${stroke}" stroke-linecap="round"
+    stroke-linejoin="round" aria-hidden="true">
+    <polyline points="15 3 21 3 21 9" />
+    <polyline points="9 21 3 21 3 15" />
+    <line x1="21" y1="3" x2="14" y2="10" />
+    <line x1="3" y1="21" x2="10" y2="14" />
+  </svg>`;
+}
+function shrinkIcon(px = 14, stroke = 1.9) {
+  return `<svg viewBox="0 0 24 24" width="${px}" height="${px}" fill="none"
+    stroke="currentColor" stroke-width="${stroke}" stroke-linecap="round"
+    stroke-linejoin="round" aria-hidden="true">
+    <polyline points="20 10 14 10 14 4" />
+    <polyline points="4 14 10 14 10 20" />
+    <line x1="14" y1="10" x2="21" y2="3" />
+    <line x1="10" y1="14" x2="3" y2="21" />
+  </svg>`;
+}
+
 function refreshIcon(px = 14, stroke = 1.9) {
   return `<svg viewBox="0 0 24 24" width="${px}" height="${px}" fill="none"
     stroke="currentColor" stroke-width="${stroke}" stroke-linecap="round"
@@ -224,18 +248,27 @@ function healthBadge(health, opts = {}) {
 }
 
 // ---------- panel header (absorbs the old footer) ----------
-function header(title, extras = "", opts = {}) {
+// The cluster at the right of every header: when the data was collected, then
+// the buttons that act on the panel. Shared by the compact headers and the
+// expanded timeline's own header so the controls keep one size, one order and
+// one set of hover states wherever they appear.
+function headerControls(opts = {}) {
   const stamp = data?.generated_at ? clockTime(data.generated_at) : "—";
   const busy = spinning() ? " busy" : "";
-  // `rightExtra` sits with the timestamp and refresh rather than beside the
-  // title, for controls that act on the panel itself (the timeline's expand).
-  const lead = opts.rightExtra || "";
-  const right = opts.hideRefresh
-    ? `<span class="hd-right">${lead}<span>${esc(opts.rightText || "")}</span></span>`
-    : `<span class="hd-right">${lead}<span title="Last updated">${esc(stamp)}</span>
-        <button class="hd-refresh${busy}" id="refreshBtn" title="Refresh"
-          aria-label="Refresh">${refreshIcon()}</button></span>`;
-  return `<div class="hd"><span class="hd-title">${esc(title)}</span>${extras}${right}</div>`;
+  // `rightExtra` is for controls that act on the panel itself, like the
+  // timeline's expand; it sits next to refresh rather than beside the title.
+  const extra = opts.rightExtra || "";
+  if (opts.hideRefresh)
+    return `<span class="hd-right"><span>${esc(opts.rightText || "")}</span>${extra}</span>`;
+  return `<span class="hd-right"><span title="Last updated">${esc(stamp)}</span>${extra}
+    <button class="hd-refresh${busy}" id="refreshBtn" title="Refresh"
+      aria-label="Refresh">${refreshIcon()}</button></span>`;
+}
+
+function header(title, extras = "", opts = {}) {
+  return `<div class="hd"><span class="hd-title">${esc(title)}</span>${extras}${headerControls(
+    opts
+  )}</div>`;
 }
 
 // ---------- merged value + history card ----------
@@ -977,7 +1010,7 @@ function renderWindows() {
   const colPct = 100 / axis.cols;
 
   const expand = `<button class="hd-expand" id="windowExpand"
-    title="Expand" aria-label="Expand">⤢</button>`;
+    title="Expand" aria-label="Expand">${expandIcon()}</button>`;
   let html = header("Quota windows", "", { rightExtra: expand });
   html += windowRangeControl();
 
@@ -1155,13 +1188,15 @@ function renderWindowsWide() {
       ? `${mmdd(axis.from)} · 24 hours · short windows full size`
       : `${mmdd(axis.from)} – ${mmdd(axis.to - DAY)} · ${axis.days} days · long windows`;
 
+  const shrink = `<button class="hd-expand" id="windowCollapse"
+    title="Shrink" aria-label="Shrink">${shrinkIcon()}</button>`;
   let html = `<div class="wide-hd">
     <div>
       <h2>Quota windows</h2>
       <div class="wide-sub">${esc(sub)} · now ${esc(hhmm(now))}</div>
     </div>
     <div class="segs">${segs}</div>
-    <button class="hd-expand" id="windowCollapse" title="Collapse" aria-label="Collapse">⤡</button>
+    ${headerControls({ rightExtra: shrink })}
   </div>`;
 
   if (!credentials.length) {
