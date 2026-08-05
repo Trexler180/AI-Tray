@@ -10,6 +10,9 @@ let showModelWeekly = localStorage.getItem("showModelWeekly") !== "0";
 // Meter direction: false (default) drains a full bar as the allowance is
 // spent; true fills an empty bar instead.
 let meterFillsUp = localStorage.getItem("meterFillsUp") === "1";
+// A hairline on every time-based meter marking how far through the window the
+// clock is, so the bar can be read as a pace and not just a level.
+let meterPaceLine = localStorage.getItem("meterPaceLine") !== "0";
 let notifyError = null; // provider whose toggle failed to save, if any
 let updateState = null; // updater status + version, pushed from Rust on change
 let updateError = null; // error from the last update toggle, if any
@@ -115,18 +118,37 @@ function refreshIcon(px = 14, stroke = 1.9) {
 // same reading in both fill directions; only the width and the headline flip.
 // Draining (the default) reads as "fuel left"; filling reads as "how much of
 // the allowance is gone".
-function meterBar(cls, usedPct, leftHtml, rightHtml, tip, attrs = "") {
+function meterBar(cls, usedPct, leftHtml, rightHtml, tip, attrs = "", elapsedPct = null) {
   const used = Math.min(100, Math.max(0, usedPct));
   const fill = meterFillsUp ? used : 100 - used;
   // Anything that rounds to 0% in the headline renders as a bare track: the
   // fill's edge line would otherwise leave a 2px sliver reading as "nearly
   // empty" when the meter is empty.
   const empty = fill < 0.5;
+  // The pace line marks where the clock has got to in the same direction the
+  // bar runs, so it can be read against the fill edge without translating:
+  // whichever is further along is the one being spent faster.
+  const mark =
+    elapsedPct === null
+      ? ""
+      : `<div class="bmark" style="left:${meterFillsUp ? elapsedPct : 100 - elapsedPct}%"></div>`;
   return `
     <div class="bgauge ${cls}" title="${tip}" ${attrs}>
       <div class="bfill${empty ? " empty" : ""}" style="width:${empty ? 0 : fill}%"></div>
+      ${mark}
       <div class="btxt"><span class="bl">${leftHtml}</span><span class="rr">${rightHtml}</span></div>
     </div>`;
+}
+
+// How far through its window a gauge is, 0..100. Null when the provider didn't
+// report a window length, which is also what a cap with no clock behind it
+// (usage credits) gets — there is no "through the window" to show.
+function elapsedPercent(g) {
+  if (!g || typeof g.resets_at !== "number") return null;
+  const span = (Number(g.window_minutes) || 0) * 60000;
+  if (span <= 0) return null;
+  const end = g.resets_at * 1000;
+  return clamp(((Date.now() - (end - span)) / span) * 100, 0, 100);
 }
 
 // usedPercent 0..100. The headline follows the fill direction so the number
@@ -138,13 +160,14 @@ function gauge(label, g, opts = {}) {
   const left = (100 - usedPercent).toFixed(0);
   const warn = usedPercent >= 80;
   const cls = [opts.claude ? "claude" : "", warn ? "warn" : ""].join(" ").trim();
+  const elapsed = meterPaceLine ? elapsedPercent(g) : null;
   const tip = `${usedPercent.toFixed(0)}% used · ${left}% left${
     g.resets_in ? ` · resets in ${esc(g.resets_in)}` : ""
-  }`;
+  }${elapsed === null ? "" : ` · ${elapsed.toFixed(0)}% of the window gone`}`;
   const headline = meterFillsUp
     ? `<b>${usedPercent.toFixed(0)}%</b><span class="sub"> used</span>`
     : `<b>${left}%</b><span class="sub"> left</span>`;
-  return meterBar(cls, usedPercent, `${esc(label)} ${headline}`, resetText(g), tip);
+  return meterBar(cls, usedPercent, `${esc(label)} ${headline}`, resetText(g), tip, "", elapsed);
 }
 
 // ---------- usage credits ----------
@@ -1407,6 +1430,13 @@ function renderSettings() {
     meterFillsUp,
     true
   );
+  html += settingRow(
+    "Pace line",
+    "Mark how far through each window the clock is",
+    "data-meter-pace",
+    meterPaceLine,
+    true
+  );
   if (scopes.length) {
     html += settingRow(
       "Scoped limits",
@@ -1593,6 +1623,15 @@ function render() {
       meterFillsUp = input.checked;
       try {
         localStorage.setItem("meterFillsUp", input.checked ? "1" : "0");
+      } catch (_) {}
+      render();
+    })
+  );
+  content.querySelectorAll("[data-meter-pace]").forEach((input) =>
+    input.addEventListener("change", () => {
+      meterPaceLine = input.checked;
+      try {
+        localStorage.setItem("meterPaceLine", input.checked ? "1" : "0");
       } catch (_) {}
       render();
     })

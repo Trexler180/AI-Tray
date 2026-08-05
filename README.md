@@ -23,6 +23,12 @@ and an API-equivalent value estimate in a compact popover.
   with each account's usage-credit spend, monthly cap, and whether "use
   credits past plan limits" is switched on, plus the Codex credit balance.
 
+Every time-based meter carries a **pace line**: a hairline marking how far
+through its window the clock is, drawn in the same direction the bar runs. Fill
+short of the line means the allowance is going faster than the window refills
+it. Usage credits have a cap but no clock, so they never show one. Turn it off
+in Settings → Display.
+
 ## What the numbers mean
 
 Quota gauges come from the providers' authenticated usage endpoints. The app

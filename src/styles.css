@@ -337,6 +337,20 @@ body {
   background: linear-gradient(90deg, rgba(214, 62, 62, 0.55), rgba(244, 110, 110, 0.7));
   border-right-color: #ff8a8a;
 }
+/* Pace line: where the clock has got to inside the window, drawn in the same
+   direction as the fill so the two can be compared directly — fill short of the
+   line means the allowance is going faster than the window refills it. Kept to
+   a hairline with a dark edge so it stays legible on the fill and on the bare
+   track without competing with either. */
+.bgauge .bmark {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
 .bgauge .btxt {
   position: absolute;
   inset: 0;
