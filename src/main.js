@@ -1,3 +1,5 @@
+import { clamp, elapsedPercent, esc } from "./shared.js";
+
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
@@ -5,6 +7,9 @@ let data = null;
 let activeTab = "overview";
 let creditsOpen = false; // the Credits detail screen, layered over any tab
 let notificationSettings = { codex: false, claude: false, codex_resets: false };
+let widgetSettings = { enabled: false, tray_gap: 10, width: 114 };
+// "ok" | "vertical_taskbar" | "no_taskbar" — why the widget is or is not placeable.
+let widgetPlacement = "ok";
 // Whether the model-scoped weekly gauge (e.g. the Fable-only limit) is shown.
 let showModelWeekly = localStorage.getItem("showModelWeekly") !== "0";
 // Meter direction: false (default) drains a full bar as the allowance is
@@ -39,12 +44,6 @@ function tokens(n) {
   if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
   return String(n);
 }
-// Escape anything that came from logs or APIs before it touches innerHTML.
-const esc = (s) =>
-  String(s ?? "").replace(
-    /[&<>"']/g,
-    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]
-  );
 
 // Wall-clock time in the machine's own 12/24-hour convention. `hour: "numeric"`
 // rather than "2-digit" so it reads 4:42 pm, never 04:42 pm.
@@ -138,17 +137,6 @@ function meterBar(cls, usedPct, leftHtml, rightHtml, tip, attrs = "", elapsedPct
       ${mark}
       <div class="btxt"><span class="bl">${leftHtml}</span><span class="rr">${rightHtml}</span></div>
     </div>`;
-}
-
-// How far through its window a gauge is, 0..100. Null when the provider didn't
-// report a window length, which is also what a cap with no clock behind it
-// (usage credits) gets — there is no "through the window" to show.
-function elapsedPercent(g) {
-  if (!g || typeof g.resets_at !== "number") return null;
-  const span = (Number(g.window_minutes) || 0) * 60000;
-  if (span <= 0) return null;
-  const end = g.resets_at * 1000;
-  return clamp(((Date.now() - (end - span)) / span) * 100, 0, 100);
 }
 
 // usedPercent 0..100. The headline follows the fill direction so the number
@@ -670,7 +658,6 @@ const RANGES = {
 /// Windows this short are "sessions": too brief to read at week scale.
 const SESSION_MAX_MS = 12 * HOUR;
 
-const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 const clampPct = (n) => clamp(Number(n) || 0, 0, 100);
 const pad2 = (n) => String(n).padStart(2, "0");
 // 12-hour, matching the clock times the rest of the panel prints (clockTime).
@@ -1448,6 +1435,54 @@ function renderSettings() {
   }
   html += `</div>`;
 
+  html += `<div class="grp-label">Taskbar widget</div><div class="grp">`;
+  html += settingRow(
+    "Show on the taskbar",
+    "An always-on-top strip of per-account meters",
+    "data-widget-enabled",
+    widgetSettings.enabled,
+    true
+  );
+  if (widgetSettings.enabled) {
+    html += settingRow(
+      "Pace marks",
+      "Mark how far through each window the clock is",
+      "data-widget-option=\"show_pace\"",
+      widgetSettings.show_pace !== false,
+      true
+    );
+    html += settingRow(
+      "Weekly bar",
+      "A dim second bar under each session bar",
+      "data-widget-option=\"show_weekly\"",
+      widgetSettings.show_weekly !== false,
+      true
+    );
+    html += `<div class="grp-row">
+      <span class="rlab">Width<span class="rsub">Or drag the widget's left edge</span></span>
+      <span class="stepper">
+        <button class="acct-btn" data-widget-width="-10" title="Narrower">−</button>
+        <b class="stepval">${Math.round(widgetSettings.width || 114)} px</b>
+        <button class="acct-btn" data-widget-width="10" title="Wider">+</button>
+      </span>
+    </div>`;
+    html += `<div class="grp-row">
+      <span class="rlab">Position and size<span class="rsub">Drag it along the taskbar to move it</span></span>
+      <button class="ghost-btn" data-widget-reset>Reset</button>
+    </div>`;
+  }
+  html += `</div>`;
+  const placementNote = {
+    vertical_taskbar:
+      "Your taskbar is docked to a side. The widget lays its accounts out in two rows across a wide strip, so it stays hidden until the taskbar is along the top or bottom.",
+    no_taskbar:
+      "No taskbar found on this screen — auto-hide is on, or the bar is on another display. The widget stays hidden rather than floating over whatever is underneath.",
+  }[widgetPlacement];
+  if (widgetSettings.enabled && placementNote) {
+    html += `<div class="banner small">${esc(placementNote)}</div>`;
+  }
+  html += `<div class="sec-sub">Windows has no way to put a real button inside the taskbar, so this floats on top of it.</div>`;
+
   const accounts = cl.accounts || [];
   html += `<div class="grp-label">Claude accounts</div>`;
   if (accounts.length) {
@@ -1617,6 +1652,57 @@ function render() {
     input.addEventListener("change", () =>
       setNotifyEnabled(input.dataset.notifyProvider, input.checked)
     )
+  );
+  content.querySelectorAll("[data-widget-enabled]").forEach((input) =>
+    input.addEventListener("change", async () => {
+      const enabled = input.checked;
+      try {
+        await invoke("set_widget_enabled", { enabled });
+        widgetSettings = { ...widgetSettings, enabled };
+      } catch (_) {
+        // Put the switch back if the backend refused to persist it.
+        input.checked = !enabled;
+      }
+      render();
+    })
+  );
+  content.querySelectorAll("[data-widget-option]").forEach((input) =>
+    input.addEventListener("change", async () => {
+      const name = input.dataset.widgetOption;
+      const value = input.checked;
+      try {
+        await invoke("set_widget_option", { name, value });
+        widgetSettings = { ...widgetSettings, [name]: value };
+      } catch (_) {
+        input.checked = !value;
+      }
+      render();
+    })
+  );
+  content.querySelectorAll("[data-widget-width]").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const step = Number(btn.dataset.widgetWidth) || 0;
+      try {
+        // No clamping here: the backend owns the bounds, and reading the result
+        // back is what keeps the stepper honest at the limits rather than
+        // duplicating the min and max in a third place.
+        await invoke("set_widget_width", {
+          width: (widgetSettings.width || 114) + step,
+          commit: true,
+        });
+        widgetSettings = await invoke("get_widget_settings");
+      } catch (_) {}
+      render();
+    })
+  );
+  content.querySelectorAll("[data-widget-reset]").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      try {
+        await invoke("reset_widget_position");
+        widgetSettings = await invoke("get_widget_settings");
+      } catch (_) {}
+      render();
+    })
   );
   content.querySelectorAll("[data-meter-fill]").forEach((input) =>
     input.addEventListener("change", () => {
@@ -1884,6 +1970,14 @@ async function loadNotificationSettings() {
   } catch (_) {}
 }
 
+async function loadWidgetSettings() {
+  try {
+    widgetSettings = await invoke("get_widget_settings");
+    widgetPlacement = await invoke("get_widget_placement");
+    render();
+  } catch (_) {}
+}
+
 async function loadUpdateState() {
   try {
     updateState = await invoke("get_update_state");
@@ -2025,6 +2119,12 @@ document.addEventListener("keydown", (event) => {
 });
 // Rust pushes the updater status on every transition, so the About section
 // tracks a background check without polling.
+listen("widget-settings", (event) => {
+  // The widget can change these itself, by being dragged or resized.
+  if (event.payload) widgetSettings = event.payload;
+  if (activeTab === "settings") render();
+});
+
 listen("update-state", (event) => {
   updateState = event.payload;
   if (activeTab === "settings") render();
@@ -2041,6 +2141,7 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) refresh();
 });
 loadNotificationSettings();
+loadWidgetSettings();
 loadUpdateState();
 loadWindowHistory();
 refresh();

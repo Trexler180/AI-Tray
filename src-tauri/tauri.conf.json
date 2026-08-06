@@ -25,6 +25,21 @@
         "visible": false,
         "shadow": false,
         "focus": true
+      },
+      {
+        "label": "widget",
+        "url": "widget.html",
+        "title": "AI Usage widget",
+        "width": 114,
+        "height": 48,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "shadow": false,
+        "focus": false
       }
     ],
     "security": {

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Usage widget</title>
+    <link rel="stylesheet" href="/src/widget.css" />
+  </head>
+  <body>
+    <!-- The whole surface is the button: one click opens the panel, and a drag
+         moves it along the taskbar. Dragging is wired up in widget.js rather
+         than with data-tauri-drag-region, because that starts the OS drag on
+         mousedown and eats the click. -->
+    <div id="widget" class="w">
+      <!-- Left edge resizes. The right edge is anchored to the tray, so growing
+           leftwards is the only direction that keeps the widget where it is.
+           Kept a sibling of the content, which gets replaced on every render. -->
+      <div id="grip" class="grip" title="Drag to resize"></div>
+      <div id="content" class="content"></div>
+    </div>
+    <script type="module" src="/src/widget.js"></script>
+  </body>
+</html>

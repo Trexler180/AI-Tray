@@ -119,6 +119,54 @@ cannot be rebuilt, which is why
 **Settings → Data sources → Quota window history** reports how much exists
 before offering to clear it.
 
+## Taskbar widget
+
+An optional always-visible strip of per-account meters, off by default and
+switched on in Settings → Taskbar widget.
+
+- One cell per account — Codex first, then Claude — with the account name set
+  inside its own bar, the pace mark from the panel's meters, and a dimmer weekly
+  bar tucked underneath. Colour is the only thing naming the provider.
+- Accounts are flowed across two rows, `ceil(n/2)` on top. With one Codex and
+  two Claude accounts the first Claude moves up beside the Codex and the second
+  spans the row below, so every cell keeps a roughly equal share of the width.
+  Account count never changes the widget's width — more accounts narrow the
+  cells instead.
+- An account whose plan reports only one window (Codex meters weekly only on
+  some plans) draws that single bar filling the row, rather than a real bar over
+  an empty one.
+- Names are measured against the cell they have to fit. Too wide and a leading
+  `claude-`/`codex-` token is dropped first — the cell's colour already says
+  which provider it is — then the first word, then the initial. Widening the
+  widget brings longer names back.
+- Clicking it toggles the panel, exactly as the tray icon does. It never takes
+  focus (`WS_EX_NOACTIVATE`), stays out of Alt-Tab, and hides itself while a
+  fullscreen window owns the monitor.
+- Drag it along the taskbar to move it, or drag its left edge to resize (72–420
+  px; the right edge stays anchored to the tray). Both are remembered. Settings
+  has a width stepper, switches for the pace marks and the weekly bar, and a
+  Reset for position and size.
+- It only draws on a taskbar along the top or bottom. A side-docked bar has no
+  room for a two-row strip, and an auto-hidden one has nothing to sit on, so in
+  both cases the widget stays hidden and Settings says why.
+
+Windows exposes no way for a third-party app to place a real button inside the
+taskbar — the notification area is the only sanctioned spot, and that is a single
+16 px icon. So this floats on top of the bar instead.
+
+Two Windows details drive the placement code. The widget is sized to the strip
+the taskbar *reserves* (monitor minus work area), **not** to `Shell_TrayWnd`'s
+own rect: Windows 11 reports that window ~24 px taller than the bar it paints,
+so matching it leaves the widget standing proud of the taskbar's top edge. It is
+anchored horizontally to the left edge of `TrayNotifyWnd` — the chevron, icons
+and clock — because how wide that block is depends on how many icons are
+showing. Z-order is reclaimed from a `SetWinEventHook` on foreground changes,
+since the taskbar is itself a topmost window and clicking it buries anything
+above; a 3-second pass covers the rest.
+
+The layout was designed in `design/taskbar-flowed-cells-mockups.html`, which
+stays as the reference for the geometry.
+
 ## Behavior
 
 - Left-click the tray icon to toggle the panel; it auto-hides on blur and is

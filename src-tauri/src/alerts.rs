@@ -435,6 +435,9 @@ pub fn refresh_for_alerts(app: AppHandle) {
                 let _ = window.emit("refresh", ());
             }
         }
+        // App-wide, unlike the panel's "refresh": the taskbar widget is visible
+        // whether or not the panel is, and repaints from the cached snapshot.
+        let _ = app.emit("usage-updated", ());
     });
 }
 

@@ -667,6 +667,22 @@ body {
   gap: 4px;
   flex: 0 0 auto;
 }
+/* Numeric setting with a button either side. The value is tabular so the row
+   doesn't jitter as it steps through two- and three-digit widths. */
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.stepper .stepval {
+  min-width: 44px;
+  text-align: center;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
 .acct-btn {
   width: 25px;
   height: 25px;

@@ -1,0 +1,204 @@
+/* Taskbar widget — balanced-flow cells.
+   Ported from design/taskbar-flowed-cells-mockups.html (treatment 01), using
+   the same tokens as src/styles.css so both windows stay one design. */
+
+:root {
+  --codex: #2dd4bf;
+  --claude: #f0a36a;
+  --danger: #ef6b6b;
+  /* Resolved against the taskbar, not the page: the widget sits on the bar, so
+     it takes the bar's light/dark treatment rather than the app's. */
+  --w-track: rgba(255, 255, 255, 0.17);
+  --w-hover: rgba(255, 255, 255, 0.08);
+  --w-on: #f2f5f9;
+  --w-halo: rgba(0, 0, 0, 0.55);
+}
+/* Windows exposes the taskbar's own light/dark setting as the app theme. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --w-track: rgba(0, 0, 0, 0.16);
+    --w-hover: rgba(0, 0, 0, 0.06);
+    --w-on: #14171b;
+    --w-halo: rgba(255, 255, 255, 0.65);
+  }
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+html,
+body {
+  height: 100%;
+  background: transparent;
+  font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+  overflow: hidden;
+}
+
+/* The button fills the window, which is sized to the taskbar strip, so the
+   hover highlight lines up with the bar's own buttons. */
+/* Sizes are in vh so the whole widget scales to whatever strip it lands in —
+   a 48px bar, a 40px "small taskbar", or either of those at 125%/150% — rather
+   than being tuned for one machine. The window is the viewport, so 1vh is 1%
+   of the bar's height. */
+.w {
+  position: relative;
+  height: 100%;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: 9vh 9px;
+  border-radius: 6px;
+  font-variant-numeric: tabular-nums;
+  transition: background 0.15s;
+}
+.w:hover {
+  background: var(--w-hover);
+}
+
+/* Transparent to layout, so the grid stays a direct flex child of .w and keeps
+   stretching to the strip height. It exists only to give render() something to
+   replace that isn't the grip. */
+.content {
+  display: contents;
+}
+
+/* Width follows the window rather than a fixed rail: the widget is resizable,
+   and the cells should spend whatever they are given. */
+.grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8vh;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* A row of account columns; every column shares the row equally, so a single
+   account on a row spans the whole width. The rows split the height between
+   them, which is what lets the bars grow into the space the bar has spare. */
+.row {
+  flex: 1 1 0;
+  display: flex;
+  gap: 2px;
+  min-height: 0;
+  min-width: 0;
+}
+.row > .col {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* One account: its 5-hour cell with the weekly tucked flush underneath. */
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+}
+.cell {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  border-radius: 2px;
+  background: var(--w-track);
+  overflow: hidden;
+}
+.cell > u {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(var(--p) * 1%);
+  background: var(--c);
+}
+.cell.hot > u {
+  background: var(--danger);
+}
+/* Pace mark: how far through the window the clock is. */
+.cell > i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--t) * 1%);
+  width: 1px;
+  background: var(--w-on);
+  opacity: 0.62;
+}
+/* The account name, set inside its own bar. Halo in the opposite colour so it
+   holds up over both the fill and the empty track. */
+.cell > b {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Set from widget.js, which also measures against it to decide whether a
+     name fits — one value, so the two can't disagree. */
+  font-size: var(--label-px, 7px);
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  line-height: 1;
+  color: var(--w-on);
+  z-index: 2;
+  text-shadow: 0 0 2px var(--w-halo), 0 0 1px var(--w-halo);
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* The weekly bar keeps a fixed slice; the session cell above it takes whatever
+   is left, so it is always the dominant one. A one-window account has no weekly
+   bar at all and its single cell fills the row — the `.solo` class needs no
+   rule of its own now that heights come from flex. */
+.col .wk {
+  flex: 0 0 clamp(2px, 7vh, 4px);
+  border-radius: 1.5px;
+  opacity: 0.6;
+}
+/* The weekly's pace mark is the same idea as the session's but a quieter one:
+   inset from both ends and dimmer, so it reads as a secondary tick rather than
+   competing with the bar above it. */
+.col .wk > i {
+  top: 20%;
+  bottom: 20%;
+  opacity: 0.45;
+}
+
+/* Resize handle on the left edge. Invisible until the pointer is over the
+   widget, then a faint rule — enough to find, not enough to notice all day. */
+.grip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 3;
+}
+.grip::after {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 22%;
+  bottom: 22%;
+  width: 1px;
+  border-radius: 1px;
+  background: var(--w-on);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.w:hover .grip::after {
+  opacity: 0.35;
+}
+.grip:hover::after {
+  opacity: 0.7;
+}
+
+/* Before the first snapshot arrives, and when a provider reports nothing. */
+.idle {
+  flex: 1 1 auto;
+  align-self: center;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--w-track);
+  opacity: 0.5;
+}

@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "widget",
+  "description": "Core permissions for the taskbar widget. Kept separate from the panel's capability so the widget only gets what it uses: the event channel it listens to for usage and settings updates. It does not need window dragging \u2014 it positions itself through its own commands so it can never leave the taskbar. Its own commands (open_panel, set_widget_*) are app commands and are not gated here.",
+  "windows": [
+    "widget"
+  ],
+  "permissions": [
+    "core:default"
+  ]
+}

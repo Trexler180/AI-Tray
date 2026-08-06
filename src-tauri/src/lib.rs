@@ -10,6 +10,7 @@ mod pricing;
 mod resets;
 mod updates;
 mod util;
+mod widget;
 mod windows_history;
 
 use alerts::{AlertState, NotificationSettings};
@@ -467,6 +468,19 @@ fn toggle_window(app: &tauri::AppHandle, click: Option<PhysicalPosition<f64>>) {
     let _ = window.emit("refresh", ());
 }
 
+/// Toggle the popover from the taskbar widget — the same behaviour as clicking
+/// the tray icon, including the `HideGuard` check.
+///
+/// That guard matters here even though the widget carries `WS_EX_NOACTIVATE`:
+/// the widget hosts a WebView2, whose child window can take focus on click. If
+/// it does, the panel blurs and hides itself first, and without the guard this
+/// would immediately show it again — leaving a panel that can't be closed by
+/// clicking the widget.
+#[tauri::command]
+fn open_panel(app: tauri::AppHandle) {
+    toggle_window(&app, None);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -486,6 +500,7 @@ pub fn run() {
         .manage(Glass(AtomicBool::new(false)))
         .manage(Quitting(AtomicBool::new(false)))
         .manage(Expanded(AtomicBool::new(false)))
+        .manage(widget::WidgetState::load())
         .invoke_handler(tauri::generate_handler![
             get_usage,
             get_cached_usage,
@@ -504,7 +519,15 @@ pub fn run() {
             get_update_state,
             set_update_setting,
             check_for_updates_now,
-            install_update
+            install_update,
+            open_panel,
+            widget::get_widget_settings,
+            widget::get_widget_placement,
+            widget::set_widget_enabled,
+            widget::set_widget_width,
+            widget::set_widget_gap,
+            widget::set_widget_option,
+            widget::reset_widget_position
         ])
         .setup(|app| {
             // Registered here rather than in the builder chain because the
@@ -614,6 +637,26 @@ pub fn run() {
                     }
                 });
             }
+
+            // The taskbar widget: shown only if the user switched it on, and
+            // kept on the strip by its own ticker.
+            if let Some(window) = app.get_webview_window("widget") {
+                window.on_window_event(move |event| {
+                    // The hook's callback holds the HWND in a static; clear it
+                    // rather than leave it pointing at a handle Windows is free
+                    // to hand to someone else. Position is not tracked here —
+                    // the widget drives its own moves, so nothing else can put
+                    // it somewhere it doesn't belong.
+                    if let WindowEvent::Destroyed = event {
+                        widget::forget_window();
+                    }
+                });
+            }
+            widget::apply(app.handle());
+            // Installed on the main thread: the hook is out-of-context, so its
+            // callback arrives through this thread's message queue.
+            widget::install_foreground_hook();
+            widget::start_ticker(app.handle().clone());
 
             Ok(())
         })
