@@ -72,9 +72,7 @@ fn save(store: &DirStore) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let tmp = path.with_extension("tmp-aiusage");
-    fs::write(&tmp, serde_json::to_string_pretty(store)?)?;
-    fs::rename(&tmp, &path)
+    crate::util::write_atomic(&path, serde_json::to_string_pretty(store)?.as_bytes())
 }
 
 /// The built-in default Claude config directory, `~/.claude`.

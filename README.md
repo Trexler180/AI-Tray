@@ -146,6 +146,11 @@ switched on in Settings → Taskbar widget.
   px; the right edge stays anchored to the tray). Both are remembered. Settings
   has a width stepper, switches for the pace marks and the weekly bar, and a
   Reset for position and size.
+- With more than one display, Settings gains a Display picker. The drag is
+  confined to a single taskbar — that is what stops the widget being dropped in
+  the middle of the desktop — so choosing the screen is a setting rather than a
+  gesture. The choice is remembered, and falls back to the current screen if
+  that display is later unplugged.
 - It only draws on a taskbar along the top or bottom. A side-docked bar has no
   room for a two-row strip, and an auto-hidden one has nothing to sit on, so in
   both cases the widget stays hidden and Settings says why.

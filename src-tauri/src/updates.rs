@@ -377,10 +377,8 @@ fn persist_settings(settings: &UpdateSettings) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let tmp = path.with_extension("tmp-aiusage");
     let body = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
-    fs::write(&tmp, body).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, path).map_err(|e| e.to_string())
+    crate::util::write_atomic(&path, body.as_bytes()).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

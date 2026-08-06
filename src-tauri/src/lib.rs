@@ -523,6 +523,8 @@ pub fn run() {
             open_panel,
             widget::get_widget_settings,
             widget::get_widget_placement,
+            widget::list_widget_monitors,
+            widget::set_widget_monitor,
             widget::set_widget_enabled,
             widget::set_widget_width,
             widget::set_widget_gap,
@@ -665,10 +667,15 @@ pub fn run() {
         .run(|app, event| {
             // Keep running in the tray when the window is closed, but let an
             // explicit Quit (which sets this flag) actually exit.
-            if let tauri::RunEvent::ExitRequested { api, .. } = event {
-                if !app.state::<Quitting>().0.load(Ordering::Relaxed) {
-                    api.prevent_exit();
+            match event {
+                tauri::RunEvent::ExitRequested { api, .. } => {
+                    if !app.state::<Quitting>().0.load(Ordering::Relaxed) {
+                        api.prevent_exit();
+                    }
                 }
+                // Hand the system-wide foreground hook back before going away.
+                tauri::RunEvent::Exit => widget::uninstall_foreground_hook(),
+                _ => {}
             }
         });
 }

@@ -57,10 +57,8 @@ pub fn read_json(path: &Path) -> Option<Value> {
 
 /// Atomic write: serialize to a sibling temp file then rename over the target.
 pub fn write_json_atomic(path: &Path, value: &Value) -> std::io::Result<()> {
-    let tmp = path.with_extension("tmp-aiusage");
     let body = serde_json::to_string_pretty(value)?;
-    std::fs::write(&tmp, body)?;
-    std::fs::rename(&tmp, path)
+    crate::util::write_atomic(path, body.as_bytes())
 }
 
 // ---------------- Claude ----------------

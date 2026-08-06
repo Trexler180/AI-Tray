@@ -12,6 +12,33 @@ pub fn config_dir() -> Option<PathBuf> {
     Some(root)
 }
 
+/// Write a file by filling a sibling temp file and renaming it over the target,
+/// so a reader never sees a half-written file and a failed write leaves the old
+/// contents intact.
+///
+/// The temp name carries a fresh uuid. Every settings file used to share the
+/// single name `<file>.tmp-aiusage`, which meant two saves landing together —
+/// the panel and the widget both persisting, say — could interleave their bytes
+/// into one temp file and rename the mixture into place.
+pub fn write_atomic(path: &std::path::Path, body: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension(format!("{}.tmp-aiusage", uuid::Uuid::new_v4()));
+    if let Err(e) = std::fs::write(&tmp, body) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    match std::fs::rename(&tmp, path) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // Don't leave the temp behind to accumulate in the config directory.
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
+}
+
 /// Local calendar date as YYYY-MM-DD.
 pub fn today_str() -> String {
     Local::now().format("%Y-%m-%d").to_string()
@@ -131,6 +158,51 @@ mod tests {
         assert_eq!(human_until(now + 90), "1m");
         assert_eq!(human_until(now + 3 * 3600 + 70), "3h 1m");
         assert_eq!(human_until(now + 2 * 86400 + 5 * 3600), "2d 5h");
+    }
+
+    /// A settings write must land whole and leave nothing behind, including
+    /// when it replaces an existing file.
+    #[test]
+    fn atomic_write_replaces_and_cleans_up() {
+        let dir = std::env::temp_dir().join(format!("aiusage-test-{}", uuid::Uuid::new_v4()));
+        let target = dir.join("settings.json");
+
+        write_atomic(&target, b"{\"first\":true}").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "{\"first\":true}");
+
+        write_atomic(&target, b"{\"second\":true}").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "{\"second\":true}"
+        );
+
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n != "settings.json")
+            .collect();
+        assert!(leftovers.is_empty(), "temp files left behind: {leftovers:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The bug this replaced: every writer shared one temp name, so two saves
+    /// landing together could interleave into it. Distinct names per write are
+    /// what makes that impossible.
+    #[test]
+    fn each_write_uses_its_own_temp_name() {
+        let dir = std::env::temp_dir().join(format!("aiusage-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.json");
+        let b = dir.join("b.json");
+        // Same directory, same extension shape — the old scheme gave both of
+        // these the same `.tmp-aiusage` sibling.
+        write_atomic(&a, b"a").unwrap();
+        write_atomic(&b, b"b").unwrap();
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "a");
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "b");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

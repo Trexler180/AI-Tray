@@ -50,6 +50,14 @@ pub struct WidgetSettings {
     /// bar fills the row on its own.
     #[serde(default = "yes")]
     pub show_weekly: bool,
+    /// Which display to sit on, as the OS device name (`\\.\DISPLAY2`). None
+    /// means "wherever the window opens", which is normally the primary.
+    ///
+    /// Needed because the drag is confined to one taskbar strip — that is what
+    /// stops the widget being dropped on the desktop — so it can't be carried
+    /// across screens by hand. This is the explicit way to say which screen.
+    #[serde(default)]
+    pub monitor: Option<String>,
 }
 
 fn yes() -> bool {
@@ -72,6 +80,7 @@ impl Default for WidgetSettings {
             width: DEFAULT_WIDTH,
             show_pace: true,
             show_weekly: true,
+            monitor: None,
         }
     }
 }
@@ -116,10 +125,8 @@ fn persist(settings: &WidgetSettings) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let tmp = path.with_extension("tmp-aiusage");
     let body = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
-    fs::write(&tmp, body).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, path).map_err(|e| e.to_string())
+    crate::util::write_atomic(&path, body.as_bytes()).map_err(|e| e.to_string())
 }
 
 /// Left edge of the notification area — the chevron, the tray icons and the
@@ -228,9 +235,23 @@ fn taskbar_strip(monitor: &tauri::Monitor) -> Option<Strip> {
     )
 }
 
-/// The monitor the widget is actually on, not whichever one Windows calls
-/// primary — otherwise dragging it to a second screen fights the ticker.
-fn widget_monitor(window: &tauri::WebviewWindow) -> Option<tauri::Monitor> {
+/// The display the widget should sit on: the chosen one when it is still
+/// attached, otherwise wherever the window currently is, otherwise the primary.
+///
+/// Falling back rather than hiding matters — a laptop undocked from the screen
+/// the widget was pinned to should get its widget back on the built-in display,
+/// not lose it until it notices the setting.
+fn widget_monitor(window: &tauri::WebviewWindow, preferred: Option<&str>) -> Option<tauri::Monitor> {
+    if let Some(name) = preferred {
+        if let Ok(monitors) = window.available_monitors() {
+            if let Some(found) = monitors
+                .into_iter()
+                .find(|m| m.name().is_some_and(|n| n == name))
+            {
+                return Some(found);
+            }
+        }
+    }
     window
         .current_monitor()
         .ok()
@@ -257,7 +278,8 @@ pub fn position(app: &tauri::AppHandle) -> Placement {
     let Some(window) = app.get_webview_window("widget") else {
         return Placement::NoTaskbar;
     };
-    let Some(monitor) = widget_monitor(&window) else {
+    let preferred = app.state::<WidgetState>().get().monitor.clone();
+    let Some(monitor) = widget_monitor(&window, preferred.as_deref()) else {
         return Placement::NoTaskbar;
     };
     let scale = monitor.scale_factor();
@@ -413,13 +435,20 @@ unsafe extern "system" fn on_foreground_changed(
 /// other processes — the callback is delivered to this thread's message queue,
 /// which is why it has to be installed on the thread running the event loop.
 #[cfg(windows)]
+static HOOK: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
+#[cfg(windows)]
 pub fn install_foreground_hook() {
+    use std::sync::atomic::Ordering;
     use windows_sys::Win32::UI::Accessibility::SetWinEventHook;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
     };
+    if HOOK.load(Ordering::Relaxed) != 0 {
+        return;
+    }
     unsafe {
-        SetWinEventHook(
+        let hook = SetWinEventHook(
             EVENT_SYSTEM_FOREGROUND,
             EVENT_SYSTEM_FOREGROUND,
             std::ptr::null_mut(),
@@ -428,7 +457,25 @@ pub fn install_foreground_hook() {
             0,
             WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
         );
+        HOOK.store(hook as isize, Ordering::Relaxed);
     }
+}
+
+/// Release the hook on the way out. Windows would reclaim it at process exit
+/// anyway, but an installed hook is a global resource and handing it back
+/// explicitly is the honest thing — it also makes install/uninstall symmetric
+/// if the widget ever becomes something that can be torn down and rebuilt.
+#[cfg(windows)]
+pub fn uninstall_foreground_hook() {
+    use std::sync::atomic::Ordering;
+    use windows_sys::Win32::UI::Accessibility::UnhookWinEvent;
+    let hook = HOOK.swap(0, Ordering::Relaxed);
+    if hook != 0 {
+        unsafe {
+            UnhookWinEvent(hook as _);
+        }
+    }
+    forget_window();
 }
 
 #[cfg(not(windows))]
@@ -443,6 +490,9 @@ pub fn forget_window() {
 
 #[cfg(not(windows))]
 pub fn install_foreground_hook() {}
+
+#[cfg(not(windows))]
+pub fn uninstall_foreground_hook() {}
 
 #[cfg(not(windows))]
 pub fn forget_window() {}
@@ -543,6 +593,84 @@ pub fn get_widget_settings(state: tauri::State<'_, WidgetState>) -> WidgetSettin
     state.get().clone()
 }
 
+/// One display the widget could sit on.
+#[derive(Serialize)]
+pub struct MonitorChoice {
+    /// OS device name, the key stored in settings.
+    pub name: String,
+    /// What Settings shows: "Display 1 · 2048×1152".
+    pub label: String,
+    pub primary: bool,
+    /// False when this screen has no horizontal taskbar to sit on, so Settings
+    /// can grey it out instead of letting you pick somewhere nothing appears.
+    pub usable: bool,
+    pub selected: bool,
+}
+
+#[tauri::command]
+pub fn list_widget_monitors(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WidgetState>,
+) -> Vec<MonitorChoice> {
+    let Some(window) = app.get_webview_window("widget") else {
+        return Vec::new();
+    };
+    let Ok(monitors) = window.available_monitors() else {
+        return Vec::new();
+    };
+    let chosen = state.get().monitor.clone();
+    let primary_name = window
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .and_then(|m| m.name().cloned());
+
+    monitors
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, m)| {
+            let name = m.name().cloned()?;
+            let size = m.size();
+            let scale = m.scale_factor();
+            let primary = primary_name.as_deref() == Some(name.as_str());
+            Some(MonitorChoice {
+                label: format!(
+                    "Display {} · {}×{}{}",
+                    i + 1,
+                    (size.width as f64 / scale).round() as i32,
+                    (size.height as f64 / scale).round() as i32,
+                    if primary { " (primary)" } else { "" }
+                ),
+                usable: taskbar_strip(&m).is_some_and(|s| s.horizontal),
+                selected: chosen.as_deref() == Some(name.as_str()),
+                primary,
+                name,
+            })
+        })
+        .collect()
+}
+
+/// Pin the widget to a display, or pass None to let it follow the window.
+#[tauri::command]
+pub fn set_widget_monitor(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WidgetState>,
+    name: Option<String>,
+) -> Result<(), String> {
+    let snapshot = {
+        let mut settings = state.get();
+        settings.monitor = name;
+        // The gap is measured from the new screen's tray, and carrying the old
+        // screen's value over would drop the widget somewhere arbitrary on it.
+        settings.tray_gap = DEFAULT_TRAY_GAP;
+        settings.clone()
+    };
+    persist(&snapshot)?;
+    apply(&app);
+    broadcast(&app, &snapshot);
+    Ok(())
+}
+
 /// Whether the widget can currently be placed, so Settings can say why it is
 /// switched on but not on screen.
 #[tauri::command]
@@ -550,7 +678,8 @@ pub fn get_widget_placement(app: tauri::AppHandle) -> Placement {
     let Some(window) = app.get_webview_window("widget") else {
         return Placement::NoTaskbar;
     };
-    let Some(monitor) = widget_monitor(&window) else {
+    let preferred = app.state::<WidgetState>().get().monitor.clone();
+    let Some(monitor) = widget_monitor(&window, preferred.as_deref()) else {
         return Placement::NoTaskbar;
     };
     match taskbar_strip(&monitor) {

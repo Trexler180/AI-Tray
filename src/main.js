@@ -10,6 +10,7 @@ let notificationSettings = { codex: false, claude: false, codex_resets: false };
 let widgetSettings = { enabled: false, tray_gap: 10, width: 114 };
 // "ok" | "vertical_taskbar" | "no_taskbar" — why the widget is or is not placeable.
 let widgetPlacement = "ok";
+let widgetMonitors = [];
 // Whether the model-scoped weekly gauge (e.g. the Fable-only limit) is shown.
 let showModelWeekly = localStorage.getItem("showModelWeekly") !== "0";
 // Meter direction: false (default) drains a full bar as the allowance is
@@ -1458,6 +1459,23 @@ function renderSettings() {
       widgetSettings.show_weekly !== false,
       true
     );
+    // Only worth a row when there is a choice to make. The drag is confined to
+    // one taskbar, so this is the only way across screens.
+    if (widgetMonitors.length > 1) {
+      html += `<div class="grp-row col">
+        <span class="rlab">Display<span class="rsub">Which taskbar it sits on</span></span>
+        <div class="choices">${widgetMonitors
+          .map(
+            (m) =>
+              `<button class="choice${m.selected ? " on" : ""}" data-widget-monitor="${esc(
+                m.name
+              )}"${m.usable ? "" : " disabled title=\"No taskbar on this display\""}>${esc(
+                m.label
+              )}</button>`
+          )
+          .join("")}</div>
+      </div>`;
+    }
     html += `<div class="grp-row">
       <span class="rlab">Width<span class="rsub">Or drag the widget's left edge</span></span>
       <span class="stepper">
@@ -1691,6 +1709,17 @@ function render() {
           commit: true,
         });
         widgetSettings = await invoke("get_widget_settings");
+      } catch (_) {}
+      render();
+    })
+  );
+  content.querySelectorAll("[data-widget-monitor]").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      try {
+        await invoke("set_widget_monitor", { name: btn.dataset.widgetMonitor });
+        widgetSettings = await invoke("get_widget_settings");
+        widgetMonitors = await invoke("list_widget_monitors");
+        widgetPlacement = await invoke("get_widget_placement");
       } catch (_) {}
       render();
     })
@@ -1974,6 +2003,7 @@ async function loadWidgetSettings() {
   try {
     widgetSettings = await invoke("get_widget_settings");
     widgetPlacement = await invoke("get_widget_placement");
+    widgetMonitors = await invoke("list_widget_monitors");
     render();
   } catch (_) {}
 }
