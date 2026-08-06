@@ -1,0 +1,923 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Taskbar widget — mockups</title>
+<style>
+/* ============================================================
+   Tokens, copied from src/styles.css so the mockups read like the app
+   ============================================================ */
+:root {
+  --bg-top: #161b24;
+  --bg-bot: #0c0f15;
+  --card: rgba(255, 255, 255, 0.035);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --text: #e7ebf2;
+  --muted: #8b95a6;
+  --faint: #5c6577;
+  --track: rgba(255, 255, 255, 0.08);
+  --codex: #2dd4bf;
+  --codex-2: #0ea5a3;
+  --claude: #f0a36a;
+  --claude-2: #db7f4d;
+  --credit: #b3a5f0;
+  --danger: #ef6b6b;
+  --ok: #71cdb0;
+  --warn: #dfa05f;
+  --radius: 8px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: #080b10;
+  font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+body { padding: 34px 30px 90px; }
+.sheet { max-width: 1180px; margin: 0 auto; }
+
+h1 { font-size: 25px; font-weight: 700; letter-spacing: 0.2px; }
+.lede { font-size: 13.5px; color: var(--muted); line-height: 1.65; margin-top: 10px; max-width: 76ch; }
+.lede b { color: var(--text); font-weight: 600; }
+.rule { height: 1px; background: var(--border); margin: 26px 0; }
+
+/* ---- The brief: what a taskbar widget actually has to survive ---- */
+.brief { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 20px; }
+.brief div {
+  border: 1px solid var(--border); border-radius: 10px; padding: 12px 13px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.brief .k { font-size: 9.5px; font-weight: 700; letter-spacing: 1.3px; color: var(--faint); }
+.brief .v { font-size: 12.5px; line-height: 1.5; margin-top: 6px; color: var(--muted); }
+.brief .v b { color: var(--text); font-weight: 600; }
+
+/* ============================================================
+   Controls
+   ============================================================ */
+.controls {
+  position: sticky; top: 0; z-index: 40;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 18px;
+  margin: 22px 0 26px; padding: 12px 14px;
+  border: 1px solid var(--border-strong); border-radius: 12px;
+  background: rgba(12, 15, 21, 0.92);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+}
+.ctl { display: flex; align-items: center; gap: 8px; }
+.ctl > .lbl { font-size: 9.5px; font-weight: 700; letter-spacing: 1.3px; color: var(--faint); }
+.segs { display: flex; gap: 3px; padding: 3px; background: rgba(255, 255, 255, 0.05); border-radius: 999px; }
+.segs button {
+  font: inherit; font-size: 11.5px; font-weight: 600; color: var(--muted);
+  padding: 5px 12px; border: none; border-radius: 999px; background: transparent; cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.segs button:hover { color: var(--text); }
+.segs button.on { color: #fff; background: rgba(255, 255, 255, 0.1); }
+.segs button.on[data-v="tight"] { background: rgba(239, 107, 107, 0.22); }
+.toggle { display: flex; align-items: center; gap: 7px; font-size: 11.5px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.toggle input { accent-color: var(--codex); width: 14px; height: 14px; cursor: pointer; }
+.toggle:hover { color: var(--text); }
+
+/* ============================================================
+   The simulated desktop + taskbar
+   ============================================================ */
+.situ {
+  position: relative; height: 122px; border-radius: 10px; overflow: hidden;
+  border: 1px solid var(--border);
+  /* Bottom slice of a wallpaper, so the acrylic taskbar has something to blur. */
+  background:
+    radial-gradient(700px 220px at 18% 120%, rgba(45, 212, 191, 0.28), transparent 70%),
+    radial-gradient(560px 200px at 74% 130%, rgba(240, 163, 106, 0.22), transparent 70%),
+    radial-gradient(900px 320px at 50% -40%, rgba(120, 140, 220, 0.16), transparent 70%),
+    linear-gradient(160deg, #1d2740, #101625 60%, #0a0e17);
+}
+.situ .wp-hint {
+  position: absolute; left: 14px; top: 12px;
+  font-size: 10px; letter-spacing: 1.2px; font-weight: 700; color: rgba(255, 255, 255, 0.22);
+}
+
+/* The taskbar itself. 48px is the Windows 11 default; 40px is "small". */
+.tb {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: 48px; display: flex; align-items: center; gap: 4px; padding: 0 6px;
+  backdrop-filter: blur(28px) saturate(1.4);
+  background: rgba(32, 32, 32, 0.78);
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  /* Widget colors resolve against the bar, not the page, so light mode flips
+     cleanly without every concept needing its own theme branch. */
+  --w-text: #e9edf3;
+  --w-muted: #a4adbb;
+  --w-track: rgba(255, 255, 255, 0.17);
+  --w-hover: rgba(255, 255, 255, 0.08);
+  --w-edge: rgba(255, 255, 255, 0.1);
+}
+.tb.light {
+  background: rgba(243, 243, 243, 0.82);
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  --w-text: #17181a;
+  --w-muted: #55585e;
+  --w-track: rgba(0, 0, 0, 0.16);
+  --w-hover: rgba(0, 0, 0, 0.06);
+  --w-edge: rgba(0, 0, 0, 0.1);
+}
+.tb.small { height: 40px; }
+.tb.small .tb-btn { width: 32px; height: 28px; }
+.tb.small .w { height: 28px; }
+
+.tb-btn {
+  width: 40px; height: 36px; border-radius: 6px; flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s;
+}
+.tb-btn:hover { background: var(--w-hover); }
+.tb-btn .app { width: 20px; height: 20px; border-radius: 5px; }
+.tb-search {
+  height: 32px; min-width: 148px; border-radius: 999px; padding: 0 12px; margin-right: 4px;
+  display: flex; align-items: center; gap: 8px;
+  background: var(--w-hover); border: 1px solid var(--w-edge);
+  font-size: 11.5px; color: var(--w-muted);
+}
+.tb-spacer { flex: 1 1 auto; }
+.tb-tray { display: flex; align-items: center; gap: 2px; padding-left: 4px; }
+.tb-tray .gl { width: 26px; height: 32px; display: flex; align-items: center; justify-content: center; color: var(--w-muted); }
+.tb-clock {
+  padding: 0 10px 0 6px; text-align: right; line-height: 1.25;
+  font-size: 11px; color: var(--w-text); font-variant-numeric: tabular-nums;
+}
+.tb-clock .d { font-size: 10.5px; color: var(--w-muted); }
+/* Where the app lives today, for contrast: one flat 16px tray icon. */
+.tray-today { width: 26px; height: 32px; display: flex; align-items: center; justify-content: center; }
+
+/* ============================================================
+   Shared widget chrome — every concept sits in this shell
+   ============================================================ */
+.w {
+  height: 32px; flex: 0 0 auto;
+  display: flex; align-items: center; gap: 9px;
+  padding: 0 9px; border-radius: 6px; cursor: default;
+  color: var(--w-text);
+  transition: background 0.15s;
+  font-variant-numeric: tabular-nums;
+}
+.w:hover { background: var(--w-hover); }
+.w b { font-size: 12.5px; font-weight: 650; letter-spacing: -0.1px; }
+.w small { font-size: 9.5px; font-weight: 600; opacity: 0.6; margin-left: 1px; }
+.w .cd { font-size: 11px; font-weight: 600; color: var(--w-muted); }
+.w .dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; background: var(--c, var(--codex)); }
+.w .sep { color: var(--w-muted); opacity: 0.55; font-size: 11px; }
+
+/* --- 01 twin percent: a vertical mini-meter standing in for the weather icon --- */
+.w-twin { gap: 12px; }
+.w-twin .tw { display: flex; align-items: center; gap: 6px; }
+.vbar {
+  position: relative; width: 5px; height: 17px; border-radius: 2.5px;
+  background: var(--w-track); overflow: hidden; flex: 0 0 auto;
+}
+.vbar i {
+  position: absolute; left: 0; right: 0; bottom: 0; border-radius: 2.5px;
+  height: calc(var(--p) * 1%); background: var(--c);
+}
+.vbar.hot i { background: var(--danger); }
+
+/* --- 02 dual rings --- */
+.w-rings { gap: 7px; }
+.ring {
+  width: 21px; height: 21px; border-radius: 50%; flex: 0 0 auto;
+  background: conic-gradient(from -90deg, var(--c) 0 calc(var(--p) * 1%), var(--w-track) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(50% - 3.5px), #000 calc(50% - 3.5px));
+  mask: radial-gradient(farthest-side, transparent calc(50% - 3.5px), #000 calc(50% - 3.5px));
+}
+.ring.hot { background: conic-gradient(from -90deg, var(--danger) 0 calc(var(--p) * 1%), var(--w-track) 0); }
+.w-rings .lbl { font-size: 8.5px; font-weight: 700; letter-spacing: 0.6px; color: var(--w-muted); }
+
+/* --- 03 stacked hairlines with a pace notch --- */
+.w-bars .stack { display: flex; flex-direction: column; gap: 5px; }
+.hbar {
+  position: relative; width: 58px; height: 4px; border-radius: 2px;
+  background: var(--w-track); overflow: visible;
+}
+.hbar u { position: absolute; inset: 0 auto 0 0; width: calc(var(--p) * 1%); border-radius: 2px; background: var(--c); }
+.hbar.hot u { background: var(--danger); }
+.hbar i.pace {
+  position: absolute; top: -2px; bottom: -2px; left: calc(var(--t) * 1%);
+  width: 1px; background: var(--w-text); opacity: 0.5;
+}
+
+/* --- 04 segment battery --- */
+.w-seg .rows { display: flex; flex-direction: column; gap: 4px; }
+.segrow { display: flex; gap: 2px; }
+.segrow s {
+  width: 6px; height: 5px; border-radius: 1px; text-decoration: none;
+  background: var(--w-track);
+}
+.segrow s.on { background: var(--c); }
+.segrow.hot s.on { background: var(--danger); }
+
+/* --- 05 tightest-first badge --- */
+.w-focus { gap: 8px; padding-left: 8px; border-left: 3px solid var(--c); border-radius: 3px 6px 6px 3px; }
+.w-focus.hot { border-left-color: var(--danger); }
+.w-focus.hot b { color: var(--danger); }
+
+/* --- 06 sparkline --- */
+.w-spark { gap: 8px; }
+.w-spark svg { display: block; }
+.w-spark .nums { display: flex; flex-direction: column; gap: 1px; line-height: 1.15; }
+.w-spark .nums span { font-size: 10px; font-weight: 650; color: var(--c); }
+
+/* --- 07 equalizer --- */
+.w-eq .group { display: flex; align-items: flex-end; gap: 3px; height: 19px; }
+.w-eq .group + .group { margin-left: 8px; }
+.w-eq .col {
+  position: relative; width: 5px; height: 19px; border-radius: 2px;
+  background: var(--w-track); overflow: hidden;
+}
+.w-eq .col i { position: absolute; left: 0; right: 0; bottom: 0; height: calc(var(--p) * 1%); background: var(--c); border-radius: 2px; }
+.w-eq .col.wk i { opacity: 0.55; }
+.w-eq .col.hot i { background: var(--danger); }
+
+/* --- 08 cost first --- */
+.w-cost { gap: 7px; }
+.w-cost .money { display: flex; flex-direction: column; gap: 3px; }
+.w-cost .money b { line-height: 1; }
+.w-cost .money .u { width: 100%; height: 2px; border-radius: 1px; background: var(--w-track); overflow: hidden; }
+.w-cost .money .u i { display: block; height: 100%; width: calc(var(--p) * 1%); background: var(--credit); }
+.w-cost .cap { font-size: 9.5px; color: var(--w-muted); font-weight: 600; }
+
+/* --- 09 clock arc: outer sweep is the window's clock, inner fill is usage --- */
+.w-arc { gap: 8px; }
+.arc { position: relative; width: 24px; height: 24px; flex: 0 0 auto; }
+.arc .outer, .arc .inner { position: absolute; border-radius: 50%; }
+.arc .outer {
+  inset: 0;
+  background: conic-gradient(from -90deg, var(--w-muted) 0 calc(var(--t) * 1%), var(--w-track) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(50% - 2px), #000 calc(50% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(50% - 2px), #000 calc(50% - 2px));
+  opacity: 0.75;
+}
+.arc .inner {
+  inset: 4px;
+  background: conic-gradient(from -90deg, var(--c) 0 calc(var(--p) * 1%), var(--w-track) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(50% - 4px), #000 calc(50% - 4px));
+  mask: radial-gradient(farthest-side, transparent calc(50% - 4px), #000 calc(50% - 4px));
+}
+.arc.hot .inner { background: conic-gradient(from -90deg, var(--danger) 0 calc(var(--p) * 1%), var(--w-track) 0); }
+
+/* --- 10 tray text line --- */
+.w-text { gap: 7px; padding: 0 7px; }
+.w-text .pair { display: flex; align-items: center; gap: 5px; }
+.w-text .pair b { font-size: 12px; font-weight: 600; }
+.w-text .pair.hot b { color: var(--danger); }
+
+/* ============================================================
+   Concept cards
+   ============================================================ */
+.card {
+  border: 1px solid var(--border-strong); border-radius: 14px;
+  background: linear-gradient(180deg, #14181f, #0d1014);
+  padding: 18px 20px 20px; margin-bottom: 22px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.42);
+}
+.card-hd { display: flex; align-items: baseline; gap: 11px; }
+.card-hd .n {
+  font-size: 10.5px; font-weight: 700; color: var(--faint); letter-spacing: 1px;
+  font-variant-numeric: tabular-nums;
+}
+.card-hd h3 { font-size: 16.5px; font-weight: 700; letter-spacing: 0.1px; }
+.card-hd .tag {
+  margin-left: auto; font-size: 10px; font-weight: 600; color: var(--muted);
+  padding: 3px 9px; border: 1px solid var(--border); border-radius: 999px;
+}
+.card > .say { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin: 8px 0 15px; max-width: 84ch; }
+.card > .say b { color: var(--text); font-weight: 600; }
+
+.detail { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+.zooms { display: flex; gap: 12px; }
+.zoomwrap {
+  flex: 1 1 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.zoomwrap .zt {
+  font-size: 9px; font-weight: 700; letter-spacing: 1.2px; color: var(--faint);
+  padding: 7px 10px 6px; border-bottom: 1px solid var(--border);
+}
+.zoomstage {
+  flex: 1 1 auto; display: flex; align-items: center; justify-content: center;
+  height: 92px; overflow: hidden;
+}
+.zoomstage.dark { background: #202020; }
+.zoomstage.lite { background: #f3f3f3; }
+/* 2.4x of the real thing — same markup, so the pixel budget stays honest. */
+.zoomstage .tb { position: static; height: auto; padding: 0; border: none; background: none; backdrop-filter: none; transform: scale(2.4); }
+
+.notes { display: flex; flex-direction: column; gap: 8px; justify-content: center; }
+.note { display: flex; gap: 9px; font-size: 12px; line-height: 1.55; color: var(--muted); }
+.note .m { flex: 0 0 auto; width: 15px; font-weight: 700; text-align: center; }
+.note.up .m { color: var(--ok); }
+.note.dn .m { color: var(--warn); }
+.note b { color: var(--text); font-weight: 600; }
+
+/* ============================================================
+   Hover flyout mock
+   ============================================================ */
+.flyout {
+  position: absolute; right: 12px; bottom: 56px; width: 268px;
+  border: 1px solid var(--border-strong); border-radius: 10px;
+  background: linear-gradient(180deg, rgba(22, 27, 36, 0.97), rgba(12, 15, 21, 0.98));
+  box-shadow: 0 22px 50px rgba(0, 0, 0, 0.62);
+  padding: 12px 13px 13px;
+  backdrop-filter: blur(20px);
+}
+.flyout .fh { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 700; letter-spacing: 0.4px; }
+.flyout .fh .ago { margin-left: auto; font-size: 10px; font-weight: 600; color: var(--faint); }
+.flyout .frow { margin-top: 10px; }
+.flyout .frow .l {
+  display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.flyout .frow .l b { color: var(--text); font-size: 11.5px; font-weight: 650; }
+.flyout .frow .l .r { margin-left: auto; font-size: 10.5px; color: var(--faint); }
+.flyout .frow .bar {
+  position: relative; margin-top: 5px; height: 5px; border-radius: 3px;
+  background: var(--track); overflow: visible;
+}
+.flyout .frow .bar u { position: absolute; inset: 0 auto 0 0; width: calc(var(--p) * 1%); border-radius: 3px; background: var(--c); }
+.flyout .frow .bar i { position: absolute; top: -2px; bottom: -2px; left: calc(var(--t) * 1%); width: 1px; background: #fff; opacity: 0.45; }
+.flyout .ffoot {
+  margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border);
+  display: flex; align-items: center; font-size: 10.5px; color: var(--faint);
+}
+.flyout .ffoot b { color: var(--text); font-weight: 650; margin-left: auto; font-variant-numeric: tabular-nums; }
+
+/* ============================================================
+   Side-by-side strip
+   ============================================================ */
+.strip { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-top: 12px; }
+.strip .tb { position: static; height: 52px; flex-wrap: wrap; gap: 2px; padding: 0 8px; }
+.strip .w { position: relative; }
+.strip .w::after {
+  content: attr(data-n);
+  position: absolute; top: -1px; left: 50%; transform: translateX(-50%);
+  font-size: 8px; font-weight: 700; color: var(--w-muted); opacity: 0.65;
+}
+.striplbl { font-size: 9.5px; font-weight: 700; letter-spacing: 1.3px; color: var(--faint); padding: 9px 12px 8px; border-bottom: 1px solid var(--border); }
+
+h2 { font-size: 17px; font-weight: 700; margin-top: 34px; }
+h2 + .say { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin-top: 7px; max-width: 84ch; }
+
+/* ---- Verdict table ---- */
+.verdict { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 12px; }
+.verdict th {
+  text-align: left; font-size: 9.5px; font-weight: 700; letter-spacing: 1.2px; color: var(--faint);
+  padding: 0 10px 9px; border-bottom: 1px solid var(--border);
+}
+.verdict td { padding: 10px; border-bottom: 1px solid var(--border); color: var(--muted); line-height: 1.5; vertical-align: top; }
+.verdict td.nm { color: var(--text); font-weight: 650; white-space: nowrap; }
+.verdict tr.pick td { background: rgba(45, 212, 191, 0.06); }
+.verdict tr.pick td.nm { color: var(--codex); }
+.score { font-variant-numeric: tabular-nums; white-space: nowrap; letter-spacing: 1px; }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<h1>Taskbar widget — ten ways to show the meters</h1>
+<p class="lede">
+  The app currently gets one 16&nbsp;px tray icon and everything else lives behind a click.
+  These are alternatives that put the numbers <b>on</b> the taskbar the way the Windows weather
+  widget does: a persistent button, always readable, no click required. Every mockup below is
+  real markup at real size — the strip is a 48&nbsp;px Windows&nbsp;11 taskbar, and each widget
+  is 32&nbsp;px tall, exactly what a taskbar button gets.
+</p>
+
+<div class="brief">
+  <div>
+    <div class="k">THE BUDGET</div>
+    <div class="v">About <b>32×140 px</b>. The weather widget spends it on an icon and two numbers. Four quota windows do not fit — every concept below decides what to drop.</div>
+  </div>
+  <div>
+    <div class="k">READ TIME</div>
+    <div class="v">A taskbar glance is well under a second and unfocused. Shape and color survive that; <b>digits mostly don't</b>.</div>
+  </div>
+  <div>
+    <div class="k">STILLNESS</div>
+    <div class="v">It's on screen all day. Anything that changes often in the corner of your eye becomes a nuisance — turn on <b>Live</b> to see which ones twitch.</div>
+  </div>
+  <div>
+    <div class="k">BOTH THEMES</div>
+    <div class="v">Light taskbars are common and the app has never had to render on one. Each concept is shown on <b>#202020 and #f3f3f3</b>.</div>
+  </div>
+</div>
+
+<div class="controls">
+  <div class="ctl">
+    <span class="lbl">LOAD</span>
+    <div class="segs" id="seg-scenario">
+      <button data-v="calm">Calm</button>
+      <button data-v="busy" class="on">Busy</button>
+      <button data-v="tight">Near limit</button>
+    </div>
+  </div>
+  <div class="ctl">
+    <span class="lbl">TASKBAR</span>
+    <div class="segs" id="seg-theme">
+      <button data-v="dark" class="on">Dark</button>
+      <button data-v="light">Light</button>
+    </div>
+  </div>
+  <div class="ctl">
+    <span class="lbl">SIZE</span>
+    <div class="segs" id="seg-size">
+      <button data-v="normal" class="on">48px</button>
+      <button data-v="small">40px</button>
+    </div>
+  </div>
+  <div class="ctl">
+    <span class="lbl">PLACEMENT</span>
+    <div class="segs" id="seg-place">
+      <button data-v="tray" class="on">By the tray</button>
+      <button data-v="left">Far left</button>
+    </div>
+  </div>
+  <label class="toggle"><input type="checkbox" id="chk-live" /> Live (numbers drift)</label>
+  <label class="toggle"><input type="checkbox" id="chk-pace" checked /> Pace marks</label>
+</div>
+
+<div id="cards"></div>
+
+<h2>All ten, side by side</h2>
+<p class="say">
+  Same bar, same moment. This is the comparison that matters: which of these still says
+  something useful when you are not looking at it, and which just adds clutter next to the clock.
+</p>
+<div class="strip" id="strip-dark">
+  <div class="striplbl">DARK TASKBAR</div>
+</div>
+<div class="strip" id="strip-light">
+  <div class="striplbl">LIGHT TASKBAR</div>
+</div>
+
+<h2>Where each one lands</h2>
+<table class="verdict">
+  <thead>
+    <tr>
+      <th style="width: 150px">CONCEPT</th>
+      <th style="width: 92px">GLANCE</th>
+      <th style="width: 92px">DETAIL</th>
+      <th style="width: 88px">STILLNESS</th>
+      <th>THE TRADE</th>
+    </tr>
+  </thead>
+  <tbody id="verdict"></tbody>
+</table>
+
+<h2>What the hover reveals</h2>
+<p class="say">
+  Whichever face wins, the widget still needs the full picture one hover away — the weather
+  widget's own trick. This is the flyout: all four windows, their pace marks, and today's
+  estimated value. The existing popover stays for the click.
+</p>
+<div class="situ" id="situ-flyout" style="height: 232px">
+  <div class="wp-hint">HOVER STATE</div>
+</div>
+
+<p class="lede" style="margin-top: 28px">
+  <b>My read:</b> <b>03 Stacked hairlines</b> is the one I would build. It shows all four
+  windows, needs no digits to be read, holds still, and the single countdown answers the only
+  question a glance ever asks — <i>how long until this clears?</i> <b>05 Tightest-first</b> is
+  the strong runner-up and the better default for anyone who only cares when something is nearly
+  gone. <b>02 Rings</b> and <b>10 Tray text</b> are the quiet options if the taskbar is crowded.
+</p>
+
+</div>
+
+<script>
+/* ============================================================
+   Data — three plausible moments in a working day.
+   pace is how far through the window the clock is; the app's meters draw the
+   same mark, so the widgets can inherit the idea instead of inventing one.
+   ============================================================ */
+const SCENARIOS = {
+  calm: {
+    clock: "9:12 AM",
+    codex: { w5: { pct: 22, pace: 54, resets: "2h 15m" }, wk: { pct: 31, pace: 41, resets: "4d 6h" } },
+    claude: { w5: { pct: 18, pace: 54, resets: "2h 15m" }, wk: { pct: 27, pace: 41, resets: "4d 6h" } },
+    spend: 1.2, credits: 2.1, cap: 50,
+  },
+  busy: {
+    clock: "1:41 PM",
+    codex: { w5: { pct: 47, pace: 44, resets: "2h 47m" }, wk: { pct: 63, pace: 58, resets: "3d 1h" } },
+    claude: { w5: { pct: 82, pace: 46, resets: "2h 42m" }, wk: { pct: 55, pace: 58, resets: "3d 1h" } },
+    spend: 4.21, credits: 6.4, cap: 50,
+  },
+  tight: {
+    clock: "4:58 PM",
+    codex: { w5: { pct: 91, pace: 71, resets: "1h 26m" }, wk: { pct: 88, pace: 74, resets: "1d 19h" } },
+    claude: { w5: { pct: 97, pace: 62, resets: "1h 54m" }, wk: { pct: 79, pace: 74, resets: "1d 19h" } },
+    spend: 11.8, credits: 23.6, cap: 50,
+  },
+};
+
+const state = { scenario: "busy", theme: "dark", size: "normal", place: "tray", live: false, pace: true };
+let data = clone(SCENARIOS.busy);
+
+function clone(o) { return JSON.parse(JSON.stringify(o)); }
+const r = (n) => Math.round(n);
+/* Anything at or past 90% earns the danger hue — same threshold the popover uses
+   to stop being calm about a window. */
+const hot = (p) => p >= 90;
+const C = "var(--codex)", K = "var(--claude)";
+
+/* Shortest countdown wins the one text slot a widget can afford. */
+function tightest(d) {
+  const all = [
+    { who: "Codex", key: "codex", win: "5h", g: d.codex.w5, c: C },
+    { who: "Codex", key: "codex", win: "week", g: d.codex.wk, c: C },
+    { who: "Claude", key: "claude", win: "5h", g: d.claude.w5, c: K },
+    { who: "Claude", key: "claude", win: "week", g: d.claude.wk, c: K },
+  ];
+  return all.sort((a, b) => b.g.pct - a.g.pct)[0];
+}
+/* "2h 47m" reads fine in a card and is too wide for a taskbar; squeeze it. */
+const tight = (s) => s.replace(/\s+/g, "");
+
+/* ============================================================
+   Sparkline geometry. Usage only goes up inside a window, so the curve is
+   monotonic; the fixed shape keeps it deterministic across re-renders.
+   ============================================================ */
+const SHAPE = [0, 0.04, 0.06, 0.07, 0.14, 0.22, 0.3, 0.33, 0.45, 0.58, 0.63, 0.72, 0.86, 0.93, 1];
+function sparkPath(pct, pace, w, h, close) {
+  const n = SHAPE.length - 1;
+  const pts = SHAPE.map((v, i) => {
+    const x = (i / n) * (w * (pace / 100));
+    const y = h - (v * (pct / 100)) * h;
+    return [x, y];
+  });
+  let d = "M" + pts.map((p) => p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" L");
+  if (close) {
+    const last = pts[pts.length - 1];
+    d += ` L${last[0].toFixed(1)},${h} L0,${h} Z`;
+  }
+  return d;
+}
+
+/* ============================================================
+   The ten faces. Each returns the markup for one taskbar button.
+   ============================================================ */
+const CONCEPTS = [
+  {
+    id: "twin",
+    name: "Twin percent",
+    tag: "closest to the weather widget",
+    say: "The weather widget's exact grammar — <b>glyph plus number</b>, twice. The glyph is a filled mini-meter, so the shape already carries the reading and the digits only confirm it. Shows the 5-hour window per provider; the weekly windows are not here.",
+    render(d) {
+      const p = (g, c) => `<span class="tw"><span class="vbar ${hot(g.pct) ? "hot" : ""}" style="--p:${r(g.pct)};--c:${c}"><i style="--p:${r(g.pct)};--c:${c}"></i></span><b>${r(g.pct)}<small>%</small></b></span>`;
+      return `<div class="w w-twin">${p(d.codex.w5, C)}${p(d.claude.w5, K)}</div>`;
+    },
+    notes: [
+      ["up", "+", "Instantly legible, and familiar — people already parse this shape as \"icon, value\"."],
+      ["dn", "−", "Two live digits means it changes constantly. Weekly windows and value are dropped entirely."],
+    ],
+    score: { glance: 4, detail: 2, still: 2 },
+    trade: "Buys familiarity with restlessness — the numbers move all afternoon.",
+  },
+  {
+    id: "rings",
+    name: "Dual rings",
+    tag: "smallest footprint",
+    say: "Two donuts, no text at all. Sweep is the 5-hour window; the ring's color says which provider. About <b>60 px wide</b> — the least taskbar you can spend and still say something. Reads as \"how full\", never as \"how much\".",
+    render(d) {
+      const ring = (g, c) => `<span class="ring ${hot(g.pct) ? "hot" : ""}" style="--p:${r(g.pct)};--c:${c}" title="${r(g.pct)}%"></span>`;
+      return `<div class="w w-rings">${ring(d.codex.w5, C)}${ring(d.claude.w5, K)}</div>`;
+    },
+    notes: [
+      ["up", "+", "Silent and tiny. Nothing twitches until the sweep visibly moves, which is minutes apart."],
+      ["dn", "−", "You cannot read a ring to better than about a quarter. Everything precise waits for the hover."],
+    ],
+    score: { glance: 3, detail: 1, still: 5 },
+    trade: "Cheapest to live with, vaguest to read.",
+  },
+  {
+    id: "bars",
+    name: "Stacked hairlines",
+    tag: "all four windows",
+    say: "Two 4&nbsp;px rails, Codex over Claude, each with the app's <b>pace mark</b> — fill short of the notch means you are burning faster than the window refills. The weekly window rides underneath at low opacity. One countdown, for whichever window is closest to empty.",
+    render(d) {
+      const bar = (g, c) => `<span class="hbar ${hot(g.pct) ? "hot" : ""}" style="--p:${r(g.pct)};--c:${c};--t:${r(g.pace)}"><u></u>${state.pace ? '<i class="pace"></i>' : ""}</span>`;
+      const t = tightest(d);
+      return `<div class="w w-bars"><div class="stack">${bar(d.codex.w5, C)}${bar(d.claude.w5, K)}</div><b class="cd">${tight(t.g.resets)}</b></div>`;
+    },
+    notes: [
+      ["up", "+", "Level, pace, and time-to-clear in one still shape. Only the countdown's digits move, once a minute."],
+      ["dn", "−", "Two rails 5 px apart is a lot of structure at 100% scaling; it needs the pace mark to be worth it."],
+    ],
+    score: { glance: 5, detail: 4, still: 4 },
+    trade: "The most information per pixel here — at the cost of being the densest to learn.",
+  },
+  {
+    id: "seg",
+    name: "Segment battery",
+    tag: "no numerals",
+    say: "Borrowed from a battery gauge: <b>eight cells per provider</b>, lit to the nearest eighth. Deliberately coarse — it can only change eight times over a whole window, so it is the stillest thing that still counts.",
+    render(d) {
+      const row = (g, c) => {
+        const on = Math.round((g.pct / 100) * 8);
+        let s = `<div class="segrow ${hot(g.pct) ? "hot" : ""}">`;
+        for (let i = 0; i < 8; i++) s += `<s class="${i < on ? "on" : ""}" style="--c:${c}"></s>`;
+        return s + "</div>";
+      };
+      return `<div class="w w-seg"><div class="rows">${row(d.codex.w5, C)}${row(d.claude.w5, K)}</div></div>`;
+    },
+    notes: [
+      ["up", "+", "Countable without reading, and it holds absolutely still between eighths."],
+      ["dn", "−", "Quantised: 88% and 97% light the same cells, which is exactly where the difference matters most."],
+    ],
+    score: { glance: 4, detail: 2, still: 5 },
+    trade: "Trades resolution for calm, and loses precision at the top end where you need it.",
+  },
+  {
+    id: "focus",
+    name: "Tightest-first",
+    tag: "one window, the one that matters",
+    say: "Stop showing four things. Show the <b>window closest to running out</b> — name, level, countdown — and let it swap when something else takes the lead. The colored rail on the left is the provider, so a swap is visible even before you read it.",
+    render(d) {
+      const t = tightest(d);
+      const h = hot(t.g.pct);
+      return `<div class="w w-focus ${h ? "hot" : ""}" style="--c:${t.c}"><b>${t.who} ${r(t.g.pct)}%</b><span class="cd">${tight(t.g.resets)}</span></div>`;
+    },
+    notes: [
+      ["up", "+", "The only concept that answers the actual question — \"am I about to be cut off, and when?\" — in words."],
+      ["dn", "−", "Hides three windows, and the identity swaps under you, which is disorienting mid-glance."],
+    ],
+    score: { glance: 5, detail: 3, still: 3 },
+    trade: "Most useful sentence, least complete picture.",
+  },
+  {
+    id: "spark",
+    name: "Burn sparkline",
+    tag: "trend, not level",
+    say: "The only face that shows <b>rate</b>. Two filled curves across the current 5-hour window, ending at now — a steep tail means the next hour will hurt even if the level looks fine. Percentages sit alongside in 10&nbsp;px because the curve is the point.",
+    render(d) {
+      const w = 62, h = 20;
+      const g1 = d.codex.w5, g2 = d.claude.w5;
+      return `<div class="w w-spark">
+        <svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+          <path d="${sparkPath(g2.pct, g2.pace, w, h, true)}" fill="${hot(g2.pct) ? "rgba(239,107,107,.22)" : "rgba(240,163,106,.22)"}" />
+          <path d="${sparkPath(g2.pct, g2.pace, w, h, false)}" fill="none" stroke="${hot(g2.pct) ? "var(--danger)" : K}" stroke-width="1.5" stroke-linejoin="round" />
+          <path d="${sparkPath(g1.pct, g1.pace, w, h, false)}" fill="none" stroke="${hot(g1.pct) ? "var(--danger)" : C}" stroke-width="1.5" stroke-linejoin="round" />
+        </svg>
+        <div class="nums"><span style="--c:${C}">${r(g1.pct)}</span><span style="--c:${K}">${r(g2.pct)}</span></div>
+      </div>`;
+    },
+    notes: [
+      ["up", "+", "Predictive rather than descriptive — the shape tells you where you will be, not only where you are."],
+      ["dn", "−", "A 62×20 chart is under-resolved for two series, and the curves cross and muddle each other."],
+    ],
+    score: { glance: 3, detail: 4, still: 4 },
+    trade: "The only one that shows rate, on far too small a canvas to show it well.",
+  },
+  {
+    id: "eq",
+    name: "Equalizer",
+    tag: "every window, no words",
+    say: "Four columns: each provider's 5-hour window solid, its weekly window faded beside it. <b>Complete and wordless</b> — the whole quota state as one silhouette you learn in a day and then read peripherally forever.",
+    render(d) {
+      const col = (g, c, wk) => `<span class="col ${wk ? "wk" : ""} ${hot(g.pct) ? "hot" : ""}"><i style="--p:${r(g.pct)};--c:${c}"></i></span>`;
+      return `<div class="w w-eq">
+        <span class="group">${col(d.codex.w5, C)}${col(d.codex.wk, C, true)}</span>
+        <span class="group">${col(d.claude.w5, K)}${col(d.claude.wk, K, true)}</span>
+      </div>`;
+    },
+    notes: [
+      ["up", "+", "Nothing is hidden, and the silhouette is memorable — an unusual profile catches your eye on its own."],
+      ["dn", "−", "Meaningless until someone teaches you the column order. No countdown, no value, no labels."],
+    ],
+    score: { glance: 3, detail: 4, still: 5 },
+    trade: "Complete and calm, but it has to be learned before it says anything.",
+  },
+  {
+    id: "cost",
+    name: "Value first",
+    tag: "money, not quota",
+    say: "For the other question the app answers: <b>what did today cost</b>. Today's API-equivalent value, with the credit spend against its monthly cap as a 2&nbsp;px underline. Quota windows are not here at all — this is the widget for people watching the money.",
+    render(d) {
+      const pctCap = (d.credits / d.cap) * 100;
+      return `<div class="w w-cost"><div class="money"><b>$${d.spend.toFixed(2)}</b><span class="u" style="--p:${r(pctCap)}"><i></i></span></div><span class="cap">today</span></div>`;
+    },
+    notes: [
+      ["up", "+", "Answers a question no meter does, and dollars survive a glance better than percentages."],
+      ["dn", "−", "Says nothing about being cut off — the thing that actually interrupts your work."],
+    ],
+    score: { glance: 4, detail: 2, still: 3 },
+    trade: "Right number for budget anxiety, wrong number for work interruption.",
+  },
+  {
+    id: "arc",
+    name: "Clock arc",
+    tag: "usage against time",
+    say: "Two readings in one mark: the outer grey sweep is <b>how far through the window the clock is</b>, the inner colored disc is <b>how much is spent</b>. Inner ahead of outer means you are outrunning the reset — the pace line's idea, drawn as a shape instead of a notch.",
+    render(d) {
+      const arc = (g, c) => `<span class="arc ${hot(g.pct) ? "hot" : ""}"><span class="outer" style="--t:${state.pace ? r(g.pace) : 0}"></span><span class="inner" style="--p:${r(g.pct)};--c:${c}"></span></span>`;
+      return `<div class="w w-arc">${arc(d.codex.w5, C)}${arc(d.claude.w5, K)}</div>`;
+    },
+    notes: [
+      ["up", "+", "Encodes the pace comparison the README cares most about, and does it without a single digit."],
+      ["dn", "−", "Two concentric sweeps at 24 px is a puzzle before it is a gauge; the rings are 2 px apart."],
+    ],
+    score: { glance: 3, detail: 4, still: 5 },
+    trade: "The most conceptually right, and the hardest to read at actual size.",
+  },
+  {
+    id: "text",
+    name: "Tray text",
+    tag: "least visual weight",
+    say: "No chrome, no gauges. Two dots and two numbers in the same tabular type as the clock, so it reads as <b>part of the system tray</b> rather than an app shouting from the taskbar. Turns red and nothing else when a window crosses 90%.",
+    render(d) {
+      const pair = (g, c) => `<span class="pair ${hot(g.pct) ? "hot" : ""}"><i class="dot" style="--c:${c}"></i><b>${r(g.pct)}</b></span>`;
+      return `<div class="w w-text">${pair(d.codex.w5, C)}<span class="sep">·</span>${pair(d.claude.w5, K)}</div>`;
+    },
+    notes: [
+      ["up", "+", "Disappears into the tray until it turns red. The most polite option on a crowded taskbar."],
+      ["dn", "−", "Bare numbers with no scale — is 82 of 100, or of some limit you have to remember?"],
+    ],
+    score: { glance: 3, detail: 2, still: 2 },
+    trade: "Blends in beautifully, which also means it is easy to never notice.",
+  },
+];
+
+/* ============================================================
+   Taskbar chrome
+   ============================================================ */
+const START = `<svg width="18" height="18" viewBox="0 0 18 18"><g fill="currentColor"><rect x="1" y="1" width="7" height="7" rx="1"/><rect x="10" y="1" width="7" height="7" rx="1"/><rect x="1" y="10" width="7" height="7" rx="1"/><rect x="10" y="10" width="7" height="7" rx="1"/></g></svg>`;
+const GL_WIFI = `<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.5 5.5a10 10 0 0 1 13 0M4 8.4a6.3 6.3 0 0 1 8 0M6.4 11.2a2.6 2.6 0 0 1 3.2 0"/><circle cx="8" cy="13.4" r="0.8" fill="currentColor" stroke="none"/></svg>`;
+const GL_VOL = `<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3 6h2.5L9 3v10L5.5 10H3z" stroke-linejoin="round"/><path d="M11.2 5.8a3.2 3.2 0 0 1 0 4.4"/></svg>`;
+const GL_BAT = `<svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="6" width="12" height="6" rx="1.5"/><path d="M15 8.4v1.2" stroke-linecap="round"/><rect x="3.4" y="7.4" width="7" height="3.2" rx="0.6" fill="currentColor" stroke="none"/></svg>`;
+const GL_UP = `<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 7.5 6 4l3.5 3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+/* The app as it ships today: one flat 16 px tray glyph, for contrast. */
+const TRAY_ICON = `<svg width="16" height="16" viewBox="0 0 16 16"><rect x="1.5" y="9" width="4" height="5.5" rx="1" fill="${C}"/><rect x="6" y="5" width="4" height="9.5" rx="1" fill="${K}"/><rect x="10.5" y="2" width="4" height="12.5" rx="1" fill="var(--credit)"/></svg>`;
+const APPS = ["#4f7fd8", "#6ec3a8", "#d97b6c", "#9b8bd6"];
+
+function taskbar(widget, opts = {}) {
+  const cls = [
+    "tb",
+    (opts.theme || state.theme) === "light" ? "light" : "",
+    (opts.size || state.size) === "small" ? "small" : "",
+  ].join(" ");
+  const apps = APPS.map((c) => `<div class="tb-btn"><div class="app" style="background:${c}"></div></div>`).join("");
+  const left = `<div class="tb-btn">${START}</div><div class="tb-search">${searchGlyph()}<span>Search</span></div>`;
+  const tray = `<div class="tb-tray">
+      <div class="gl">${GL_UP}</div>
+      <div class="tray-today" title="the app's tray icon today">${TRAY_ICON}</div>
+      <div class="gl">${GL_WIFI}</div><div class="gl">${GL_VOL}</div><div class="gl">${GL_BAT}</div>
+      <div class="tb-clock"><div>${data.clock}</div><div class="d">8/4/2026</div></div>
+    </div>`;
+  const place = opts.place || state.place;
+  if (place === "left") {
+    return `<div class="${cls}">${widget}<div class="tb-btn"></div>${left}${apps}<div class="tb-spacer"></div>${tray}</div>`;
+  }
+  return `<div class="${cls}">${left}${apps}<div class="tb-spacer"></div>${widget}${tray}</div>`;
+}
+function searchGlyph() {
+  return `<svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="6" cy="6" r="4.2"/><path d="M9.2 9.2 12.5 12.5" stroke-linecap="round"/></svg>`;
+}
+
+/* ============================================================
+   Cards
+   ============================================================ */
+/* The zoom stages want the widget alone, not a whole bar — strip the chrome. */
+function zoomHTML(c, theme) {
+  const cls = "tb" + (theme === "light" ? " light" : "");
+  return `<div class="${cls}">${c.render(data)}</div>`;
+}
+
+function renderCards() {
+  document.getElementById("cards").innerHTML = CONCEPTS.map((c, i) => {
+    const n = String(i + 1).padStart(2, "0");
+    const notes = c.notes
+      .map(([k, m, t]) => `<div class="note ${k}"><span class="m">${m}</span><span>${t}</span></div>`)
+      .join("");
+    return `<article class="card">
+      <div class="card-hd"><span class="n">${n}</span><h3>${c.name}</h3><span class="tag">${c.tag}</span></div>
+      <p class="say">${c.say}</p>
+      <div class="situ"><div class="wp-hint">IN PLACE — ACTUAL SIZE</div>${taskbar(c.render(data))}</div>
+      <div class="detail">
+        <div class="zooms">
+          <div class="zoomwrap"><div class="zt">DARK · 2.4×</div><div class="zoomstage dark">${zoomHTML(c, "dark")}</div></div>
+          <div class="zoomwrap"><div class="zt">LIGHT · 2.4×</div><div class="zoomstage lite">${zoomHTML(c, "light")}</div></div>
+        </div>
+        <div class="notes">${notes}</div>
+      </div>
+    </article>`;
+  }).join("");
+}
+
+function renderStrips() {
+  const build = (theme) =>
+    `<div class="tb${theme === "light" ? " light" : ""}">` +
+    CONCEPTS.map((c, i) => c.render(data).replace('class="w ', `data-n="${String(i + 1).padStart(2, "0")}" class="w `)).join("") +
+    "</div>";
+  const d = document.getElementById("strip-dark");
+  const l = document.getElementById("strip-light");
+  d.innerHTML = '<div class="striplbl">DARK TASKBAR</div>' + build("dark");
+  l.innerHTML = '<div class="striplbl">LIGHT TASKBAR</div>' + build("light");
+}
+
+/* ============================================================
+   Hover flyout — the same detail for whichever face wins
+   ============================================================ */
+function flyoutHTML() {
+  const row = (name, g, c) => `<div class="frow">
+      <div class="l"><i class="dot" style="--c:${c};width:6px;height:6px;border-radius:50%;display:inline-block;background:${c}"></i>
+        <span>${name}</span><b style="margin-left:4px">${r(g.pct)}%</b>
+        <span class="r">${g.resets}</span></div>
+      <div class="bar" style="--p:${r(g.pct)};--c:${hot(g.pct) ? "var(--danger)" : c};--t:${r(g.pace)}"><u></u>${state.pace ? "<i></i>" : ""}</div>
+    </div>`;
+  return `<div class="flyout">
+      <div class="fh"><span>AI USAGE</span><span class="ago">updated 40s ago</span></div>
+      ${row("Codex · 5h", data.codex.w5, C)}
+      ${row("Codex · week", data.codex.wk, C)}
+      ${row("Claude · 5h", data.claude.w5, K)}
+      ${row("Claude · week", data.claude.wk, K)}
+      <div class="ffoot"><span>API-equivalent today</span><b>$${data.spend.toFixed(2)}</b></div>
+    </div>`;
+}
+function renderFlyout() {
+  const host = document.getElementById("situ-flyout");
+  const winner = CONCEPTS.find((c) => c.id === "bars");
+  host.innerHTML = `<div class="wp-hint">HOVER STATE</div>` + flyoutHTML() + taskbar(winner.render(data), { place: "tray" });
+  /* Force the hover look so the button reads as the flyout's anchor. */
+  const w = host.querySelector(".w");
+  if (w) w.style.background = "var(--w-hover)";
+}
+
+/* ============================================================
+   Verdict table
+   ============================================================ */
+function bars(n) {
+  return "▮".repeat(n) + '<span style="opacity:.22">' + "▮".repeat(5 - n) + "</span>";
+}
+function renderVerdict() {
+  document.getElementById("verdict").innerHTML = CONCEPTS.map((c, i) => {
+    const pick = c.id === "bars";
+    return `<tr class="${pick ? "pick" : ""}">
+      <td class="nm">${String(i + 1).padStart(2, "0")} ${c.name}</td>
+      <td class="score">${bars(c.score.glance)}</td>
+      <td class="score">${bars(c.score.detail)}</td>
+      <td class="score">${bars(c.score.still)}</td>
+      <td>${c.trade}</td>
+    </tr>`;
+  }).join("");
+}
+
+/* ============================================================
+   Controls + live drift
+   ============================================================ */
+function renderAll() {
+  renderCards();
+  renderStrips();
+  renderFlyout();
+  renderVerdict();
+}
+function wireSegs(id, key, after) {
+  document.getElementById(id).addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    state[key] = b.dataset.v;
+    [...b.parentElement.children].forEach((x) => x.classList.toggle("on", x === b));
+    if (after) after();
+    renderAll();
+  });
+}
+wireSegs("seg-scenario", "scenario", () => { data = clone(SCENARIOS[state.scenario]); });
+wireSegs("seg-theme", "theme");
+wireSegs("seg-size", "size");
+wireSegs("seg-place", "place");
+document.getElementById("chk-pace").addEventListener("change", (e) => { state.pace = e.target.checked; renderAll(); });
+
+/* Live mode exists to expose restlessness: the concepts that redraw digits every
+   tick are the ones that will nag you all day. */
+let timer = null;
+document.getElementById("chk-live").addEventListener("change", (e) => {
+  state.live = e.target.checked;
+  clearInterval(timer);
+  if (!state.live) return;
+  timer = setInterval(() => {
+    for (const p of ["codex", "claude"]) {
+      for (const k of ["w5", "wk"]) {
+        const g = data[p][k];
+        const step = k === "w5" ? 0.9 : 0.25;
+        g.pct = Math.min(100, g.pct + Math.abs(Math.sin(g.pct * 7.3)) * step);
+        g.pace = Math.min(100, g.pace + (k === "w5" ? 0.5 : 0.12));
+      }
+    }
+    data.spend += 0.04;
+    data.credits = Math.min(data.cap, data.credits + 0.03);
+    renderAll();
+  }, 1400);
+});
+
+renderAll();
+</script>
+</body>
+</html>

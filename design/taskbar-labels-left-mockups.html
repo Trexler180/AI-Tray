@@ -1,0 +1,747 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Taskbar widget — labels left, bigger bars</title>
+<style>
+/* ============================================================
+   Tokens, copied from src/styles.css so the mockups read like the app
+   ============================================================ */
+:root {
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --text: #e7ebf2;
+  --muted: #8b95a6;
+  --faint: #5c6577;
+  --track: rgba(255, 255, 255, 0.08);
+  --codex: #2dd4bf;
+  --claude: #f0a36a;
+  --credit: #b3a5f0;
+  --danger: #ef6b6b;
+  --ok: #71cdb0;
+  --warn: #dfa05f;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: #080b10;
+  font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+body { padding: 34px 30px 90px; }
+.sheet { max-width: 1180px; margin: 0 auto; }
+
+h1 { font-size: 25px; font-weight: 700; letter-spacing: 0.2px; }
+h2 { font-size: 17px; font-weight: 700; margin-top: 36px; }
+.lede { font-size: 13.5px; color: var(--muted); line-height: 1.65; margin-top: 10px; max-width: 78ch; }
+.lede b { color: var(--text); font-weight: 600; }
+h2 + .say { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin-top: 7px; max-width: 86ch; }
+h2 + .say b { color: var(--text); font-weight: 600; }
+
+.budget {
+  margin-top: 16px; padding: 12px 14px; border-radius: 10px; max-width: 78ch;
+  border: 1px solid rgba(45, 212, 191, 0.24); background: rgba(45, 212, 191, 0.06);
+  font-size: 12.5px; line-height: 1.7; color: var(--muted);
+}
+.budget b { color: var(--codex); font-weight: 700; }
+.budget code { font-size: 11.5px; color: var(--text); }
+
+/* ============================================================
+   Controls
+   ============================================================ */
+.controls {
+  position: sticky; top: 0; z-index: 40;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 18px;
+  margin: 22px 0 26px; padding: 12px 14px;
+  border: 1px solid var(--border-strong); border-radius: 12px;
+  background: rgba(12, 15, 21, 0.93); backdrop-filter: blur(14px);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+}
+.ctl { display: flex; align-items: center; gap: 8px; }
+.ctl > .lbl { font-size: 9.5px; font-weight: 700; letter-spacing: 1.3px; color: var(--faint); }
+.segs { display: flex; gap: 3px; padding: 3px; background: rgba(255, 255, 255, 0.05); border-radius: 999px; }
+.segs button {
+  font: inherit; font-size: 11.5px; font-weight: 600; color: var(--muted);
+  padding: 5px 12px; border: none; border-radius: 999px; background: transparent; cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.segs button:hover { color: var(--text); }
+.segs button.on { color: #fff; background: rgba(255, 255, 255, 0.1); }
+.segs button.on[data-v="tight"] { background: rgba(239, 107, 107, 0.22); }
+.segs button.on[data-v="6"] { background: rgba(223, 160, 95, 0.22); }
+.toggle { display: flex; align-items: center; gap: 7px; font-size: 11.5px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.toggle input { accent-color: var(--codex); width: 14px; height: 14px; cursor: pointer; }
+.toggle:hover { color: var(--text); }
+
+/* ============================================================
+   Desktop + taskbar
+   ============================================================ */
+.situ {
+  position: relative; height: 122px; border-radius: 10px; overflow: hidden;
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(700px 220px at 18% 120%, rgba(45, 212, 191, 0.28), transparent 70%),
+    radial-gradient(560px 200px at 74% 130%, rgba(240, 163, 106, 0.22), transparent 70%),
+    radial-gradient(900px 320px at 50% -40%, rgba(120, 140, 220, 0.16), transparent 70%),
+    linear-gradient(160deg, #1d2740, #101625 60%, #0a0e17);
+}
+.situ .wp-hint {
+  position: absolute; left: 14px; top: 12px;
+  font-size: 10px; letter-spacing: 1.2px; font-weight: 700; color: rgba(255, 255, 255, 0.22);
+}
+.tb {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: 48px; display: flex; align-items: center; gap: 4px; padding: 0 6px;
+  backdrop-filter: blur(28px) saturate(1.4);
+  background: rgba(32, 32, 32, 0.78);
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  --w-text: #e9edf3;
+  --w-muted: #a4adbb;
+  --w-track: rgba(255, 255, 255, 0.17);
+  --w-hover: rgba(255, 255, 255, 0.08);
+  --w-edge: rgba(255, 255, 255, 0.1);
+  /* Inside-cell type sits over both the fill and the empty track, so it takes
+     the theme's text colour with a halo in the opposite one. */
+  --w-on: #f2f5f9;
+  --w-halo: rgba(0, 0, 0, 0.55);
+}
+.tb.light {
+  background: rgba(243, 243, 243, 0.82);
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  --w-text: #17181a;
+  --w-muted: #55585e;
+  --w-track: rgba(0, 0, 0, 0.16);
+  --w-hover: rgba(0, 0, 0, 0.06);
+  --w-edge: rgba(0, 0, 0, 0.1);
+  --w-on: #14171b;
+  --w-halo: rgba(255, 255, 255, 0.6);
+}
+.tb-btn { width: 40px; height: 36px; border-radius: 6px; flex: 0 0 auto; display: flex; align-items: center; justify-content: center; transition: background 0.15s; }
+.tb-btn:hover { background: var(--w-hover); }
+.tb-btn .app { width: 20px; height: 20px; border-radius: 5px; }
+.tb-search {
+  height: 32px; min-width: 148px; border-radius: 999px; padding: 0 12px; margin-right: 4px;
+  display: flex; align-items: center; gap: 8px;
+  background: var(--w-hover); border: 1px solid var(--w-edge);
+  font-size: 11.5px; color: var(--w-muted);
+}
+.tb-spacer { flex: 1 1 auto; }
+.tb-tray { display: flex; align-items: center; gap: 2px; padding-left: 4px; }
+.tb-tray .gl { width: 26px; height: 32px; display: flex; align-items: center; justify-content: center; color: var(--w-muted); }
+.tb-clock { padding: 0 10px 0 6px; text-align: right; line-height: 1.25; font-size: 11px; color: var(--w-text); font-variant-numeric: tabular-nums; }
+.tb-clock .d { font-size: 10.5px; color: var(--w-muted); }
+
+/* ============================================================
+   The parts
+   ============================================================ */
+.w {
+  position: relative; height: 32px; flex: 0 0 auto;
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 9px; border-radius: 6px;
+  color: var(--w-text); font-variant-numeric: tabular-nums;
+  transition: background 0.15s;
+}
+.w:hover { background: var(--w-hover); }
+.stack { display: flex; flex-direction: column; gap: var(--sgap, 4px); }
+
+/* A labelled row: the tag on the left, the bars to its right. The tag is the
+   whole point of this page — it lives beside the bars, never above them. */
+.lrow { display: flex; align-items: center; gap: var(--tgap, 6px); }
+.tag {
+  flex: 0 0 auto; width: var(--tw, 15px); text-align: right;
+  font-size: var(--tf, 8px); font-weight: 800; letter-spacing: 0.3px; line-height: 1;
+  color: var(--tc, var(--w-muted));
+}
+.bars { display: flex; flex-direction: column; gap: var(--bgap, 2px); }
+
+/* One segmented rail: a cell per account, all cells equal. */
+.rail { display: flex; gap: 2px; width: var(--rw, 62px); }
+.rail > * { flex: 1 1 0; min-width: 0; }
+.cell {
+  position: relative; height: var(--ch, 8px); border-radius: 2px;
+  background: var(--w-track); overflow: hidden;
+}
+.cell > u { position: absolute; inset: 0 auto 0 0; width: calc(var(--p) * 1%); background: var(--c); }
+.cell.hot > u { background: var(--danger); }
+.cell > i {
+  position: absolute; top: 0; bottom: 0; left: calc(var(--t) * 1%);
+  width: 1px; background: var(--w-text); opacity: 0.62;
+}
+/* An account name set inside its own cell, which is only possible once the bar
+   is tall enough to hold type — the payoff for moving the labels left. */
+.cell > b {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 6.5px; font-weight: 800; letter-spacing: 0.2px; line-height: 1;
+  color: var(--w-on); z-index: 2;
+  text-shadow: 0 0 2px var(--w-halo), 0 0 1px var(--w-halo);
+}
+.rail.wk .cell { height: var(--wh, 4px); border-radius: 1.5px; opacity: 0.6; }
+.bars.tucked { --bgap: 1px; }
+
+/* The window-row treatment puts both providers on one rail, so it needs a
+   visible seam between the two groups. */
+.rail.mixed { gap: 0; }
+.rail .grp { display: flex; gap: 2px; flex: var(--f, 1) 1 0; }
+.rail .seam { flex: 0 0 5px; }
+
+/* ============================================================
+   Anatomy
+   ============================================================ */
+.anatomy { display: grid; grid-template-columns: 1fr 340px; gap: 22px; align-items: center; margin-top: 16px; }
+.anatomy .stage {
+  border: 1px solid var(--border); border-radius: 12px; background: #202020;
+  height: 240px; display: flex; align-items: center; justify-content: center; overflow: hidden;
+}
+.anatomy .stage .tb { position: static; height: auto; padding: 0; border: none; background: none; backdrop-filter: none; transform: scale(5); }
+.legend { display: flex; flex-direction: column; gap: 12px; }
+.legend .li { display: flex; gap: 11px; align-items: flex-start; }
+.legend .sw { width: 30px; flex: 0 0 auto; margin-top: 3px; display: flex; align-items: center; justify-content: flex-end; }
+.legend .sw .bar { width: 26px; height: 8px; border-radius: 2px; background: var(--track); position: relative; overflow: hidden; }
+.legend .sw .bar u { position: absolute; inset: 0 auto 0 0; width: 62%; background: var(--codex); }
+.legend .sw .bar i { position: absolute; top: 0; bottom: 0; left: 45%; width: 1px; background: #fff; opacity: 0.75; }
+.legend .sw .bar.thin { height: 4px; opacity: 0.6; }
+.legend .sw .bar.thin u { background: var(--claude); }
+.legend .sw .tx { font-size: 9px; font-weight: 800; color: var(--muted); }
+.legend .nm { font-size: 12.5px; font-weight: 650; color: var(--text); }
+.legend .ds { font-size: 12px; color: var(--muted); line-height: 1.55; margin-top: 3px; }
+
+/* ============================================================
+   Cards
+   ============================================================ */
+.card {
+  border: 1px solid var(--border-strong); border-radius: 14px;
+  background: linear-gradient(180deg, #14181f, #0d1014);
+  padding: 18px 20px 20px; margin-bottom: 22px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.42);
+}
+.card-hd { display: flex; align-items: baseline; gap: 11px; }
+.card-hd .n { font-size: 10.5px; font-weight: 700; color: var(--faint); letter-spacing: 1px; font-variant-numeric: tabular-nums; }
+.card-hd h3 { font-size: 16.5px; font-weight: 700; }
+.card-hd .fit {
+  margin-left: auto; font-size: 10.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+  padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted);
+}
+.card-hd .fit.ok { color: var(--ok); border-color: rgba(113, 205, 176, 0.35); background: rgba(113, 205, 176, 0.08); }
+.card-hd .fit.tight { color: var(--warn); border-color: rgba(223, 160, 95, 0.38); background: rgba(223, 160, 95, 0.08); }
+.card-hd .fit.over { color: var(--danger); border-color: rgba(239, 107, 107, 0.4); background: rgba(239, 107, 107, 0.1); }
+.card > .say { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin: 8px 0 15px; max-width: 86ch; }
+.card > .say b { color: var(--text); font-weight: 600; }
+
+.detail { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+.zooms { display: flex; gap: 12px; }
+.zoomwrap { flex: 1 1 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+.zoomwrap .zt { font-size: 9px; font-weight: 700; letter-spacing: 1.2px; color: var(--faint); padding: 7px 10px 6px; border-bottom: 1px solid var(--border); }
+.zoomstage { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; height: 120px; overflow: hidden; }
+.zoomstage.dark { background: #202020; }
+.zoomstage.lite { background: #f3f3f3; }
+.zoomstage .tb { position: static; height: auto; padding: 0; border: none; background: none; backdrop-filter: none; transform: scale(2.8); }
+.notes { display: flex; flex-direction: column; gap: 8px; justify-content: center; }
+.note { display: flex; gap: 9px; font-size: 12px; line-height: 1.55; color: var(--muted); }
+.note .m { flex: 0 0 auto; width: 15px; font-weight: 700; text-align: center; }
+.note.up .m { color: var(--ok); }
+.note.dn .m { color: var(--warn); }
+.note b { color: var(--text); font-weight: 600; }
+
+/* ============================================================
+   Measured table
+   ============================================================ */
+.heights { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 12px; }
+.heights th { text-align: left; font-size: 9.5px; font-weight: 700; letter-spacing: 1.2px; color: var(--faint); padding: 0 10px 9px; border-bottom: 1px solid var(--border); }
+.heights td { padding: 9px 10px; border-bottom: 1px solid var(--border); color: var(--muted); font-variant-numeric: tabular-nums; }
+.heights td.nm { color: var(--text); font-weight: 650; white-space: nowrap; }
+.heights td.v.ok { color: var(--ok); }
+.heights td.v.tight { color: var(--warn); }
+.heights td.v.over { color: var(--danger); font-weight: 700; }
+.heights tr.pick td { background: rgba(45, 212, 191, 0.06); }
+
+/* Before/after strip */
+.ba { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+.ba .half { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.ba .half .zt { font-size: 9px; font-weight: 700; letter-spacing: 1.2px; color: var(--faint); padding: 8px 11px 7px; border-bottom: 1px solid var(--border); }
+.ba .half .zt em { font-style: normal; color: var(--muted); }
+.ba .stagec { background: #202020; height: 130px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.ba .stagec .tb { position: static; height: auto; padding: 0; border: none; background: none; backdrop-filter: none; transform: scale(3); }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<h1>Labels to the left, and the bars get their pixels back</h1>
+<p class="lede">
+  Moving the account labels out of a row <b>above</b> the bars and into a column <b>beside</b> them
+  doesn't just tidy the layout — it hands the height back. The label rows were costing 15&nbsp;px of
+  a 32&nbsp;px button; spend that on the bars instead and the 5-hour rail goes from 4&nbsp;px to
+  <b>8–11&nbsp;px</b>, which is tall enough to set the account name <b>inside its own cell</b>.
+  Same four elements as before, none of them dropped. Every card measures its own height from the
+  DOM, so the badges are arithmetic, not opinion.
+</p>
+
+<div class="budget">
+  <b>Where the 15 px goes:</b> with labels above, a provider cost
+  <code>7.5 + 4 + 2 + gaps = 15.5px</code> and two of them overflowed at <code>34px</code>. With
+  the tag on the left, a provider is just <code>bar + gap + weekly</code>. Solve
+  <code>2 × (b + 2 + b/2) + 3 = 32</code> and you get <b><code>b = 8px</code></b> — double the old
+  bar, with the weekly at 4&nbsp;px instead of 2. Stop letting the weekly scale with the bar (pin
+  it at 3&nbsp;px — it moves slowly enough) and tuck it flush, and the 5-hour bar reaches
+  <b><code>10px</code></b> at <code>31px</code> total, which is where names fit inside the cells.
+</div>
+
+<div class="controls">
+  <div class="ctl">
+    <span class="lbl">ACCOUNTS</span>
+    <div class="segs" id="seg-count">
+      <button data-v="2">1+1</button>
+      <button data-v="4" class="on">2+2</button>
+      <button data-v="6">3+3</button>
+    </div>
+  </div>
+  <div class="ctl">
+    <span class="lbl">WIDTH</span>
+    <div class="segs" id="seg-width">
+      <button data-v="66">Compact 66px</button>
+      <button data-v="96" class="on">Roomy 96px</button>
+    </div>
+  </div>
+  <div class="ctl">
+    <span class="lbl">TAG</span>
+    <div class="segs" id="seg-tag">
+      <button data-v="short" class="on">CX / CL</button>
+      <button data-v="long">Codex / Claude</button>
+    </div>
+  </div>
+  <div class="ctl">
+    <span class="lbl">LOAD</span>
+    <div class="segs" id="seg-scenario">
+      <button data-v="calm">Calm</button>
+      <button data-v="busy" class="on">Busy</button>
+      <button data-v="tight">Near limit</button>
+    </div>
+  </div>
+  <label class="toggle"><input type="checkbox" id="chk-pace" checked /> Pace marks</label>
+  <label class="toggle"><input type="checkbox" id="chk-week" checked /> Weekly bar</label>
+</div>
+
+<h2>Before and after</h2>
+<p class="say">
+  The same accounts, the same four elements, at <b>3×</b>. Left is the best stacked-label version
+  from the previous page; right is the same information with the tag moved beside the bars. Nothing
+  was removed to make the right-hand one — the bars are simply eating the label row.
+</p>
+<div class="ba">
+  <div class="half"><div class="zt">BEFORE — LABELS ABOVE <em>· 4 px bar, 2 px weekly</em></div><div class="stagec" id="ba-before"></div></div>
+  <div class="half"><div class="zt">AFTER — LABELS LEFT <em>· 8 px bar, 4 px weekly</em></div><div class="stagec" id="ba-after"></div></div>
+</div>
+
+<h2>Anatomy</h2>
+<p class="say">
+  One provider row at <b>5×</b>: the tag, the segmented 5-hour rail with a name inside each cell,
+  the pace mark, and the weekly rail tucked underneath.
+</p>
+<div class="anatomy">
+  <div class="stage" id="anatomy-stage"></div>
+  <div class="legend">
+    <div class="li">
+      <div class="sw"><span class="tx">CX</span></div>
+      <div><div class="nm">Provider tag</div><div class="ds">Left of the bars, vertically centred against the pair, tinted to the provider. Costs width once instead of height twice.</div></div>
+    </div>
+    <div class="li">
+      <div class="sw"><span class="bar"><u></u></span></div>
+      <div><div class="nm">5-hour cell, 8–11 px</div><div class="ds">One account each. Twice the height it had with labels above, which is what makes everything below possible.</div></div>
+    </div>
+    <div class="li">
+      <div class="sw"><span class="tx">Work</span></div>
+      <div><div class="nm">Name inside the cell</div><div class="ds">At 10 px the cell can hold 6.5 px type. The label stops being a separate row and becomes part of the bar it names.</div></div>
+    </div>
+    <div class="li">
+      <div class="sw"><span class="bar"><i></i></span></div>
+      <div><div class="nm">Pace mark</div><div class="ds">Unchanged, and far more readable on a tall bar than it ever was on a 4 px one.</div></div>
+    </div>
+    <div class="li">
+      <div class="sw"><span class="bar thin"><u></u></span></div>
+      <div><div class="nm">Weekly rail</div><div class="ds">Half the 5-hour height, dimmed, same cell order. At 4–5 px it is finally readable rather than a hairline.</div></div>
+    </div>
+  </div>
+</div>
+
+<h2>Treatments</h2>
+<p class="say">
+  Five ways to spend the height the label column gave back. <b>01 is the direct trade</b>; the rest
+  push further, up to putting the names inside the bars and dropping the label column to nothing.
+</p>
+<div id="cards"></div>
+
+<h2>Measured heights</h2>
+<p class="say">
+  From the rendered DOM at each account count. Over 32&nbsp;px overflows the button; 29–32 fits with
+  no breathing room. Note that <b>account count no longer changes the height at all</b> for the
+  segmented treatments — more accounts cost width, which is the whole advantage of this family.
+</p>
+<table class="heights">
+  <thead><tr><th style="width: 250px">TREATMENT</th><th style="width: 100px">1+1</th><th style="width: 100px">2+2</th><th style="width: 100px">3+3</th><th style="width: 120px">5H BAR</th><th>WIDTH AT 2+2</th></tr></thead>
+  <tbody id="heights"></tbody>
+</table>
+
+<p class="lede" style="margin-top: 26px">
+  <b>You were right that this is the better direction.</b> Labels above cost height twice — once per
+  provider — while a label to the left costs width once, and width is the axis a taskbar can
+  actually spare. The measured result is that every element from the last page survives and the
+  bars roughly double.
+  <b>03 (names inside the cells)</b> is the one I'd build: at 10&nbsp;px the cell carries its own
+  name, so the label column shrinks to a 15&nbsp;px provider tag and nothing sits above anything.
+  <b>01</b> is the conservative version if 6.5&nbsp;px type inside a bar feels like a step too far,
+  and <b>04 (rows by window)</b> is the interesting outsider — it drops to two rails by letting
+  colour carry the provider, which buys the tallest bars on the page.
+  The one honest limit: at <b>3+3 on compact width</b> a cell is under 20&nbsp;px and the inside-name
+  falls back to an initial, so 03 quietly becomes 01 for people with many accounts.
+</p>
+
+</div>
+
+<script>
+/* ============================================================
+   Accounts — same book as the other two pages
+   ============================================================ */
+const BOOK = {
+  codex: [
+    { short: "W", label: "Work", p5: 47, pw: 63, pace5: 44, pacew: 58 },
+    { short: "S", label: "Side", p5: 12, pw: 22, pace5: 61, pacew: 58 },
+    { short: "T", label: "Team", p5: 71, pw: 44, pace5: 78, pacew: 58 },
+  ],
+  claude: [
+    { short: "W", label: "Work", p5: 82, pw: 55, pace5: 46, pacew: 58 },
+    { short: "P", label: "Prsnl", p5: 24, pw: 38, pace5: 70, pacew: 58 },
+    { short: "R", label: "Rsrch", p5: 58, pw: 91, pace5: 33, pacew: 58 },
+  ],
+};
+const LOAD = { calm: 0.45, busy: 1, tight: 1.3 };
+const state = { count: 4, width: 96, tag: "short", scenario: "busy", pace: true, week: true };
+
+const r = (n) => Math.round(n);
+const clamp = (n) => Math.max(0, Math.min(100, n));
+const hot = (p) => p >= 90;
+const C = "var(--codex)", K = "var(--claude)";
+const TAGS = { codex: { short: "CX", long: "Codex" }, claude: { short: "CL", long: "Claude" } };
+
+function view(count) {
+  const n = count || state.count;
+  const per = { 2: 1, 4: 2, 6: 3 }[n];
+  const m = LOAD[state.scenario];
+  const mk = (a, provider) => ({
+    ...a, provider,
+    c: provider === "codex" ? C : K,
+    v5: clamp(a.p5 * m), vw: clamp(a.pw * m),
+  });
+  return {
+    codex: BOOK.codex.slice(0, per).map((a) => mk(a, "codex")),
+    claude: BOOK.claude.slice(0, per).map((a) => mk(a, "claude")),
+  };
+}
+
+/* The tag column is sized to its longest word, so "Codex" doesn't clip and
+   "CX" doesn't leave a hole. */
+function tagWidth() {
+  return state.tag === "long" ? 27 : 15;
+}
+const CGAP = 2;
+function cellWidth(n, railW) {
+  return ((railW || state.width) - CGAP * (n - 1)) / n;
+}
+
+/* ---- Rails ---- */
+function cells(list, key, opts = {}) {
+  const pace = state.pace && !opts.nopace;
+  /* A name only goes inside the bar if the bar is tall enough to hold type AND
+     the cell is wide enough for the word. Otherwise it degrades to an initial,
+     then to nothing. */
+  const inside = opts.inside && (opts.h || 8) >= 9;
+  const wide = cellWidth(list.length, opts.railW) >= 26;
+  return list
+    .map((a) => {
+      const p = key === "v5" ? a.v5 : a.vw;
+      const t = key === "v5" ? a.pace5 : a.pacew;
+      const nm = inside ? `<b>${wide ? a.label : a.short}</b>` : "";
+      return `<span class="cell ${hot(p) ? "hot" : ""}" style="--p:${r(p)};--c:${a.c};--t:${r(t)}${opts.h ? `;--ch:${opts.h}px` : ""}${opts.wh ? `;--wh:${opts.wh}px` : ""}">
+        <u></u>${pace ? "<i></i>" : ""}${nm}</span>`;
+    })
+    .join("");
+}
+function rail(list, key, opts = {}) {
+  return `<div class="rail ${opts.cls || ""}" style="--rw:${opts.railW || state.width}px">${cells(list, key, opts)}</div>`;
+}
+/* One provider: tag on the left, its bars on the right. */
+function lrow(list, provider, opts = {}) {
+  const tag = TAGS[provider][state.tag];
+  const colour = provider === "codex" ? C : K;
+  return `<div class="lrow" style="--tw:${tagWidth()}px${opts.tf ? `;--tf:${opts.tf}px` : ""}">
+    <span class="tag" style="--tc:${colour};opacity:.85">${tag}</span>
+    <div class="bars ${opts.tucked ? "tucked" : ""}">
+      ${rail(list, "v5", opts)}
+      ${state.week ? rail(list, "vw", { ...opts, cls: "wk", nopace: true, inside: false }) : ""}
+    </div>
+  </div>`;
+}
+
+/* ============================================================
+   Treatments
+   ============================================================ */
+const VARIANTS = [
+  {
+    id: "double",
+    name: "Tag left, double-height bars",
+    bar: "8 px",
+    say: "The direct trade. The tag moves left, the label row disappears, and the two rows of pixels it was using go straight into the bars: the 5-hour rail doubles to <b>8&nbsp;px</b> and the weekly to 4. Nothing else changes — same cells, same order, same pace marks — so this is purely the old design with the height put where it does the most good.",
+    render(v) {
+      return `<div class="w"><div class="stack" style="--sgap:3px">
+        ${lrow(v.codex, "codex", { h: 8, wh: 4 })}
+        ${lrow(v.claude, "claude", { h: 8, wh: 4 })}
+      </div></div>`;
+    },
+    notes: [
+      ["up", "+", "An 8 px bar reads at a glance where a 4 px one was a hairline, and the pace mark finally has something to sit in."],
+      ["dn", "−", "The tag names the provider, not the account — per-account identity is back to position and hover."],
+    ],
+  },
+  {
+    id: "tucked",
+    name: "Tag left, weekly tucked",
+    bar: "9 px",
+    say: "Push once more: the weekly rail sits <b>flush</b> under its 5-hour rail rather than a gap away, and it stops scaling with the bar — pinned at <b>3&nbsp;px</b>, since a weekly window moves slowly enough that it never needed the resolution. The 5-hour bar takes the difference at <b>9&nbsp;px</b>, and the pair reads as one object with a dim shadow.",
+    render(v) {
+      return `<div class="w"><div class="stack" style="--sgap:4px">
+        ${lrow(v.codex, "codex", { h: 9, wh: 3, tucked: true })}
+        ${lrow(v.claude, "claude", { h: 9, wh: 3, tucked: true })}
+      </div></div>`;
+    },
+    notes: [
+      ["up", "+", "The tallest bars you can get while keeping providers stacked, and the pairing is unambiguous."],
+      ["dn", "−", "Flush bars can read as one 15 px block until you learn the dim strip is a different window."],
+    ],
+  },
+  {
+    id: "inside",
+    name: "Names inside the cells",
+    bar: "10 px",
+    say: "The payoff. At <b>10&nbsp;px</b> a cell is tall enough to set 6.5&nbsp;px type inside it, so each account's name rides <b>on its own bar</b> — no label row, no label column beyond the provider tag, and every element from the previous page still present. Narrow cells fall back to the initial, and cells under 9&nbsp;px tall drop the name entirely rather than clip it.",
+    render(v) {
+      return `<div class="w"><div class="stack" style="--sgap:3px">
+        ${lrow(v.codex, "codex", { h: 10, wh: 3, tucked: true, inside: true })}
+        ${lrow(v.claude, "claude", { h: 10, wh: 3, tucked: true, inside: true })}
+      </div></div>`;
+    },
+    notes: [
+      ["up", "+", "Label and bar become one object: nothing is above anything, and the name can never drift from its cell."],
+      ["dn", "−", "6.5 px type on a coloured fill is the weakest contrast on the page, and it vanishes at 3+3 compact."],
+    ],
+  },
+  {
+    id: "window",
+    name: "Rows by window, not by provider",
+    bar: "12 px",
+    say: "A reorganisation the left-hand tag makes possible: if the tag names the <b>window</b> — 5H and WK — then both providers can share one rail, separated by a seam and told apart by colour. Two rails instead of four means the tallest bars here, <b>12&nbsp;px</b>, and it puts Codex and Claude on the same scale for direct comparison.",
+    render(v) {
+      const seg = (list, key, h) =>
+        `<span class="grp" style="--f:${list.length}">${cells(list, key, { h, inside: h >= 9, railW: state.width * 0.46 })}</span>`;
+      const row = (label, key, h, colour) => `<div class="lrow" style="--tw:${tagWidth()}px">
+          <span class="tag" style="--tc:var(--w-muted)">${label}</span>
+          <div class="bars">
+            <div class="rail mixed" style="--rw:${state.width}px">
+              ${seg(v.codex, key, h)}<span class="seam"></span>${seg(v.claude, key, h)}
+            </div>
+          </div>
+        </div>`;
+      return `<div class="w"><div class="stack" style="--sgap:4px">
+        ${row("5H", "v5", 12)}
+        ${state.week ? row("WK", "vw", 6) : ""}
+      </div></div>`;
+    },
+    notes: [
+      ["up", "+", "Two rails instead of four: the biggest bars on the page, and the two providers finally share a baseline."],
+      ["dn", "−", "Provider is carried by colour alone, and the seam is doing a lot of work to keep the groups apart."],
+    ],
+  },
+  {
+    id: "rows",
+    name: "One labelled row per account",
+    bar: "6 px",
+    say: "The most literal reading of \"labels to the left\": stop segmenting entirely and give <b>every account its own row</b>, name on the left, bar on the right, weekly tucked under. It is by far the most legible arrangement — and the only one here whose height grows with the account count, which is what the segmented rail existed to avoid.",
+    render(v) {
+      const all = [...v.codex, ...v.claude];
+      const h = all.length > 4 ? 4 : all.length > 2 ? 6 : 9;
+      return `<div class="w"><div class="stack" style="--sgap:${all.length > 4 ? 2 : 3}px">
+        ${all
+          .map(
+            (a) => `<div class="lrow" style="--tw:${state.tag === "long" ? 26 : 15}px;--tf:7px">
+              <span class="tag" style="--tc:${a.c};opacity:.9">${state.tag === "long" ? a.label : a.short}</span>
+              <div class="bars tucked">
+                <div class="rail" style="--rw:${state.width}px">${cells([a], "v5", { h })}</div>
+                ${state.week ? `<div class="rail wk" style="--rw:${state.width}px">${cells([a], "vw", { h, wh: Math.max(2, h / 2), nopace: true })}</div>` : ""}
+              </div>
+            </div>`
+          )
+          .join("")}
+      </div></div>`;
+    },
+    notes: [
+      ["up", "+", "Every account named in full, on its own bar, with no shared scale to decode. The clearest thing here."],
+      ["dn", "−", "Height grows per account: fine at 1+1, over the button by 2+2, hopeless at 3+3."],
+    ],
+  },
+];
+
+/* ============================================================
+   Taskbar chrome
+   ============================================================ */
+const START = `<svg width="18" height="18" viewBox="0 0 18 18"><g fill="currentColor"><rect x="1" y="1" width="7" height="7" rx="1"/><rect x="10" y="1" width="7" height="7" rx="1"/><rect x="1" y="10" width="7" height="7" rx="1"/><rect x="10" y="10" width="7" height="7" rx="1"/></g></svg>`;
+const GL_WIFI = `<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.5 5.5a10 10 0 0 1 13 0M4 8.4a6.3 6.3 0 0 1 8 0M6.4 11.2a2.6 2.6 0 0 1 3.2 0"/><circle cx="8" cy="13.4" r="0.8" fill="currentColor" stroke="none"/></svg>`;
+const GL_VOL = `<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3 6h2.5L9 3v10L5.5 10H3z" stroke-linejoin="round"/><path d="M11.2 5.8a3.2 3.2 0 0 1 0 4.4"/></svg>`;
+const GL_BAT = `<svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="6" width="12" height="6" rx="1.5"/><path d="M15 8.4v1.2" stroke-linecap="round"/><rect x="3.4" y="7.4" width="7" height="3.2" rx="0.6" fill="currentColor" stroke="none"/></svg>`;
+const GL_UP = `<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 7.5 6 4l3.5 3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const SEARCH = `<svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="6" cy="6" r="4.2"/><path d="M9.2 9.2 12.5 12.5" stroke-linecap="round"/></svg>`;
+const APPS = ["#4f7fd8", "#6ec3a8", "#d97b6c", "#9b8bd6"];
+
+function taskbar(widget, theme) {
+  const apps = APPS.map((c) => `<div class="tb-btn"><div class="app" style="background:${c}"></div></div>`).join("");
+  return `<div class="tb${theme === "light" ? " light" : ""}">
+    <div class="tb-btn">${START}</div>
+    <div class="tb-search">${SEARCH}<span>Search</span></div>
+    ${apps}
+    <div class="tb-spacer"></div>
+    ${widget}
+    <div class="tb-tray">
+      <div class="gl">${GL_UP}</div><div class="gl">${GL_WIFI}</div><div class="gl">${GL_VOL}</div><div class="gl">${GL_BAT}</div>
+      <div class="tb-clock"><div>1:41 PM</div><div class="d">8/4/2026</div></div>
+    </div>
+  </div>`;
+}
+
+/* ============================================================
+   Before / after — the previous page's best stacked version, rebuilt here so
+   the comparison is like for like rather than a screenshot.
+   ============================================================ */
+function beforeWidget(v) {
+  const blk = (list) => `<div style="display:flex;flex-direction:column;gap:1px">
+      <div class="rail" style="--rw:${state.width}px">${list
+        .map((a) => `<span style="flex:1 1 0;min-width:0;font-size:7.5px;font-weight:800;line-height:1;color:var(--w-muted);text-align:center">${a.label}</span>`)
+        .join("")}</div>
+      ${rail(list, "v5", { h: 4 })}
+      ${state.week ? rail(list, "vw", { cls: "wk", h: 4, wh: 2, nopace: true }) : ""}
+    </div>`;
+  return `<div class="w"><div class="stack" style="--sgap:3px">${blk(v.codex)}${blk(v.claude)}</div></div>`;
+}
+
+/* ============================================================
+   Render
+   ============================================================ */
+function contentHeight(w) {
+  const kids = [...w.children];
+  if (!kids.length) return 0;
+  const top = Math.min(...kids.map((k) => k.getBoundingClientRect().top));
+  const bot = Math.max(...kids.map((k) => k.getBoundingClientRect().bottom));
+  return bot - top;
+}
+function band(h) {
+  if (h > 32) return "over";
+  if (h > 28.5) return "tight";
+  return "ok";
+}
+
+function renderBeforeAfter() {
+  const v = view();
+  document.getElementById("ba-before").innerHTML = `<div class="tb">${beforeWidget(v)}</div>`;
+  document.getElementById("ba-after").innerHTML =
+    `<div class="tb">${VARIANTS.find((x) => x.id === "double").render(v)}</div>`;
+}
+function renderAnatomy() {
+  const v = view();
+  document.getElementById("anatomy-stage").innerHTML =
+    `<div class="tb"><div class="w">${lrow(v.codex, "codex", { h: 11, wh: 4, tucked: true, inside: true })}</div></div>`;
+}
+function renderCards() {
+  const v = view();
+  document.getElementById("cards").innerHTML = VARIANTS.map((t, i) => {
+    const notes = t.notes.map(([k, m, x]) => `<div class="note ${k}"><span class="m">${m}</span><span>${x}</span></div>`).join("");
+    return `<article class="card" data-variant="${t.id}">
+      <div class="card-hd"><span class="n">${String(i + 1).padStart(2, "0")}</span><h3>${t.name}</h3>
+        <span class="fit" data-fit>measuring…</span></div>
+      <p class="say">${t.say}</p>
+      <div class="situ"><div class="wp-hint">IN PLACE — ACTUAL SIZE</div>${taskbar(t.render(v))}</div>
+      <div class="detail">
+        <div class="zooms">
+          <div class="zoomwrap"><div class="zt">DARK · 2.8×</div><div class="zoomstage dark"><div class="tb">${t.render(v)}</div></div></div>
+          <div class="zoomwrap"><div class="zt">LIGHT · 2.8×</div><div class="zoomstage lite"><div class="tb light">${t.render(v)}</div></div></div>
+        </div>
+        <div class="notes">${notes}</div>
+      </div>
+    </article>`;
+  }).join("");
+}
+function annotate() {
+  document.querySelectorAll(".card").forEach((card) => {
+    const w = card.querySelector(".situ .tb .w");
+    const h = contentHeight(w);
+    const el = card.querySelector("[data-fit]");
+    const cls = band(h);
+    el.className = "fit " + cls;
+    el.textContent = `${h.toFixed(1)} / 32 px${cls === "over" ? " — overflows" : cls === "tight" ? " — tight" : ""}`;
+  });
+}
+const COUNTS = [2, 4, 6];
+function renderHeights() {
+  const probe = document.createElement("div");
+  probe.style.cssText = "position:absolute;left:-9999px;top:0;visibility:hidden";
+  document.body.appendChild(probe);
+  const rows = VARIANTS.map((t) => {
+    const saved = state.count;
+    const cells = COUNTS.map((n) => {
+      state.count = n;
+      probe.innerHTML = `<div class="tb">${t.render(view(n))}</div>`;
+      const h = contentHeight(probe.querySelector(".w"));
+      return `<td class="v ${band(h)}">${h.toFixed(1)} px</td>`;
+    }).join("");
+    state.count = 4;
+    probe.innerHTML = `<div class="tb">${t.render(view(4))}</div>`;
+    const wide = Math.round(probe.querySelector(".w").getBoundingClientRect().width);
+    state.count = saved;
+    const pick = t.id === "inside";
+    return `<tr class="${pick ? "pick" : ""}"><td class="nm">${t.name}</td>${cells}<td>${t.bar}</td><td>${wide} px</td></tr>`;
+  }).join("");
+  probe.remove();
+  document.getElementById("heights").innerHTML = rows;
+}
+
+function renderAll() {
+  renderBeforeAfter();
+  renderAnatomy();
+  renderCards();
+  annotate();
+  renderHeights();
+}
+
+/* ============================================================
+   Controls
+   ============================================================ */
+function wireSegs(id, key, cast) {
+  document.getElementById(id).addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    state[key] = cast ? cast(b.dataset.v) : b.dataset.v;
+    [...b.parentElement.children].forEach((x) => x.classList.toggle("on", x === b));
+    renderAll();
+  });
+}
+wireSegs("seg-count", "count", Number);
+wireSegs("seg-width", "width", Number);
+wireSegs("seg-tag", "tag");
+wireSegs("seg-scenario", "scenario");
+for (const [id, key] of [["chk-pace", "pace"], ["chk-week", "week"]]) {
+  document.getElementById(id).addEventListener("change", (e) => {
+    state[key] = e.target.checked;
+    renderAll();
+  });
+}
+
+renderAll();
+</script>
+</body>
+</html>

@@ -1,0 +1,950 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Taskbar widget — stacked lines, many accounts</title>
+<style>
+/* ============================================================
+   Tokens, copied from src/styles.css so the mockups read like the app
+   ============================================================ */
+:root {
+  --bg-top: #161b24;
+  --bg-bot: #0c0f15;
+  --card: rgba(255, 255, 255, 0.035);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --text: #e7ebf2;
+  --muted: #8b95a6;
+  --faint: #5c6577;
+  --track: rgba(255, 255, 255, 0.08);
+  --codex: #2dd4bf;
+  --codex-2: #0ea5a3;
+  --claude: #f0a36a;
+  --claude-2: #db7f4d;
+  --credit: #b3a5f0;
+  --danger: #ef6b6b;
+  --ok: #71cdb0;
+  --warn: #dfa05f;
+  --radius: 8px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: #080b10;
+  font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+body { padding: 34px 30px 90px; }
+.sheet { max-width: 1180px; margin: 0 auto; }
+
+h1 { font-size: 25px; font-weight: 700; letter-spacing: 0.2px; }
+.lede { font-size: 13.5px; color: var(--muted); line-height: 1.65; margin-top: 10px; max-width: 78ch; }
+.lede b { color: var(--text); font-weight: 600; }
+.flag {
+  margin-top: 14px; padding: 11px 13px; border-radius: 10px; max-width: 78ch;
+  border: 1px solid rgba(223, 160, 95, 0.28); background: rgba(223, 160, 95, 0.07);
+  font-size: 12.5px; line-height: 1.6; color: var(--muted);
+}
+.flag b { color: var(--warn); font-weight: 700; }
+
+/* ---- The problem, stated in numbers ---- */
+.brief { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 20px; }
+.brief div {
+  border: 1px solid var(--border); border-radius: 10px; padding: 12px 13px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.brief .k { font-size: 9.5px; font-weight: 700; letter-spacing: 1.3px; color: var(--faint); }
+.brief .v { font-size: 12.5px; line-height: 1.55; margin-top: 6px; color: var(--muted); }
+.brief .v b { color: var(--text); font-weight: 600; }
+
+/* ============================================================
+   Controls
+   ============================================================ */
+.controls {
+  position: sticky; top: 0; z-index: 40;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 18px;
+  margin: 22px 0 26px; padding: 12px 14px;
+  border: 1px solid var(--border-strong); border-radius: 12px;
+  background: rgba(12, 15, 21, 0.93);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+}
+.ctl { display: flex; align-items: center; gap: 8px; }
+.ctl > .lbl { font-size: 9.5px; font-weight: 700; letter-spacing: 1.3px; color: var(--faint); }
+.segs { display: flex; gap: 3px; padding: 3px; background: rgba(255, 255, 255, 0.05); border-radius: 999px; }
+.segs button {
+  font: inherit; font-size: 11.5px; font-weight: 600; color: var(--muted);
+  padding: 5px 12px; border: none; border-radius: 999px; background: transparent; cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.segs button:hover { color: var(--text); }
+.segs button.on { color: #fff; background: rgba(255, 255, 255, 0.1); }
+.segs button.on[data-v="tight"] { background: rgba(239, 107, 107, 0.22); }
+.segs button.on[data-v="6"] { background: rgba(223, 160, 95, 0.22); }
+.toggle { display: flex; align-items: center; gap: 7px; font-size: 11.5px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.toggle input { accent-color: var(--codex); width: 14px; height: 14px; cursor: pointer; }
+.toggle:hover { color: var(--text); }
+
+/* ============================================================
+   Simulated desktop + taskbar
+   ============================================================ */
+.situ {
+  position: relative; height: 122px; border-radius: 10px; overflow: hidden;
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(700px 220px at 18% 120%, rgba(45, 212, 191, 0.28), transparent 70%),
+    radial-gradient(560px 200px at 74% 130%, rgba(240, 163, 106, 0.22), transparent 70%),
+    radial-gradient(900px 320px at 50% -40%, rgba(120, 140, 220, 0.16), transparent 70%),
+    linear-gradient(160deg, #1d2740, #101625 60%, #0a0e17);
+}
+/* Interactive concepts open upward, so their desktop needs headroom — enough
+   for the hover panel at 3+3, which is six labelled rails plus two headings. */
+.situ.tall { height: 258px; }
+.situ .wp-hint {
+  position: absolute; left: 14px; top: 12px;
+  font-size: 10px; letter-spacing: 1.2px; font-weight: 700; color: rgba(255, 255, 255, 0.22);
+}
+
+.tb {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: 48px; display: flex; align-items: center; gap: 4px; padding: 0 6px;
+  backdrop-filter: blur(28px) saturate(1.4);
+  background: rgba(32, 32, 32, 0.78);
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  --w-text: #e9edf3;
+  --w-muted: #a4adbb;
+  --w-track: rgba(255, 255, 255, 0.17);
+  --w-hover: rgba(255, 255, 255, 0.08);
+  --w-edge: rgba(255, 255, 255, 0.1);
+}
+.tb.light {
+  background: rgba(243, 243, 243, 0.82);
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  --w-text: #17181a;
+  --w-muted: #55585e;
+  --w-track: rgba(0, 0, 0, 0.16);
+  --w-hover: rgba(0, 0, 0, 0.06);
+  --w-edge: rgba(0, 0, 0, 0.1);
+}
+.tb-btn {
+  width: 40px; height: 36px; border-radius: 6px; flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s;
+}
+.tb-btn:hover { background: var(--w-hover); }
+.tb-btn .app { width: 20px; height: 20px; border-radius: 5px; }
+.tb-search {
+  height: 32px; min-width: 148px; border-radius: 999px; padding: 0 12px; margin-right: 4px;
+  display: flex; align-items: center; gap: 8px;
+  background: var(--w-hover); border: 1px solid var(--w-edge);
+  font-size: 11.5px; color: var(--w-muted);
+}
+.tb-spacer { flex: 1 1 auto; }
+.tb-tray { display: flex; align-items: center; gap: 2px; padding-left: 4px; }
+.tb-tray .gl { width: 26px; height: 32px; display: flex; align-items: center; justify-content: center; color: var(--w-muted); }
+.tb-clock {
+  padding: 0 10px 0 6px; text-align: right; line-height: 1.25;
+  font-size: 11px; color: var(--w-text); font-variant-numeric: tabular-nums;
+}
+.tb-clock .d { font-size: 10.5px; color: var(--w-muted); }
+
+/* ============================================================
+   Shared widget chrome
+   ============================================================ */
+.w {
+  position: relative; height: 32px; flex: 0 0 auto;
+  display: flex; align-items: center; gap: 9px;
+  padding: 0 9px; border-radius: 6px;
+  color: var(--w-text); font-variant-numeric: tabular-nums;
+  transition: background 0.15s;
+}
+.w:hover { background: var(--w-hover); }
+.w b { font-size: 12.5px; font-weight: 650; }
+.w .cd { font-size: 11px; font-weight: 600; color: var(--w-muted); }
+/* The initial is boxed to the rail's height, not its own leading: a text box
+   sets the row height otherwise, and four 8.5 px rows overflow a 32 px button.
+   The glyph overhangs its box by ~1 px, which the row gap absorbs. */
+.w .init {
+  font-size: 7.5px; font-weight: 800; letter-spacing: 0.3px; color: var(--w-muted);
+  width: 9px; height: 5px; line-height: 1; flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: center;
+}
+/* A labelled rail row. Shared by every concept that puts an initial beside one. */
+.lead { display: flex; align-items: center; gap: 5px; line-height: 1; }
+
+/* ---- The rail: the shared vocabulary every concept below extends ---- */
+/* display:block matters: as an inline span, `width` would be ignored anywhere
+   the rail isn't already a flex item. */
+.rail {
+  display: block; position: relative; border-radius: 99px; flex: 0 0 auto;
+  width: var(--rw, 58px); height: var(--rh, 4px);
+  background: var(--w-track);
+}
+.rail > u { position: absolute; inset: 0 auto 0 0; width: calc(var(--p) * 1%); border-radius: 99px; background: var(--c); }
+.rail.hot > u { background: var(--danger); }
+/* Pace: how far through the window the clock is. */
+.rail > i.pace {
+  position: absolute; top: -2px; bottom: -2px; left: calc(var(--t) * 1%);
+  width: 1px; background: var(--w-text); opacity: 0.5;
+}
+.stack { display: flex; flex-direction: column; gap: var(--gap, 5px); }
+/* Providers read as two blocks, so the gap between them beats the gap within. */
+.stack .grp + .grp { margin-top: 4px; }
+.grp { display: flex; flex-direction: column; gap: 3px; }
+
+/* --- 01 one rail per account: nothing beyond the shared stack --- */
+
+/* --- 02 segmented rail. `.seg`, not `.cell`: the stress grid owns `.cell`. --- */
+.segrail { display: flex; gap: 2px; width: 62px; }
+.segrail .seg { position: relative; flex: 1 1 0; height: var(--rh, 5px); border-radius: 2px; background: var(--w-track); overflow: hidden; }
+.segrail .seg u { position: absolute; inset: 0 auto 0 0; width: calc(var(--p) * 1%); background: var(--c); }
+.segrail .seg.hot u { background: var(--danger); }
+
+/* --- 03 worst-of with account ticks --- */
+.rail > s.tick {
+  position: absolute; top: -1.5px; bottom: -1.5px; left: calc(var(--p) * 1%);
+  width: 1.5px; background: var(--c); opacity: 0.85; text-decoration: none; border-radius: 1px;
+}
+.rail > s.tick.hot { background: var(--danger); }
+
+/* --- 04 active first, the rest as ghosts. The ghosts indent with padding
+   rather than an empty initial, so their rows stay 2 px tall. --- */
+.w-active .ghost { opacity: 0.4; margin-left: 14px; }
+
+/* --- 05 carousel --- */
+.w-carousel .pager { display: flex; gap: 3px; margin-left: 2px; }
+.w-carousel .pager s { width: 3px; height: 3px; border-radius: 50%; background: var(--w-track); text-decoration: none; }
+.w-carousel .pager s.on { background: var(--w-muted); }
+.fade { animation: fadein 0.45s ease; }
+@keyframes fadein { from { opacity: 0.25; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+.nomotion .fade { animation: none; }
+
+/* --- 06 hover to expand --- */
+.pop {
+  position: absolute; left: -4px; bottom: 40px; min-width: 186px;
+  border: 1px solid var(--border-strong); border-radius: 10px;
+  background: linear-gradient(180deg, rgba(22, 27, 36, 0.98), rgba(12, 15, 21, 0.99));
+  box-shadow: 0 20px 44px rgba(0, 0, 0, 0.6);
+  padding: 9px 10px; z-index: 5;
+  opacity: 0; transform: translateY(4px); pointer-events: none;
+  transition: opacity 0.14s, transform 0.14s;
+}
+.w-expand:hover .pop, .w-expand.open .pop { opacity: 1; transform: none; pointer-events: auto; }
+.pop .ph {
+  font-size: 8.5px; font-weight: 800; letter-spacing: 1.2px; color: var(--faint);
+  margin-bottom: 7px;
+}
+.pop .prow { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.pop .prow .nm { font-size: 10.5px; color: var(--text); width: 54px; flex: 0 0 auto; }
+.pop .prow .pc { font-size: 10px; color: var(--muted); width: 26px; text-align: right; flex: 0 0 auto; }
+.pop .sep { height: 1px; background: var(--border); margin: 6px 0; }
+.hint { font-size: 10px; color: var(--w-muted); opacity: 0.75; }
+
+/* --- 07 click to cycle --- */
+.w-cycle { cursor: pointer; }
+.w-cycle .chip {
+  font-size: 8.5px; font-weight: 800; letter-spacing: 0.5px;
+  padding: 1px 5px; border-radius: 4px; color: var(--w-text);
+  background: var(--w-hover); border: 1px solid var(--w-edge);
+}
+
+/* --- 08 trail ticks (where it was, 15 min apart) --- */
+.rail > s.trail {
+  position: absolute; top: 0; bottom: 0; left: calc(var(--p) * 1%);
+  width: 1px; background: var(--w-text); text-decoration: none;
+  opacity: var(--o, 0.3);
+}
+
+/* --- 09 time-to-reset ordered rails. Length is minutes, so the width comes in
+   as px from the render function; a percentage here would resolve against a
+   content-sized parent and collapse. --- */
+.w-reset .rrow { display: flex; align-items: center; gap: 6px; line-height: 1; }
+
+/* --- 10 top two plus overflow --- */
+.w-top .more {
+  font-size: 9px; font-weight: 700; color: var(--w-muted);
+  padding: 1px 5px; border-radius: 4px; border: 1px solid var(--w-edge);
+}
+
+/* ============================================================
+   Cards
+   ============================================================ */
+.card {
+  border: 1px solid var(--border-strong); border-radius: 14px;
+  background: linear-gradient(180deg, #14181f, #0d1014);
+  padding: 18px 20px 20px; margin-bottom: 22px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.42);
+}
+.card-hd { display: flex; align-items: baseline; gap: 11px; }
+.card-hd .n { font-size: 10.5px; font-weight: 700; color: var(--faint); letter-spacing: 1px; font-variant-numeric: tabular-nums; }
+.card-hd h3 { font-size: 16.5px; font-weight: 700; }
+.card-hd .tag {
+  margin-left: auto; font-size: 10px; font-weight: 600; color: var(--muted);
+  padding: 3px 9px; border: 1px solid var(--border); border-radius: 999px;
+}
+.card-hd .tag.act { color: var(--codex); border-color: rgba(45, 212, 191, 0.35); }
+.card > .say { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin: 8px 0 15px; max-width: 86ch; }
+.card > .say b { color: var(--text); font-weight: 600; }
+
+.detail { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+.zooms { display: flex; gap: 12px; }
+.zoomwrap { flex: 1 1 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+.zoomwrap .zt { font-size: 9px; font-weight: 700; letter-spacing: 1.2px; color: var(--faint); padding: 7px 10px 6px; border-bottom: 1px solid var(--border); }
+.zoomstage { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; height: 104px; overflow: hidden; }
+.zoomstage.dark { background: #202020; }
+.zoomstage.lite { background: #f3f3f3; }
+.zoomstage .tb { position: static; height: auto; padding: 0; border: none; background: none; backdrop-filter: none; transform: scale(2.2); }
+/* The zoom is a still life: hover popups belong to the live strip above. */
+.zoomstage .pop { display: none; }
+
+.notes { display: flex; flex-direction: column; gap: 8px; justify-content: center; }
+.note { display: flex; gap: 9px; font-size: 12px; line-height: 1.55; color: var(--muted); }
+.note .m { flex: 0 0 auto; width: 15px; font-weight: 700; text-align: center; }
+.note.up .m { color: var(--ok); }
+.note.dn .m { color: var(--warn); }
+.note b { color: var(--text); font-weight: 600; }
+
+/* ============================================================
+   Scaling stress test
+   ============================================================ */
+.stress { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin-top: 14px; }
+.stress-hd, .stress-row { display: flex; align-items: stretch; }
+.stress-hd { border-bottom: 1px solid var(--border); background: rgba(255, 255, 255, 0.02); }
+.stress .nmcol { width: 168px; flex: 0 0 auto; padding: 11px 13px; display: flex; align-items: center; }
+.stress-hd .nmcol, .stress-hd .cell { font-size: 9.5px; font-weight: 700; letter-spacing: 1.2px; color: var(--faint); }
+.stress .cell { flex: 1 1 0; border-left: 1px solid var(--border); padding: 9px 10px; display: flex; align-items: center; justify-content: center; }
+.stress-hd .cell { justify-content: center; padding: 11px 10px; }
+.stress-row { border-top: 1px solid var(--border); }
+.stress-row .nmcol { font-size: 12px; font-weight: 650; color: var(--text); }
+.stress-row .cell { background: #202020; }
+.stress-row .cell .tb { position: static; height: auto; padding: 0; border: none; background: none; backdrop-filter: none; }
+.stress .cell.over { background: #241d1d; }
+/* The grid is about footprint, and the hover panel would be clipped by the
+   grid's own overflow anyway — the live strip above is where you try it. */
+.stress .pop { display: none; }
+
+/* ---- Verdict ---- */
+.verdict { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 12px; }
+.verdict th { text-align: left; font-size: 9.5px; font-weight: 700; letter-spacing: 1.2px; color: var(--faint); padding: 0 10px 9px; border-bottom: 1px solid var(--border); }
+.verdict td { padding: 10px; border-bottom: 1px solid var(--border); color: var(--muted); line-height: 1.5; vertical-align: top; }
+.verdict td.nm { color: var(--text); font-weight: 650; white-space: nowrap; }
+.verdict tr.pick td { background: rgba(45, 212, 191, 0.06); }
+.verdict tr.pick td.nm { color: var(--codex); }
+.cap { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cap.ok { color: var(--ok); }
+.cap.warn { color: var(--warn); }
+
+h2 { font-size: 17px; font-weight: 700; margin-top: 34px; }
+h2 + .say { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin-top: 7px; max-width: 86ch; }
+h2 + .say b { color: var(--text); font-weight: 600; }
+
+/* ---- Combination proposal ---- */
+.combo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 14px; }
+.combo .step { border: 1px solid var(--border); border-radius: 10px; padding: 13px 14px; background: rgba(255, 255, 255, 0.02); }
+.combo .step .k { font-size: 9.5px; font-weight: 700; letter-spacing: 1.2px; color: var(--codex); }
+.combo .step .v { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin-top: 7px; }
+.combo .step .v b { color: var(--text); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<h1>Stacked lines, many accounts</h1>
+<p class="lede">
+  The rail is the vocabulary worth keeping: <b>a track, a fill, a pace mark</b>, read without digits.
+  The question is what happens when there are six of them. Two accounts fit the way two providers did;
+  six do not, so each concept below either <b>folds accounts into one rail</b>, <b>spends time</b>
+  (rotation, trails, reset order), or <b>spends a gesture</b> (hover, click). Every mockup is real
+  markup at real size, and the interactive ones actually work — hover 06, click 07.
+</p>
+
+<div class="flag">
+  <b>One assumption, stated:</b> the app models multiple accounts for Claude only
+  (<code>ClaudeAccountUsage</code>, one per config directory); <code>CodexUsage</code> is a single
+  account today. These mockups assume Codex gains the same shape, because a design that only stacks
+  on one side will not survive it later.
+</div>
+
+<div class="brief">
+  <div>
+    <div class="k">THE PIXEL WALL</div>
+    <div class="v">Six 4&nbsp;px rails plus gaps is <b>~44 px</b> in a 32&nbsp;px button. Four is the honest maximum for one-rail-per-account; past that something has to give.</div>
+  </div>
+  <div>
+    <div class="k">WHAT MOTION COSTS</div>
+    <div class="v">Rotation buys unlimited accounts and spends <b>the ability to glance</b> — the answer is only right one second in four. Turn <b>Motion</b> off to see the still frame.</div>
+  </div>
+  <div>
+    <div class="k">WHAT A GESTURE COSTS</div>
+    <div class="v">Hover and click are free of pixels and free of noise, but they are <b>not a glance</b>. They belong under a face that already works at rest.</div>
+  </div>
+</div>
+
+<div class="controls">
+  <div class="ctl">
+    <span class="lbl">ACCOUNTS</span>
+    <div class="segs" id="seg-count">
+      <button data-v="2">1+1</button>
+      <button data-v="3">1+2</button>
+      <button data-v="4" class="on">2+2</button>
+      <button data-v="6">3+3</button>
+    </div>
+  </div>
+  <div class="ctl">
+    <span class="lbl">LOAD</span>
+    <div class="segs" id="seg-scenario">
+      <button data-v="calm">Calm</button>
+      <button data-v="busy" class="on">Busy</button>
+      <button data-v="tight">Near limit</button>
+    </div>
+  </div>
+  <div class="ctl">
+    <span class="lbl">WINDOW</span>
+    <div class="segs" id="seg-window">
+      <button data-v="w5" class="on">5-hour</button>
+      <button data-v="wk">Weekly</button>
+    </div>
+  </div>
+  <label class="toggle"><input type="checkbox" id="chk-motion" checked /> Motion</label>
+  <label class="toggle"><input type="checkbox" id="chk-pace" checked /> Pace marks</label>
+</div>
+
+<div id="cards"></div>
+
+<h2>Where each one breaks</h2>
+<p class="say">
+  The same concept at <b>1+1, 1+2, 2+2 and 3+3</b>, on the same bar. A red cell is one I would not
+  ship at that count — either it overflows the 32&nbsp;px button or the rails get too thin to
+  separate. This is the whole argument in one grid.
+</p>
+<div class="stress" id="stress"></div>
+
+<h2>Where each one lands</h2>
+<table class="verdict">
+  <thead>
+    <tr>
+      <th style="width: 178px">CONCEPT</th>
+      <th style="width: 96px">HOLDS TO</th>
+      <th style="width: 104px">COSTS</th>
+      <th>THE TRADE</th>
+    </tr>
+  </thead>
+  <tbody id="verdict"></tbody>
+</table>
+
+<h2>What I'd actually build</h2>
+<p class="say">
+  Not one of these — <b>three of them, layered</b>, so the widget answers at every distance without
+  ever moving on its own. Rest is still, hover is complete, click is a deliberate change of subject.
+</p>
+<div class="combo">
+  <div class="step">
+    <div class="k">AT REST — 03 WORST-OF WITH TICKS</div>
+    <div class="v">Two rails, one per provider, fill = <b>the worst account</b>, with a tick per account on the same rail. Constant height at any account count, still reads as the two-rail widget, and the tick spread answers "is this one account or all of them?" without a label.</div>
+  </div>
+  <div class="step">
+    <div class="k">ON HOVER — 06 EXPAND</div>
+    <div class="v">The full list: one labelled rail per account per window, pace marks intact, resets on the right. Nothing is hidden from the person who asks, and asking costs no taskbar pixels.</div>
+  </div>
+  <div class="step">
+    <div class="k">ON CLICK — 07 PIN</div>
+    <div class="v">Click cycles which account the rails follow and <b>pins</b> it, with the initial shown in a chip. For the common case — one account you actually work in — the widget becomes single-account and quiet again.</div>
+  </div>
+  <div class="step">
+    <div class="k">DELIBERATELY NOT — 05 ROTATION</div>
+    <div class="v">It solves the count problem completely and it is the one thing you cannot un-see in the corner of your eye all day. Worth mocking to be sure; not worth shipping. <b>08 trails</b> is the temporal idea I would keep, since it moves only as fast as the usage does.</div>
+  </div>
+</div>
+
+<p class="lede" style="margin-top: 26px">
+  <b>The one open question</b> is what the worst-of rail should do when two accounts are both near
+  the top — the tick marks pile up at the same end and the spread stops reading. 10 (top-two plus
+  <span style="white-space:nowrap">"+2"</span>) is the fallback for that case, which is an argument
+  for making it the overflow behaviour of 03 rather than a separate face.
+</p>
+
+</div>
+
+<script>
+/* ============================================================
+   Accounts. Labels are generic on purpose; the app derives them from the plan
+   plus the config directory name, and the built-in ~/.claude is `active`.
+   ============================================================ */
+const BOOK = {
+  codex: [
+    { short: "W", label: "Work",     p5: 47, pw: 63, pace5: 44, pacew: 58, left5: 167, leftw: 4380, moved: 1,   rate: 7 },
+    { short: "S", label: "Side",     p5: 12, pw: 22, pace5: 61, pacew: 58, left5: 245, leftw: 7600, moved: 96,  rate: 1 },
+    { short: "T", label: "Team",     p5: 71, pw: 44, pace5: 78, pacew: 58, left5: 72,  leftw: 3120, moved: 14,  rate: 5 },
+  ],
+  claude: [
+    { short: "W", label: "Work",     p5: 82, pw: 55, pace5: 46, pacew: 58, left5: 162, leftw: 4380, moved: 3,   rate: 11 },
+    { short: "P", label: "Personal", p5: 24, pw: 38, pace5: 70, pacew: 58, left5: 210, leftw: 5900, moved: 210, rate: 2 },
+    { short: "R", label: "Research", p5: 58, pw: 91, pace5: 33, pacew: 58, left5: 48,  leftw: 1860, moved: 40,  rate: 9 },
+  ],
+};
+/* One dataset, three intensities — the shape of the problem is what changes with
+   account count, not with the numbers. */
+const LOAD = { calm: 0.45, busy: 1, tight: 1.3 };
+
+const state = { count: 4, scenario: "busy", window: "w5", motion: true, pace: true };
+const C = "var(--codex)", K = "var(--claude)";
+const r = (n) => Math.round(n);
+const hot = (p) => p >= 90;
+const clamp = (n) => Math.max(0, Math.min(100, n));
+
+/* How many of each provider's accounts are in play. 1+2 is deliberately lopsided:
+   real setups rarely balance, and a layout that only works symmetrically is a bug. */
+function split() {
+  return { codex: { 2: 1, 3: 1, 4: 2, 6: 3 }[state.count], claude: { 2: 1, 3: 2, 4: 2, 6: 3 }[state.count] };
+}
+function view(count) {
+  const n = count || state.count;
+  const s = { codex: { 2: 1, 3: 1, 4: 2, 6: 3 }[n], claude: { 2: 1, 3: 2, 4: 2, 6: 3 }[n] };
+  const mk = (a, provider) => {
+    const m = LOAD[state.scenario];
+    const pct = clamp((state.window === "w5" ? a.p5 : a.pw) * m);
+    return {
+      ...a, provider,
+      c: provider === "codex" ? C : K,
+      pct,
+      pace: state.window === "w5" ? a.pace5 : a.pacew,
+      left: state.window === "w5" ? a.left5 : a.leftw,
+      rate: a.rate * m,
+    };
+  };
+  return {
+    codex: BOOK.codex.slice(0, s.codex).map((a) => mk(a, "codex")),
+    claude: BOOK.claude.slice(0, s.claude).map((a) => mk(a, "claude")),
+  };
+}
+const flat = (v) => [...v.codex, ...v.claude];
+/* Minutes to a compact taskbar countdown: "2h47m", "3d 1h". */
+function untl(mins) {
+  if (mins >= 1440) return Math.floor(mins / 1440) + "d" + Math.round((mins % 1440) / 60) + "h";
+  return Math.floor(mins / 60) + "h" + String(mins % 60).padStart(2, "0") + "m";
+}
+const worst = (list) => list.reduce((a, b) => (b.pct > a.pct ? b : a), list[0]);
+const soonest = (list) => list.reduce((a, b) => (b.left < a.left ? b : a), list[0]);
+
+/* One rail, the shared primitive. */
+function rail(a, opts = {}) {
+  const h = opts.h || 4, w = opts.w || 58;
+  const extra = opts.extra || "";
+  const pace = state.pace && !opts.nopace ? '<i class="pace"></i>' : "";
+  return `<span class="rail ${hot(a.pct) ? "hot" : ""} ${opts.cls || ""}"
+    style="--p:${r(a.pct)};--c:${a.c};--t:${r(a.pace)};--rh:${h}px;--rw:${w}px;${opts.style || ""}">
+    <u></u>${pace}${extra}</span>`;
+}
+
+/* ============================================================
+   The ten faces
+   ============================================================ */
+const CONCEPTS = [
+  {
+    id: "each",
+    name: "One rail per account",
+    tag: "the baseline to beat",
+    say: "The obvious extension: every account gets its own rail, grouped by provider, thinned to 3&nbsp;px to make room. It is the only concept where <b>nothing is folded, hidden or timed</b> — and it is the one that runs out of pixels first. Worth drawing precisely so the wall is visible rather than assumed.",
+    render(v) {
+      const grp = (list) => `<div class="grp">${list.map((a) => rail(a, { h: state.count >= 6 ? 3 : 4, w: 56 })).join("")}</div>`;
+      return `<div class="w w-each"><div class="stack" style="--gap:3px">${grp(v.codex)}${grp(v.claude)}</div></div>`;
+    },
+    holds: 4,
+    costs: "pixels",
+    trade: "Complete and unambiguous, until the rails are too thin to tell apart.",
+    notes: [
+      ["up", "+", "No decoding, no gesture, no motion. Every account is on screen all the time."],
+      ["dn", "−", "At 3+3 the rails are 3 px with 3 px gaps — a striped smear, and grouping stops reading."],
+    ],
+  },
+  {
+    id: "seg",
+    name: "Segmented rail",
+    tag: "constant height, any count",
+    say: "One rail per provider, cut into <b>one cell per account</b>. Each cell is its own little tank filling left to right. Height never changes — six accounts cost width, not height, and width is the axis a taskbar has to spare.",
+    render(v) {
+      const row = (list) =>
+        `<div class="segrail" style="--rh:5px">` +
+        list.map((a) => `<span class="seg ${hot(a.pct) ? "hot" : ""}" style="--p:${r(a.pct)};--c:${a.c}"><u></u></span>`).join("") +
+        `</div>`;
+      return `<div class="w w-seg2"><div class="stack" style="--gap:6px">${row(v.codex)}${row(v.claude)}</div></div>`;
+    },
+    holds: 6,
+    costs: "resolution",
+    trade: "Scales forever; each account gets a fifth of the resolution it had alone.",
+    notes: [
+      ["up", "+", "The only fold that keeps every account visible and never grows taller."],
+      ["dn", "−", "A 17 px cell can't carry a pace mark, so the widget's best idea gets dropped from the face."],
+    ],
+  },
+  {
+    id: "worst",
+    name: "Worst-of, with ticks",
+    tag: "keeps the two-rail shape",
+    say: "The rail stays one per provider and fills to the <b>account closest to running out</b>. Every other account is a tick on that same rail. You read the fill for danger and the tick spread for cause: bunched at the top means all of them, one tick out front means just that one.",
+    render(v) {
+      const row = (list) => {
+        const w = worst(list);
+        const ticks = list
+          .filter((a) => a !== w)
+          .map((a) => `<s class="tick ${hot(a.pct) ? "hot" : ""}" style="--p:${r(a.pct)};--c:${a.c}"></s>`)
+          .join("");
+        return rail(w, { h: 5, w: 60, extra: ticks });
+      };
+      return `<div class="w w-worst"><div class="stack" style="--gap:6px">${row(v.codex)}${row(v.claude)}</div></div>`;
+    },
+    holds: 6,
+    costs: "identity",
+    trade: "Same silhouette at 2 accounts or 12 — but it never says which account is which.",
+    notes: [
+      ["up", "+", "Identical footprint to the two-rail widget, so nothing about the glance has to be relearned."],
+      ["dn", "−", "Ticks collide when two accounts sit close, and the fill's owner is anonymous until you hover."],
+    ],
+  },
+  {
+    id: "active",
+    name: "Active first, rest as ghosts",
+    tag: "temporal — follows your work",
+    say: "The account whose usage <b>moved most recently</b> gets a full rail and its initial; the others collapse to 2&nbsp;px ghosts underneath. Recency is already knowable — the window-history cache samples every window on every refresh — so the widget can follow you between accounts without asking.",
+    render(v) {
+      const row = (list) => {
+        const lead = list.reduce((a, b) => (b.moved < a.moved ? b : a), list[0]);
+        const rest = list.filter((a) => a !== lead);
+        return `<div class="grp">
+          <div class="lead"><span class="init">${lead.short}</span>${rail(lead, { h: 5, w: 52 })}</div>
+          ${rest.map((a) => rail(a, { h: 2, w: 52, cls: "ghost", nopace: true })).join("")}
+        </div>`;
+      };
+      return `<div class="w w-active"><div class="stack" style="--gap:4px">${row(v.codex)}${row(v.claude)}</div></div>`;
+    },
+    holds: 4,
+    costs: "stability",
+    trade: "Always about the account you're in — and re-ranks itself when you switch.",
+    notes: [
+      ["up", "+", "Answers the question you actually have, because it tracks the account you are spending in."],
+      ["dn", "−", "The layout reorders itself while you are not looking, which is the one thing a glance can't survive."],
+    ],
+  },
+  {
+    id: "carousel",
+    name: "Rotating rails",
+    tag: "temporal — spends seconds",
+    say: "Two rails, one account each, <b>cycling every three and a half seconds</b> with the initial and a pager. It solves the count problem outright: twelve accounts cost exactly as much space as one. It is running right now, which is the point — judge it as a thing on your screen all day, not as a still image.",
+    render(v, ctx) {
+      const pick = (list) => list[(ctx.tick || 0) % list.length];
+      const row = (list) => {
+        const a = pick(list);
+        return `<div class="lead"><span class="init">${a.short}</span>${rail(a, { h: 5, w: 52 })}</div>`;
+      };
+      const maxLen = Math.max(v.codex.length, v.claude.length);
+      const pager = Array.from({ length: maxLen }, (_, i) => `<s class="${i === (ctx.tick || 0) % maxLen ? "on" : ""}"></s>`).join("");
+      return `<div class="w w-carousel" data-live="carousel">
+        <div class="stack fade" style="--gap:5px">${row(v.codex)}${row(v.claude)}</div>
+        <div class="pager">${pager}</div>
+      </div>`;
+    },
+    holds: 6,
+    costs: "the glance",
+    trade: "Unlimited accounts, and the answer is only on screen a quarter of the time.",
+    notes: [
+      ["up", "+", "Constant size for any number of accounts, with the label space to name every one of them."],
+      ["dn", "−", "Motion in the corner of the eye all day, and a glance can land on the wrong account."],
+    ],
+  },
+  {
+    id: "expand",
+    name: "Hover to expand",
+    tag: "interactive — hover me",
+    say: "At rest it is the worst-of pair. On hover the button <b>grows a panel with one labelled rail per account</b>, pace marks intact, resets on the right. This is the weather widget's own bargain: a glanceable face, and the whole truth for the price of pointing at it. Hover the widget in the strip below.",
+    render(v) {
+      const row = (list) => rail(worst(list), { h: 5, w: 60 });
+      const prow = (a) => `<div class="prow">
+          <span class="nm">${a.label}</span>
+          ${rail(a, { h: 4, w: 62 })}
+          <span class="pc">${r(a.pct)}%</span>
+          <span class="pc" style="width:38px">${untl(a.left)}</span>
+        </div>`;
+      return `<div class="w w-expand">
+        <div class="stack" style="--gap:6px">${row(v.codex)}${row(v.claude)}</div>
+        <div class="pop">
+          <div class="ph">CODEX</div>${v.codex.map(prow).join("")}
+          <div class="sep"></div>
+          <div class="ph">CLAUDE</div>${v.claude.map(prow).join("")}
+        </div>
+      </div>`;
+    },
+    holds: 6,
+    costs: "a gesture",
+    trade: "Nothing is lost and nothing is shown — until you ask for it.",
+    notes: [
+      ["up", "+", "Detail is unbounded: twelve accounts is a taller panel, not a worse widget."],
+      ["dn", "−", "Everything past the two rails needs a deliberate act, and hover doesn't exist on touch."],
+    ],
+  },
+  {
+    id: "cycle",
+    name: "Click to pin an account",
+    tag: "interactive — click me",
+    say: "Click the widget and the rails <b>switch to the next account pair and stay there</b>, initial shown in a chip. For the common case — several accounts configured, one you actually work in — this turns a crowded widget back into the quiet two-rail one. Click it in the strip below; it really cycles.",
+    render(v, ctx) {
+      const i = ctx.pin || 0;
+      const pick = (list) => list[i % list.length];
+      const row = (list) => {
+        const a = pick(list);
+        return `<div class="lead"><span class="init">${a.short}</span>${rail(a, { h: 5, w: 52 })}</div>`;
+      };
+      const cx = pick(v.codex), cl = pick(v.claude);
+      const label = cx.label === cl.label ? cx.label : `${cx.short}/${cl.short}`;
+      return `<div class="w w-cycle" data-act="cycle" title="click to pin the next account">
+        <div class="stack" style="--gap:5px">${row(v.codex)}${row(v.claude)}</div>
+        <span class="chip">${label.toUpperCase()}</span>
+      </div>`;
+    },
+    holds: 6,
+    costs: "a decision",
+    trade: "Makes the widget single-account on purpose, and forgets the accounts you pinned away.",
+    notes: [
+      ["up", "+", "Constant size, full resolution, real labels — the pinned account gets the whole widget."],
+      ["dn", "−", "A pinned account can go quiet while an unpinned one hits its limit unseen."],
+    ],
+  },
+  {
+    id: "trail",
+    name: "Trailing marks",
+    tag: "temporal — but motionless",
+    say: "Keep the worst-of pair and add <b>four faint marks behind the fill</b>, where that rail stood 15, 30, 45 and 60 minutes ago. Bunched marks mean a quiet hour; a long tail means you are burning. The temporal idea from rotation without any of the movement — the marks only shift as fast as the usage does.",
+    render(v) {
+      const row = (list) => {
+        const w = worst(list);
+        const marks = [1, 2, 3, 4]
+          .map((k) => {
+            const p = clamp(w.pct - w.rate * k);
+            return `<s class="trail" style="--p:${r(p)};--o:${(0.42 - k * 0.07).toFixed(2)}"></s>`;
+          })
+          .join("");
+        return rail(w, { h: 6, w: 62, extra: marks });
+      };
+      return `<div class="w w-trail"><div class="stack" style="--gap:6px">${row(v.codex)}${row(v.claude)}</div></div>`;
+    },
+    holds: 6,
+    costs: "clarity",
+    trade: "Adds rate to the rail for free, at the cost of a busier bar.",
+    notes: [
+      ["up", "+", "Shows burn rate without a chart, without motion, and without a second row."],
+      ["dn", "−", "Four extra marks per rail is visual noise for a reading most glances don't need."],
+    ],
+  },
+  {
+    id: "reset",
+    name: "Rails as countdowns",
+    tag: "temporal — length is time",
+    say: "A different axis: the rail's <b>length is the time left in its window</b> and the fill is what's spent, one rail per account, sorted soonest-first. A short rail is about to reset; a long full one is a problem you own all week. Answers \"which of these frees up first\" — a question the level alone can never answer.",
+    render(v) {
+      const all = flat(v).sort((a, b) => a.left - b.left);
+      const max = Math.max(...all.map((a) => a.left));
+      const shown = all.slice(0, state.count >= 6 ? 4 : all.length);
+      const FULL = 62; // px the longest countdown gets
+      return `<div class="w w-reset"><div class="stack" style="--gap:3px">
+        ${shown
+          .map(
+            (a) =>
+              `<div class="rrow"><span class="init">${a.short}</span>` +
+              rail(a, { h: state.count >= 6 ? 3 : 4, w: Math.max(8, r((a.left / max) * FULL)), nopace: true }) +
+              `</div>`
+          )
+          .join("")}
+      </div>${state.count >= 6 ? '<span class="cd" style="font-size:9px">+2</span>' : ""}</div>`;
+    },
+    holds: 6,
+    costs: "coverage",
+    trade: "Ranks by when you get your allowance back — and past four accounts it stops drawing the rest.",
+    notes: [
+      ["up", "+", "Sorted by urgency in time, not in percent — usually the more actionable order."],
+      ["dn", "−", "Rails of unequal length make fills hard to compare, and past four rows it truncates to a \"+2\"."],
+    ],
+  },
+  {
+    id: "top",
+    name: "Top two, plus a count",
+    tag: "constant size, always",
+    say: "Draw only the <b>two tightest accounts anywhere</b> — provider colour says which side they came from — and put the rest behind a <span style=\"white-space:nowrap\">\"+2\"</span> chip. Fixed size, full resolution, no motion, no gesture. The bet is that the two accounts nearest their limit are the only two worth taskbar space.",
+    render(v) {
+      const all = flat(v).sort((a, b) => b.pct - a.pct);
+      const top = all.slice(0, 2);
+      const rest = all.length - top.length;
+      return `<div class="w w-top">
+        <div class="stack" style="--gap:5px">
+          ${top.map((a) => `<div class="lead"><span class="init">${a.short}</span>${rail(a, { h: 5, w: 54 })}</div>`).join("")}
+        </div>
+        ${rest > 0 ? `<span class="more">+${rest}</span>` : ""}
+      </div>`;
+    },
+    holds: 6,
+    costs: "coverage",
+    trade: "Never grows, never moves — and quietly stops mentioning most of your accounts.",
+    notes: [
+      ["up", "+", "Identical at 2 accounts and 12, and what it does show is at full resolution with a label."],
+      ["dn", "−", "An account only appears once it's already in trouble, so you lose the early warning."],
+    ],
+  },
+];
+
+/* ============================================================
+   Taskbar chrome
+   ============================================================ */
+const START = `<svg width="18" height="18" viewBox="0 0 18 18"><g fill="currentColor"><rect x="1" y="1" width="7" height="7" rx="1"/><rect x="10" y="1" width="7" height="7" rx="1"/><rect x="1" y="10" width="7" height="7" rx="1"/><rect x="10" y="10" width="7" height="7" rx="1"/></g></svg>`;
+const GL_WIFI = `<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.5 5.5a10 10 0 0 1 13 0M4 8.4a6.3 6.3 0 0 1 8 0M6.4 11.2a2.6 2.6 0 0 1 3.2 0"/><circle cx="8" cy="13.4" r="0.8" fill="currentColor" stroke="none"/></svg>`;
+const GL_VOL = `<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3 6h2.5L9 3v10L5.5 10H3z" stroke-linejoin="round"/><path d="M11.2 5.8a3.2 3.2 0 0 1 0 4.4"/></svg>`;
+const GL_BAT = `<svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="6" width="12" height="6" rx="1.5"/><path d="M15 8.4v1.2" stroke-linecap="round"/><rect x="3.4" y="7.4" width="7" height="3.2" rx="0.6" fill="currentColor" stroke="none"/></svg>`;
+const GL_UP = `<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 7.5 6 4l3.5 3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const SEARCH = `<svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="6" cy="6" r="4.2"/><path d="M9.2 9.2 12.5 12.5" stroke-linecap="round"/></svg>`;
+const APPS = ["#4f7fd8", "#6ec3a8", "#d97b6c", "#9b8bd6"];
+
+function taskbar(widget, opts = {}) {
+  const cls = "tb" + (opts.theme === "light" ? " light" : "");
+  const apps = APPS.map((c) => `<div class="tb-btn"><div class="app" style="background:${c}"></div></div>`).join("");
+  return `<div class="${cls}">
+    <div class="tb-btn">${START}</div>
+    <div class="tb-search">${SEARCH}<span>Search</span></div>
+    ${apps}
+    <div class="tb-spacer"></div>
+    ${widget}
+    <div class="tb-tray">
+      <div class="gl">${GL_UP}</div><div class="gl">${GL_WIFI}</div><div class="gl">${GL_VOL}</div><div class="gl">${GL_BAT}</div>
+      <div class="tb-clock"><div>1:41 PM</div><div class="d">8/4/2026</div></div>
+    </div>
+  </div>`;
+}
+
+/* ============================================================
+   Render
+   ============================================================ */
+/* Per-concept UI state that must survive a re-render: the carousel's frame and
+   the pinned account index. Keyed by concept id. */
+const ctx = {};
+CONCEPTS.forEach((c) => (ctx[c.id] = { tick: 0, pin: 0 }));
+
+function renderCards() {
+  const v = view();
+  document.getElementById("cards").innerHTML = CONCEPTS.map((c, i) => {
+    const n = String(i + 1).padStart(2, "0");
+    const interactive = c.id === "expand" || c.id === "cycle";
+    const notes = c.notes.map(([k, m, t]) => `<div class="note ${k}"><span class="m">${m}</span><span>${t}</span></div>`).join("");
+    return `<article class="card" data-concept="${c.id}">
+      <div class="card-hd"><span class="n">${n}</span><h3>${c.name}</h3>
+        <span class="tag ${interactive || c.id === "carousel" ? "act" : ""}">${c.tag}</span></div>
+      <p class="say">${c.say}</p>
+      <div class="situ ${interactive ? "tall" : ""}">
+        <div class="wp-hint">IN PLACE — ACTUAL SIZE${interactive ? " — TRY IT" : ""}</div>
+        ${taskbar(c.render(v, ctx[c.id]))}
+      </div>
+      <div class="detail">
+        <div class="zooms">
+          <div class="zoomwrap"><div class="zt">DARK · 2.2×</div><div class="zoomstage dark"><div class="tb">${c.render(v, ctx[c.id])}</div></div></div>
+          <div class="zoomwrap"><div class="zt">LIGHT · 2.2×</div><div class="zoomstage lite"><div class="tb light">${c.render(v, ctx[c.id])}</div></div></div>
+        </div>
+        <div class="notes">${notes}</div>
+      </div>
+    </article>`;
+  }).join("");
+}
+
+/* The stress grid re-resolves accounts per column, so each cell is that concept
+   at that count rather than a scaled copy of the current one. */
+const COUNTS = [2, 3, 4, 6];
+function renderStress() {
+  const head =
+    `<div class="stress-hd"><div class="nmcol">CONCEPT</div>` +
+    COUNTS.map((n) => `<div class="cell">${{ 2: "1+1", 3: "1+2", 4: "2+2", 6: "3+3" }[n]}</div>`).join("") +
+    `</div>`;
+  const rows = CONCEPTS.map((c) => {
+    const cells = COUNTS.map((n) => {
+      const over = n > c.holds;
+      const saved = state.count;
+      state.count = n; // the render functions thin their rails by count
+      const html = `<div class="cell ${over ? "over" : ""}"><div class="tb">${c.render(view(n), ctx[c.id])}</div></div>`;
+      state.count = saved;
+      return html;
+    }).join("");
+    return `<div class="stress-row"><div class="nmcol">${c.name}</div>${cells}</div>`;
+  }).join("");
+  document.getElementById("stress").innerHTML = head + rows;
+}
+
+function renderVerdict() {
+  document.getElementById("verdict").innerHTML = CONCEPTS.map((c, i) => {
+    const pick = c.id === "worst" || c.id === "expand" || c.id === "cycle";
+    const capCls = c.holds >= 6 ? "ok" : "warn";
+    return `<tr class="${pick ? "pick" : ""}">
+      <td class="nm">${String(i + 1).padStart(2, "0")} ${c.name}</td>
+      <td class="cap ${capCls}">${c.holds >= 6 ? "any count" : c.holds + " accounts"}</td>
+      <td>${c.costs}</td>
+      <td>${c.trade}</td>
+    </tr>`;
+  }).join("");
+}
+
+function renderAll() {
+  renderCards();
+  renderStress();
+  renderVerdict();
+}
+
+/* ============================================================
+   Controls, rotation, click-to-pin
+   ============================================================ */
+function wireSegs(id, key, cast) {
+  document.getElementById(id).addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    state[key] = cast ? cast(b.dataset.v) : b.dataset.v;
+    [...b.parentElement.children].forEach((x) => x.classList.toggle("on", x === b));
+    renderAll();
+  });
+}
+wireSegs("seg-count", "count", Number);
+wireSegs("seg-scenario", "scenario");
+wireSegs("seg-window", "window");
+document.getElementById("chk-pace").addEventListener("change", (e) => { state.pace = e.target.checked; renderAll(); });
+document.getElementById("chk-motion").addEventListener("change", (e) => {
+  state.motion = e.target.checked;
+  document.body.classList.toggle("nomotion", !state.motion);
+});
+
+/* Pinning has to survive the re-render, which is why ctx lives outside it. */
+document.addEventListener("click", (e) => {
+  const t = e.target.closest('[data-act="cycle"]');
+  if (!t) return;
+  const card = t.closest("[data-concept]");
+  const id = card ? card.dataset.concept : "cycle";
+  ctx[id].pin = (ctx[id].pin || 0) + 1;
+  renderAll();
+});
+
+/* Only the carousel's own hosts are redrawn on tick — a full re-render every
+   3.5 s would cancel any hover the reader is in the middle of. */
+setInterval(() => {
+  if (!state.motion) return;
+  ctx.carousel.tick = (ctx.carousel.tick || 0) + 1;
+  const c = CONCEPTS.find((x) => x.id === "carousel");
+  const v = view();
+  document.querySelectorAll('[data-live="carousel"]').forEach((node) => {
+    node.outerHTML = c.render(v, ctx.carousel);
+  });
+  // The stress row for the carousel shares the same tick, so refresh it too.
+  const row = [...document.querySelectorAll(".stress-row")].find((x) => x.querySelector(".nmcol").textContent === c.name);
+  if (row) {
+    row.querySelectorAll(".cell").forEach((cell, i) => {
+      const saved = state.count;
+      state.count = COUNTS[i];
+      cell.querySelector(".tb").innerHTML = c.render(view(COUNTS[i]), ctx.carousel);
+      state.count = saved;
+    });
+  }
+}, 3500);
+
+renderAll();
+</script>
+</body>
+</html>

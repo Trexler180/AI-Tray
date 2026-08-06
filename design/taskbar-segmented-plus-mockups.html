@@ -1,0 +1,690 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Taskbar widget — segmented rail, with pace marks, labels and weekly</title>
+<style>
+/* ============================================================
+   Tokens, copied from src/styles.css so the mockups read like the app
+   ============================================================ */
+:root {
+  --bg-top: #161b24;
+  --bg-bot: #0c0f15;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --text: #e7ebf2;
+  --muted: #8b95a6;
+  --faint: #5c6577;
+  --track: rgba(255, 255, 255, 0.08);
+  --codex: #2dd4bf;
+  --claude: #f0a36a;
+  --credit: #b3a5f0;
+  --danger: #ef6b6b;
+  --ok: #71cdb0;
+  --warn: #dfa05f;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: #080b10;
+  font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+body { padding: 34px 30px 90px; }
+.sheet { max-width: 1180px; margin: 0 auto; }
+
+h1 { font-size: 25px; font-weight: 700; letter-spacing: 0.2px; }
+h2 { font-size: 17px; font-weight: 700; margin-top: 36px; }
+.lede { font-size: 13.5px; color: var(--muted); line-height: 1.65; margin-top: 10px; max-width: 78ch; }
+.lede b { color: var(--text); font-weight: 600; }
+h2 + .say { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin-top: 7px; max-width: 86ch; }
+h2 + .say b { color: var(--text); font-weight: 600; }
+
+.budget {
+  margin-top: 16px; padding: 12px 14px; border-radius: 10px; max-width: 78ch;
+  border: 1px solid rgba(45, 212, 191, 0.24); background: rgba(45, 212, 191, 0.06);
+  font-size: 12.5px; line-height: 1.65; color: var(--muted);
+}
+.budget b { color: var(--codex); font-weight: 700; }
+.budget code { font-size: 11.5px; color: var(--text); }
+
+/* ============================================================
+   Controls
+   ============================================================ */
+.controls {
+  position: sticky; top: 0; z-index: 40;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 18px;
+  margin: 22px 0 26px; padding: 12px 14px;
+  border: 1px solid var(--border-strong); border-radius: 12px;
+  background: rgba(12, 15, 21, 0.93); backdrop-filter: blur(14px);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+}
+.ctl { display: flex; align-items: center; gap: 8px; }
+.ctl > .lbl { font-size: 9.5px; font-weight: 700; letter-spacing: 1.3px; color: var(--faint); }
+.segs { display: flex; gap: 3px; padding: 3px; background: rgba(255, 255, 255, 0.05); border-radius: 999px; }
+.segs button {
+  font: inherit; font-size: 11.5px; font-weight: 600; color: var(--muted);
+  padding: 5px 12px; border: none; border-radius: 999px; background: transparent; cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.segs button:hover { color: var(--text); }
+.segs button.on { color: #fff; background: rgba(255, 255, 255, 0.1); }
+.segs button.on[data-v="tight"] { background: rgba(239, 107, 107, 0.22); }
+.segs button.on[data-v="6"] { background: rgba(223, 160, 95, 0.22); }
+.toggle { display: flex; align-items: center; gap: 7px; font-size: 11.5px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.toggle input { accent-color: var(--codex); width: 14px; height: 14px; cursor: pointer; }
+.toggle:hover { color: var(--text); }
+
+/* ============================================================
+   Desktop + taskbar
+   ============================================================ */
+.situ {
+  position: relative; height: 122px; border-radius: 10px; overflow: hidden;
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(700px 220px at 18% 120%, rgba(45, 212, 191, 0.28), transparent 70%),
+    radial-gradient(560px 200px at 74% 130%, rgba(240, 163, 106, 0.22), transparent 70%),
+    radial-gradient(900px 320px at 50% -40%, rgba(120, 140, 220, 0.16), transparent 70%),
+    linear-gradient(160deg, #1d2740, #101625 60%, #0a0e17);
+}
+.situ .wp-hint {
+  position: absolute; left: 14px; top: 12px;
+  font-size: 10px; letter-spacing: 1.2px; font-weight: 700; color: rgba(255, 255, 255, 0.22);
+}
+.tb {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: 48px; display: flex; align-items: center; gap: 4px; padding: 0 6px;
+  backdrop-filter: blur(28px) saturate(1.4);
+  background: rgba(32, 32, 32, 0.78);
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  --w-text: #e9edf3;
+  --w-muted: #a4adbb;
+  --w-track: rgba(255, 255, 255, 0.17);
+  --w-hover: rgba(255, 255, 255, 0.08);
+  --w-edge: rgba(255, 255, 255, 0.1);
+}
+.tb.light {
+  background: rgba(243, 243, 243, 0.82);
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  --w-text: #17181a;
+  --w-muted: #55585e;
+  --w-track: rgba(0, 0, 0, 0.16);
+  --w-hover: rgba(0, 0, 0, 0.06);
+  --w-edge: rgba(0, 0, 0, 0.1);
+}
+.tb-btn { width: 40px; height: 36px; border-radius: 6px; flex: 0 0 auto; display: flex; align-items: center; justify-content: center; transition: background 0.15s; }
+.tb-btn:hover { background: var(--w-hover); }
+.tb-btn .app { width: 20px; height: 20px; border-radius: 5px; }
+.tb-search {
+  height: 32px; min-width: 148px; border-radius: 999px; padding: 0 12px; margin-right: 4px;
+  display: flex; align-items: center; gap: 8px;
+  background: var(--w-hover); border: 1px solid var(--w-edge);
+  font-size: 11.5px; color: var(--w-muted);
+}
+.tb-spacer { flex: 1 1 auto; }
+.tb-tray { display: flex; align-items: center; gap: 2px; padding-left: 4px; }
+.tb-tray .gl { width: 26px; height: 32px; display: flex; align-items: center; justify-content: center; color: var(--w-muted); }
+.tb-clock { padding: 0 10px 0 6px; text-align: right; line-height: 1.25; font-size: 11px; color: var(--w-text); font-variant-numeric: tabular-nums; }
+.tb-clock .d { font-size: 10.5px; color: var(--w-muted); }
+
+/* ============================================================
+   The variant's parts
+   ============================================================ */
+.w {
+  position: relative; height: 32px; flex: 0 0 auto;
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 9px; border-radius: 6px;
+  color: var(--w-text); font-variant-numeric: tabular-nums;
+  transition: background 0.15s;
+}
+.w:hover { background: var(--w-hover); }
+
+/* A block is one provider: its label row, its 5-hour rail, its weekly rail. */
+.block { display: flex; flex-direction: column; gap: var(--vgap, 1px); }
+.block + .block { margin-top: var(--bgap, 3px); }
+/* .w is a row, so stacked providers need their own column wrapper — without it
+   the blocks sit side by side and every treatment measures the same. */
+.stack { display: flex; flex-direction: column; }
+
+/* Label row and rails share the same flex geometry, so a label always sits
+   over its own cell no matter how many accounts there are. */
+.row { display: flex; gap: var(--cgap, 2px); width: var(--rw, 62px); }
+.row > * { flex: 1 1 0; min-width: 0; }
+
+.lblrow span {
+  font-size: 6.5px; font-weight: 800; letter-spacing: 0.2px; line-height: 1;
+  color: var(--w-muted); text-align: center;
+  overflow: hidden; text-overflow: clip; white-space: nowrap;
+}
+.lblrow.big span { font-size: 7.5px; }
+
+.cell {
+  position: relative; height: var(--ch, 4px); border-radius: 2px;
+  background: var(--w-track); overflow: hidden;
+}
+.cell > u { position: absolute; inset: 0 auto 0 0; width: calc(var(--p) * 1%); background: var(--c); }
+.cell.hot > u { background: var(--danger); }
+/* The pace mark, kept from the one-rail-per-account face: how far through the
+   window the clock is. Inside a cell it has to be 1 px and full height. */
+.cell > i {
+  position: absolute; top: 0; bottom: 0; left: calc(var(--t) * 1%);
+  width: 1px; background: var(--w-text); opacity: 0.62;
+}
+/* The weekly rail reads as secondary: thinner, dimmer, no pace mark. */
+.wk .cell { height: var(--wh, 2px); border-radius: 1px; opacity: 0.62; }
+/* Underline treatment: the weekly bar tucks under its own cell with no gap. */
+.block.tucked { --vgap: 0px; }
+.block.tucked .wk { margin-top: 1px; }
+
+/* Side-by-side treatment: providers become columns. */
+.w.side { align-items: flex-start; }
+.w.side .cols { display: flex; gap: 10px; align-items: flex-start; }
+.w.side .block + .block { margin-top: 0; }
+
+/* ============================================================
+   Anatomy
+   ============================================================ */
+.anatomy { display: grid; grid-template-columns: 1fr 340px; gap: 22px; align-items: center; margin-top: 16px; }
+.anatomy .stage {
+  border: 1px solid var(--border); border-radius: 12px; background: #202020;
+  height: 240px; display: flex; align-items: center; justify-content: center; overflow: hidden;
+}
+.anatomy .stage .tb { position: static; height: auto; padding: 0; border: none; background: none; backdrop-filter: none; transform: scale(5.2); }
+.legend { display: flex; flex-direction: column; gap: 11px; }
+.legend .li { display: flex; gap: 11px; align-items: flex-start; }
+.legend .sw { width: 26px; flex: 0 0 auto; margin-top: 3px; display: flex; align-items: center; justify-content: center; }
+.legend .sw .bar { width: 24px; height: 5px; border-radius: 2px; background: var(--track); position: relative; overflow: hidden; }
+.legend .sw .bar u { position: absolute; inset: 0 auto 0 0; width: 60%; background: var(--codex); }
+.legend .sw .bar i { position: absolute; top: 0; bottom: 0; left: 45%; width: 1px; background: #fff; opacity: 0.7; }
+.legend .sw .bar.thin { height: 2.5px; opacity: 0.62; }
+.legend .sw .bar.thin u { background: var(--claude); }
+.legend .sw .tx { font-size: 8px; font-weight: 800; color: var(--muted); }
+.legend .nm { font-size: 12.5px; font-weight: 650; color: var(--text); }
+.legend .ds { font-size: 12px; color: var(--muted); line-height: 1.55; margin-top: 3px; }
+
+/* ============================================================
+   Treatment cards
+   ============================================================ */
+.card {
+  border: 1px solid var(--border-strong); border-radius: 14px;
+  background: linear-gradient(180deg, #14181f, #0d1014);
+  padding: 18px 20px 20px; margin-bottom: 22px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.42);
+}
+.card-hd { display: flex; align-items: baseline; gap: 11px; }
+.card-hd .n { font-size: 10.5px; font-weight: 700; color: var(--faint); letter-spacing: 1px; font-variant-numeric: tabular-nums; }
+.card-hd h3 { font-size: 16.5px; font-weight: 700; }
+/* Filled in from the DOM after render — the fit claim is measured, not asserted. */
+.card-hd .fit {
+  margin-left: auto; font-size: 10.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+  padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted);
+}
+.card-hd .fit.ok { color: var(--ok); border-color: rgba(113, 205, 176, 0.35); background: rgba(113, 205, 176, 0.08); }
+.card-hd .fit.tight { color: var(--warn); border-color: rgba(223, 160, 95, 0.38); background: rgba(223, 160, 95, 0.08); }
+.card-hd .fit.over { color: var(--danger); border-color: rgba(239, 107, 107, 0.4); background: rgba(239, 107, 107, 0.1); }
+.card > .say { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin: 8px 0 15px; max-width: 86ch; }
+.card > .say b { color: var(--text); font-weight: 600; }
+
+.detail { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+.zooms { display: flex; gap: 12px; }
+.zoomwrap { flex: 1 1 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+.zoomwrap .zt { font-size: 9px; font-weight: 700; letter-spacing: 1.2px; color: var(--faint); padding: 7px 10px 6px; border-bottom: 1px solid var(--border); }
+.zoomstage { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; height: 116px; overflow: hidden; }
+.zoomstage.dark { background: #202020; }
+.zoomstage.lite { background: #f3f3f3; }
+.zoomstage .tb { position: static; height: auto; padding: 0; border: none; background: none; backdrop-filter: none; transform: scale(2.8); }
+.notes { display: flex; flex-direction: column; gap: 8px; justify-content: center; }
+.note { display: flex; gap: 9px; font-size: 12px; line-height: 1.55; color: var(--muted); }
+.note .m { flex: 0 0 auto; width: 15px; font-weight: 700; text-align: center; }
+.note.up .m { color: var(--ok); }
+.note.dn .m { color: var(--warn); }
+.note b { color: var(--text); font-weight: 600; }
+
+/* ============================================================
+   Measured height table
+   ============================================================ */
+.heights { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 12px; }
+.heights th { text-align: left; font-size: 9.5px; font-weight: 700; letter-spacing: 1.2px; color: var(--faint); padding: 0 10px 9px; border-bottom: 1px solid var(--border); }
+.heights td { padding: 9px 10px; border-bottom: 1px solid var(--border); color: var(--muted); font-variant-numeric: tabular-nums; }
+.heights td.nm { color: var(--text); font-weight: 650; white-space: nowrap; }
+.heights td.v.ok { color: var(--ok); }
+.heights td.v.tight { color: var(--warn); }
+.heights td.v.over { color: var(--danger); font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<h1>Segmented rail, with the pace marks, labels and a weekly bar</h1>
+<p class="lede">
+  Four things at once: the <b>segmented rail</b> (one cell per account), the
+  <b>pace mark</b> the one-rail-per-account face had, <b>text labels</b> over the cells, and a
+  <b>thinner weekly bar</b> under each provider's 5-hour row. That is five stacked elements per
+  provider inside a 32&nbsp;px button, so the real question is not whether it looks good — it does
+  — but whether it fits. Every card below prints its own measured height, taken from the DOM after
+  render, so the verdict is arithmetic rather than opinion.
+</p>
+
+<div class="budget">
+  <b>The arithmetic, as measured:</b> label row <code>7.5px</code> (account names) or
+  <code>6.5px</code> (initials) + 5-hour rail <code>4px</code> + weekly rail <code>2px</code> +
+  two inner gaps <code>2px</code> = <code>15.5px</code> per provider. Two providers plus the gap
+  between them is <code>34px</code> — <b>two pixels over</b> a 32&nbsp;px button. The label row is
+  what breaks it: cut those two rows to initials and tuck the weekly bar flush, and the same four
+  elements land at <code>31px</code>. Treatments 03–05 are the three ways to pay for it.
+</div>
+
+<div class="controls">
+  <div class="ctl">
+    <span class="lbl">ACCOUNTS</span>
+    <div class="segs" id="seg-count">
+      <button data-v="2">1+1</button>
+      <button data-v="4" class="on">2+2</button>
+      <button data-v="6">3+3</button>
+    </div>
+  </div>
+  <div class="ctl">
+    <span class="lbl">WIDTH</span>
+    <div class="segs" id="seg-width">
+      <button data-v="62" class="on">Compact 62px</button>
+      <button data-v="92">Roomy 92px</button>
+    </div>
+  </div>
+  <div class="ctl">
+    <span class="lbl">NAMES</span>
+    <div class="segs" id="seg-names">
+      <button data-v="differ" class="on">Differ</button>
+      <button data-v="match">Match</button>
+    </div>
+  </div>
+  <div class="ctl">
+    <span class="lbl">LOAD</span>
+    <div class="segs" id="seg-scenario">
+      <button data-v="calm">Calm</button>
+      <button data-v="busy" class="on">Busy</button>
+      <button data-v="tight">Near limit</button>
+    </div>
+  </div>
+  <label class="toggle"><input type="checkbox" id="chk-pace" checked /> Pace marks</label>
+  <label class="toggle"><input type="checkbox" id="chk-week" checked /> Weekly bar</label>
+  <label class="toggle"><input type="checkbox" id="chk-labels" checked /> Labels</label>
+</div>
+
+<h2>Anatomy</h2>
+<p class="say">
+  One provider block at <b>5.2×</b>, so the parts are separable. At real size this whole block is
+  14&nbsp;px tall — the height of this sentence's lowercase letters.
+</p>
+<div class="anatomy">
+  <div class="stage" id="anatomy-stage"></div>
+  <div class="legend">
+    <div class="li">
+      <div class="sw"><span class="tx">W&nbsp;S</span></div>
+      <div><div class="nm">Label row</div><div class="ds">One per cell, centred on it. Short account names when the cells are wide enough to hold them, initials when they aren't — the widget picks per render.</div></div>
+    </div>
+    <div class="li">
+      <div class="sw"><span class="bar"><u></u></span></div>
+      <div><div class="nm">5-hour cell</div><div class="ds">One account's session window. Fill is what's spent; the cell is its own track, so accounts never share a scale.</div></div>
+    </div>
+    <div class="li">
+      <div class="sw"><span class="bar"><i></i></span></div>
+      <div><div class="nm">Pace mark</div><div class="ds">How far through the window the clock is. Fill behind the mark means you're inside your pace; past it means you'll run out early.</div></div>
+    </div>
+    <div class="li">
+      <div class="sw"><span class="bar thin"><u></u></span></div>
+      <div><div class="nm">Weekly bar</div><div class="ds">The same accounts, same order, half the height and dimmed — present for the glance, never competing with the session row.</div></div>
+    </div>
+  </div>
+</div>
+
+<h2>Treatments</h2>
+<p class="say">
+  The same four elements, arranged five ways. <b>01 is the literal request</b>; the rest are what I
+  reach for when the measured height comes back too close to the ceiling.
+</p>
+<div id="cards"></div>
+
+<h2>Measured heights</h2>
+<p class="say">
+  Taken from the rendered DOM at each account count, not calculated by hand. <b>Over 32&nbsp;px</b>
+  overflows the button; 29–32 is the tight band where it fits but has no breathing room against the
+  taskbar's own padding.
+</p>
+<table class="heights">
+  <thead><tr><th style="width: 230px">TREATMENT</th><th style="width: 110px">1+1</th><th style="width: 110px">2+2</th><th style="width: 110px">3+3</th><th>WIDTH AT 2+2</th></tr></thead>
+  <tbody id="heights"></tbody>
+</table>
+
+<p class="lede" style="margin-top: 26px">
+  <b>What I'd take from this:</b> the combination is worth having. The weekly bar costs 3&nbsp;px
+  and answers a question the session row can't, and the pace marks survive being cut into cells far
+  better than I expected — even at compact width, where a cell is under 20&nbsp;px. What does not
+  survive is <b>two rows of account names</b>: that is the element that puts 01 over the button, and
+  the honest reading of the badge is that the literal request needs one concession.
+  <b>03 (tucked, initials only)</b> is the cheapest one — it keeps all four elements at
+  31&nbsp;px and spends a gap and one point of type size. <b>05 (shared label row)</b> is the one I
+  would actually build, because when both providers have the same account names — the common case —
+  the second label row was never carrying new information; it fits with room to spare and keeps
+  names readable. <b>04 (side by side)</b> is the escape hatch if width is cheaper than height on
+  your taskbar, which it usually is not.
+</p>
+
+</div>
+
+<script>
+/* ============================================================
+   Accounts. Same book as the multi-account mockups, so the two pages can be
+   read against each other.
+   ============================================================ */
+const BOOK = {
+  codex: [
+    { short: "W", label: "Work", p5: 47, pw: 63, pace5: 44, pacew: 58 },
+    { short: "S", label: "Side", p5: 12, pw: 22, pace5: 61, pacew: 58 },
+    { short: "T", label: "Team", p5: 71, pw: 44, pace5: 78, pacew: 58 },
+  ],
+  claude: [
+    { short: "W", label: "Work", p5: 82, pw: 55, pace5: 46, pacew: 58 },
+    { short: "P", label: "Prsnl", p5: 24, pw: 38, pace5: 70, pacew: 58 },
+    { short: "R", label: "Rsrch", p5: 58, pw: 91, pace5: 33, pacew: 58 },
+  ],
+};
+const LOAD = { calm: 0.45, busy: 1, tight: 1.3 };
+const state = { count: 4, width: 62, scenario: "busy", names: "differ", pace: true, week: true, labels: true };
+
+const r = (n) => Math.round(n);
+const clamp = (n) => Math.max(0, Math.min(100, n));
+const hot = (p) => p >= 90;
+const C = "var(--codex)", K = "var(--claude)";
+
+function view(count) {
+  const n = count || state.count;
+  const per = { 2: 1, 4: 2, 6: 3 }[n];
+  const m = LOAD[state.scenario];
+  const mk = (a, provider) => ({
+    ...a,
+    c: provider === "codex" ? C : K,
+    v5: clamp(a.p5 * m), vw: clamp(a.pw * m),
+  });
+  const codex = BOOK.codex.slice(0, per).map((a) => mk(a, "codex"));
+  /* "Match" is the case where the same accounts exist on both sides — one Work,
+     one Personal, each with a login per provider. It is what makes a shared
+     label row legitimate, so it has to be switchable rather than assumed. */
+  const claude = BOOK.claude.slice(0, per).map((a, i) =>
+    state.names === "match"
+      ? { ...mk(a, "claude"), label: BOOK.codex[i].label, short: BOOK.codex[i].short }
+      : mk(a, "claude")
+  );
+  return { codex, claude };
+}
+
+/* A label only earns its place if the cell is wide enough to hold it whole;
+   below that the initial says the same thing without lying about legibility. */
+const CGAP = 2;
+function cellWidth(n) {
+  return (state.width - CGAP * (n - 1)) / n;
+}
+function labelFor(a, n) {
+  return cellWidth(n) >= 24 ? a.label : a.short;
+}
+
+/* ---- The three rows a provider block is made of ---- */
+function labelRow(list, opts = {}) {
+  if (!state.labels) return "";
+  /* Names get 7.5 px type, initials 6.5 px. That one pixel, twice, is the
+     difference between fitting and not — so a treatment can force initials. */
+  const big = !opts.forceInitials && cellWidth(list.length) >= 24;
+  return `<div class="row lblrow ${big ? "big" : ""}">` +
+    list.map((a) => `<span>${big ? a.label : a.short}</span>`).join("") + `</div>`;
+}
+function cellRow(list, key, opts = {}) {
+  const pace = state.pace && !opts.nopace;
+  return `<div class="row ${opts.cls || ""}">` +
+    list.map((a) => {
+      const p = key === "v5" ? a.v5 : a.vw;
+      const t = key === "v5" ? a.pace5 : a.pacew;
+      return `<span class="cell ${hot(p) ? "hot" : ""}" style="--p:${r(p)};--c:${a.c};--t:${r(t)}">
+        <u></u>${pace ? "<i></i>" : ""}</span>`;
+    }).join("") + `</div>`;
+}
+/* One provider: labels, session cells, weekly cells. */
+function block(list, opts = {}) {
+  return `<div class="block ${opts.cls || ""}" style="${opts.style || ""}">
+    ${opts.labelsBelow ? "" : labelRow(list, opts)}
+    ${cellRow(list, "v5")}
+    ${state.week ? cellRow(list, "vw", { cls: "wk", nopace: true }) : ""}
+    ${opts.labelsBelow ? labelRow(list, opts) : ""}
+  </div>`;
+}
+
+/* ============================================================
+   The five treatments
+   ============================================================ */
+const VARIANTS = [
+  {
+    id: "above",
+    name: "Labels above, weekly below",
+    say: "The literal combination: label row on top, the 5-hour cells with their pace marks, then the weekly cells at half height and 62% opacity. Reading order runs <b>name → now → this week</b>, top to bottom, which is the order you'd say it out loud. It reads well and it <b>does not fit</b> — the badge above is measured, and with account names at 7.5&nbsp;px it lands two pixels over the button. Everything below is a way of buying those two pixels back.",
+    render(v) {
+      return `<div class="w" style="--rw:${state.width}px;--ch:4px;--wh:2px;--vgap:1px;--bgap:3px">
+        <div class="stack">${block(v.codex)}${block(v.claude)}</div>
+      </div>`;
+    },
+    notes: [
+      ["up", "+", "Nothing is dropped, and the two providers stay visually parallel — same rows, same order, same widths."],
+      ["dn", "−", "The two name rows are the overflow: 7.5 px each, and they are what put this two pixels past the button."],
+    ],
+  },
+  {
+    id: "below",
+    name: "Labels below the pair",
+    say: "The same parts, label row moved <b>under</b> each provider's two rails. The bars lead and the name explains them, which puts the ink you actually read first at the top of each block. Costs exactly the same height as 01 — this is a reading-order choice, not a space one.",
+    render(v) {
+      return `<div class="w" style="--rw:${state.width}px;--ch:4px;--wh:2px;--vgap:1px;--bgap:3px">
+        <div class="stack">${block(v.codex, { labelsBelow: true })}${block(v.claude, { labelsBelow: true })}</div>
+      </div>`;
+    },
+    notes: [
+      ["up", "+", "The rails read first, and each label sits directly under the weekly bar it also names."],
+      ["dn", "−", "The label ends up closer to the next provider's block than to its own — grouping fights the gap."],
+    ],
+  },
+  {
+    id: "tucked",
+    name: "Weekly tucked under, initials only",
+    say: "Two savings at once, because 01 needs both: the weekly bar goes <b>flush against its own 5-hour cell</b> (one gap gone per provider), and the label row is <b>forced to initials</b> at 6.5&nbsp;px instead of names at 7.5. The pair now reads as one object with a shadow. This is the only stacked treatment that gets inside 32&nbsp;px with every element still present.",
+    render(v) {
+      return `<div class="w" style="--rw:${state.width}px;--ch:4px;--wh:2px;--vgap:1px;--bgap:4px">
+        <div class="stack">
+          ${block(v.codex, { cls: "tucked", forceInitials: true })}
+          ${block(v.claude, { cls: "tucked", forceInitials: true })}
+        </div>
+      </div>`;
+    },
+    notes: [
+      ["up", "+", "Keeps all four elements and fits — the gap and one point of type size were the only things spent."],
+      ["dn", "−", "Touching bars can read as one thick bar, and an initial is a weaker label than a name."],
+    ],
+  },
+  {
+    id: "side",
+    name: "Providers side by side",
+    say: "Stop stacking providers and set them <b>next to each other</b> instead. Height drops to a single block — about 14&nbsp;px — and the label row can be 7.5&nbsp;px with room to spare. The cost is width: this is the widest thing on the page, and taskbar width is shared with everything else you have open.",
+    render(v) {
+      return `<div class="w side" style="--rw:${state.width}px;--ch:5px;--wh:2.5px;--vgap:2px">
+        <div class="cols">${block(v.codex)}${block(v.claude)}</div>
+      </div>`;
+    },
+    notes: [
+      ["up", "+", "Half the height means everything gets bigger: 5 px cells, 2.5 px weekly, legible labels."],
+      ["dn", "−", "Roughly doubles the footprint, and the two providers stop being comparable at a glance."],
+    ],
+  },
+  {
+    id: "shared",
+    name: "One shared label row",
+    say: "When both providers have the <b>same account names</b> — one Work and one Personal, with a login on each side — the second label row is saying the same thing twice. Print it once, above both blocks, and the row you saved is the row that broke 01. It falls back to 01 automatically when the names differ, which is what you're seeing until you flip <b>Names → Match</b> in the controls.",
+    render(v) {
+      const same =
+        v.codex.length === v.claude.length &&
+        v.codex.every((a, i) => a.label === v.claude[i].label);
+      if (!same) {
+        return `<div class="w" style="--rw:${state.width}px;--ch:4px;--wh:2px;--vgap:1px;--bgap:3px">
+          <div class="stack">${block(v.codex)}${block(v.claude)}</div>
+        </div>`;
+      }
+      return `<div class="w" style="--rw:${state.width}px;--ch:4px;--wh:2px">
+        <div class="block" style="--vgap:1.5px">
+          ${labelRow(v.codex)}
+          <div class="block" style="--vgap:1.5px">${cellRow(v.codex, "v5")}${state.week ? cellRow(v.codex, "vw", { cls: "wk", nopace: true }) : ""}</div>
+          <div class="block" style="--vgap:1.5px;margin-top:4px">${cellRow(v.claude, "v5")}${state.week ? cellRow(v.claude, "vw", { cls: "wk", nopace: true }) : ""}</div>
+        </div>
+      </div>`;
+    },
+    notes: [
+      ["up", "+", "Same information, one fewer row: the rails go back to 5 px and the labels to 7.5 px."],
+      ["dn", "−", "Only valid when the names line up, and the shared row implies a column pairing that isn't real."],
+    ],
+  },
+];
+
+/* ============================================================
+   Taskbar chrome
+   ============================================================ */
+const START = `<svg width="18" height="18" viewBox="0 0 18 18"><g fill="currentColor"><rect x="1" y="1" width="7" height="7" rx="1"/><rect x="10" y="1" width="7" height="7" rx="1"/><rect x="1" y="10" width="7" height="7" rx="1"/><rect x="10" y="10" width="7" height="7" rx="1"/></g></svg>`;
+const GL_WIFI = `<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.5 5.5a10 10 0 0 1 13 0M4 8.4a6.3 6.3 0 0 1 8 0M6.4 11.2a2.6 2.6 0 0 1 3.2 0"/><circle cx="8" cy="13.4" r="0.8" fill="currentColor" stroke="none"/></svg>`;
+const GL_VOL = `<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3 6h2.5L9 3v10L5.5 10H3z" stroke-linejoin="round"/><path d="M11.2 5.8a3.2 3.2 0 0 1 0 4.4"/></svg>`;
+const GL_BAT = `<svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="6" width="12" height="6" rx="1.5"/><path d="M15 8.4v1.2" stroke-linecap="round"/><rect x="3.4" y="7.4" width="7" height="3.2" rx="0.6" fill="currentColor" stroke="none"/></svg>`;
+const GL_UP = `<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 7.5 6 4l3.5 3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const SEARCH = `<svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="6" cy="6" r="4.2"/><path d="M9.2 9.2 12.5 12.5" stroke-linecap="round"/></svg>`;
+const APPS = ["#4f7fd8", "#6ec3a8", "#d97b6c", "#9b8bd6"];
+
+function taskbar(widget, theme) {
+  const apps = APPS.map((c) => `<div class="tb-btn"><div class="app" style="background:${c}"></div></div>`).join("");
+  return `<div class="tb${theme === "light" ? " light" : ""}">
+    <div class="tb-btn">${START}</div>
+    <div class="tb-search">${SEARCH}<span>Search</span></div>
+    ${apps}
+    <div class="tb-spacer"></div>
+    ${widget}
+    <div class="tb-tray">
+      <div class="gl">${GL_UP}</div><div class="gl">${GL_WIFI}</div><div class="gl">${GL_VOL}</div><div class="gl">${GL_BAT}</div>
+      <div class="tb-clock"><div>1:41 PM</div><div class="d">8/4/2026</div></div>
+    </div>
+  </div>`;
+}
+
+/* ============================================================
+   Render
+   ============================================================ */
+function renderAnatomy() {
+  const v = view();
+  document.getElementById("anatomy-stage").innerHTML =
+    `<div class="tb"><div class="w" style="--rw:${state.width}px;--ch:4px;--wh:2px;--vgap:1px">${block(v.codex)}</div></div>`;
+}
+
+function renderCards() {
+  const v = view();
+  document.getElementById("cards").innerHTML = VARIANTS.map((t, i) => {
+    const notes = t.notes.map(([k, m, x]) => `<div class="note ${k}"><span class="m">${m}</span><span>${x}</span></div>`).join("");
+    return `<article class="card" data-variant="${t.id}">
+      <div class="card-hd"><span class="n">${String(i + 1).padStart(2, "0")}</span><h3>${t.name}</h3>
+        <span class="fit" data-fit>measuring…</span></div>
+      <p class="say">${t.say}</p>
+      <div class="situ"><div class="wp-hint">IN PLACE — ACTUAL SIZE</div>${taskbar(t.render(v))}</div>
+      <div class="detail">
+        <div class="zooms">
+          <div class="zoomwrap"><div class="zt">DARK · 2.8×</div><div class="zoomstage dark"><div class="tb">${t.render(v)}</div></div></div>
+          <div class="zoomwrap"><div class="zt">LIGHT · 2.8×</div><div class="zoomstage lite"><div class="tb light">${t.render(v)}</div></div></div>
+        </div>
+        <div class="notes">${notes}</div>
+      </div>
+    </article>`;
+  }).join("");
+}
+
+/* The widget's own box is a fixed 32 px, so measure the content it holds: the
+   union of the blocks inside it. That is the number that has to fit. */
+function contentHeight(w) {
+  const kids = [...w.children];
+  if (!kids.length) return 0;
+  const top = Math.min(...kids.map((k) => k.getBoundingClientRect().top));
+  const bot = Math.max(...kids.map((k) => k.getBoundingClientRect().bottom));
+  return bot - top;
+}
+function band(h) {
+  if (h > 32) return "over";
+  if (h > 28.5) return "tight";
+  return "ok";
+}
+function annotate() {
+  document.querySelectorAll(".card").forEach((card) => {
+    const w = card.querySelector(".situ .tb .w");
+    const h = contentHeight(w);
+    const el = card.querySelector("[data-fit]");
+    const cls = band(h);
+    el.className = "fit " + cls;
+    el.textContent = `${h.toFixed(1)} / 32 px${cls === "over" ? " — overflows" : cls === "tight" ? " — tight" : ""}`;
+  });
+}
+
+/* The height table renders each treatment off-screen at every account count,
+   so the numbers are measured the same way the badges are. */
+const COUNTS = [2, 4, 6];
+function renderHeights() {
+  const probe = document.createElement("div");
+  probe.style.cssText = "position:absolute;left:-9999px;top:0;visibility:hidden";
+  document.body.appendChild(probe);
+  const rows = VARIANTS.map((t) => {
+    const saved = state.count;
+    const cells = COUNTS.map((n) => {
+      state.count = n;
+      probe.innerHTML = `<div class="tb">${t.render(view(n))}</div>`;
+      const h = contentHeight(probe.querySelector(".w"));
+      const cls = band(h);
+      return `<td class="v ${cls}">${h.toFixed(1)} px</td>`;
+    }).join("");
+    state.count = 4;
+    probe.innerHTML = `<div class="tb">${t.render(view(4))}</div>`;
+    const wide = Math.round(probe.querySelector(".w").getBoundingClientRect().width);
+    state.count = saved;
+    return `<tr><td class="nm">${t.name}</td>${cells}<td>${wide} px</td></tr>`;
+  }).join("");
+  probe.remove();
+  document.getElementById("heights").innerHTML = rows;
+}
+
+function renderAll() {
+  renderAnatomy();
+  renderCards();
+  annotate();
+  renderHeights();
+}
+
+/* ============================================================
+   Controls
+   ============================================================ */
+function wireSegs(id, key, cast) {
+  document.getElementById(id).addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    state[key] = cast ? cast(b.dataset.v) : b.dataset.v;
+    [...b.parentElement.children].forEach((x) => x.classList.toggle("on", x === b));
+    renderAll();
+  });
+}
+wireSegs("seg-count", "count", Number);
+wireSegs("seg-width", "width", Number);
+wireSegs("seg-scenario", "scenario");
+wireSegs("seg-names", "names");
+for (const [id, key] of [["chk-pace", "pace"], ["chk-week", "week"], ["chk-labels", "labels"]]) {
+  document.getElementById(id).addEventListener("change", (e) => {
+    state[key] = e.target.checked;
+    renderAll();
+  });
+}
+
+renderAll();
+</script>
+</body>
+</html>
