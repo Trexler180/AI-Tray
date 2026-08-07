@@ -11,6 +11,7 @@ let widgetSettings = { enabled: false, tray_gap: 10, width: 114 };
 // "ok" | "vertical_taskbar" | "no_taskbar" — why the widget is or is not placeable.
 let widgetPlacement = "ok";
 let widgetMonitors = [];
+let widgetLoadError = "";
 // Whether the model-scoped weekly gauge (e.g. the Fable-only limit) is shown.
 let showModelWeekly = localStorage.getItem("showModelWeekly") !== "0";
 // Meter direction: false (default) drains a full bar as the allowance is
@@ -1499,6 +1500,11 @@ function renderSettings() {
   if (widgetSettings.enabled && placementNote) {
     html += `<div class="banner small">${esc(placementNote)}</div>`;
   }
+  if (widgetLoadError) {
+    html += `<div class="banner small">Couldn't read the widget settings — ${esc(
+      widgetLoadError
+    )}</div>`;
+  }
   html += `<div class="sec-sub">Windows has no way to put a real button inside the taskbar, so this floats on top of it.</div>`;
 
   const accounts = cl.accounts || [];
@@ -1928,6 +1934,8 @@ function fitWindowHeight() {
 
 function switchTab(tab) {
   activeTab = tab;
+  // Monitors and placement can both change while the panel is closed.
+  if (tab === "settings") loadWidgetSettings();
   creditsOpen = false;
   // The wide layout belongs to the timeline; leaving it puts the popover back.
   if (panelExpanded && tab !== "windows") setPanelExpanded(false);
@@ -1999,13 +2007,24 @@ async function loadNotificationSettings() {
   } catch (_) {}
 }
 
+// Loaded independently, and loudly. A single try/catch around all three meant
+// one failure left the rest unloaded — an empty monitor list reads exactly like
+// "you only have one display" — and the silent catch left nothing to diagnose.
 async function loadWidgetSettings() {
-  try {
-    widgetSettings = await invoke("get_widget_settings");
-    widgetPlacement = await invoke("get_widget_placement");
-    widgetMonitors = await invoke("list_widget_monitors");
-    render();
-  } catch (_) {}
+  widgetLoadError = "";
+  for (const [cmd, apply] of [
+    ["get_widget_settings", (v) => (widgetSettings = v)],
+    ["get_widget_placement", (v) => (widgetPlacement = v)],
+    ["list_widget_monitors", (v) => (widgetMonitors = v || [])],
+  ]) {
+    try {
+      apply(await invoke(cmd));
+    } catch (e) {
+      widgetLoadError = `${cmd}: ${e}`;
+      console.error("widget settings:", cmd, e);
+    }
+  }
+  render();
 }
 
 async function loadUpdateState() {
@@ -2149,6 +2168,13 @@ document.addEventListener("keydown", (event) => {
 });
 // Rust pushes the updater status on every transition, so the About section
 // tracks a background check without polling.
+listen("widget-placement", (event) => {
+  // Pushed whenever the widget's placement actually changes, so the Settings
+  // note follows reality instead of a value sampled once at startup.
+  if (event.payload) widgetPlacement = event.payload;
+  if (activeTab === "settings") render();
+});
+
 listen("widget-settings", (event) => {
   // The widget can change these itself, by being dragged or resized.
   if (event.payload) widgetSettings = event.payload;

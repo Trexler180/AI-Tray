@@ -87,13 +87,23 @@ impl Default for WidgetSettings {
 
 pub struct WidgetState {
     settings: Mutex<WidgetSettings>,
+    /// What `position` decided last time it ran. The Settings note reads this
+    /// rather than working it out again: a second, independent calculation can
+    /// disagree with the one that actually placed the window — and did, telling
+    /// people there was no taskbar while the widget sat on it.
+    placement: Mutex<Placement>,
 }
 
 impl WidgetState {
     pub fn load() -> Self {
         Self {
             settings: Mutex::new(load_settings()),
+            placement: Mutex::new(Placement::Ok),
         }
+    }
+
+    fn placement(&self) -> std::sync::MutexGuard<'_, Placement> {
+        self.placement.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// A poisoned lock here means some other thread panicked mid-update; the
@@ -241,13 +251,20 @@ fn taskbar_strip(monitor: &tauri::Monitor) -> Option<Strip> {
 /// Falling back rather than hiding matters — a laptop undocked from the screen
 /// the widget was pinned to should get its widget back on the built-in display,
 /// not lose it until it notices the setting.
+/// A stable key for a display. Prefers the OS device name, and falls back to
+/// the monitor's origin — an unnamed monitor must still be selectable, and
+/// dropping it from the list looks identical to owning one screen.
+fn monitor_key(m: &tauri::Monitor) -> String {
+    m.name().cloned().unwrap_or_else(|| {
+        let p = m.position();
+        format!("@{},{}", p.x, p.y)
+    })
+}
+
 fn widget_monitor(window: &tauri::WebviewWindow, preferred: Option<&str>) -> Option<tauri::Monitor> {
     if let Some(name) = preferred {
         if let Ok(monitors) = window.available_monitors() {
-            if let Some(found) = monitors
-                .into_iter()
-                .find(|m| m.name().is_some_and(|n| n == name))
-            {
+            if let Some(found) = monitors.into_iter().find(|m| monitor_key(m) == name) {
                 return Some(found);
             }
         }
@@ -260,9 +277,10 @@ fn widget_monitor(window: &tauri::WebviewWindow, preferred: Option<&str>) -> Opt
 }
 
 /// Why the widget can't be placed, for the note in Settings.
-#[derive(Serialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Default, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum Placement {
+    #[default]
     Ok,
     /// A left- or right-docked taskbar. The widget is a wide two-row strip;
     /// there is no sensible way to render it in a 60 px vertical column.
@@ -275,6 +293,26 @@ pub enum Placement {
 /// notification area. Returns why it declined, when it did: the caller hides
 /// the window rather than leaving it somewhere wrong.
 pub fn position(app: &tauri::AppHandle) -> Placement {
+    let result = place(app);
+    let changed = {
+        let state = app.state::<WidgetState>();
+        let mut last = state.placement();
+        let changed = *last != result;
+        *last = result;
+        changed
+    };
+    // Only on a change: this runs every few seconds and the panel re-renders
+    // whenever it hears about it.
+    if changed {
+        use tauri::Emitter;
+        let _ = app.emit("widget-placement", result);
+    }
+    result
+}
+
+/// The decision itself. Split out so `position` is the only thing that records
+/// and announces it.
+fn place(app: &tauri::AppHandle) -> Placement {
     let Some(window) = app.get_webview_window("widget") else {
         return Placement::NoTaskbar;
     };
@@ -623,17 +661,17 @@ pub fn list_widget_monitors(
         .primary_monitor()
         .ok()
         .flatten()
-        .and_then(|m| m.name().cloned());
+        .map(|m| monitor_key(&m));
 
     monitors
         .into_iter()
         .enumerate()
-        .filter_map(|(i, m)| {
-            let name = m.name().cloned()?;
+        .map(|(i, m)| {
+            let name = monitor_key(&m);
             let size = m.size();
             let scale = m.scale_factor();
             let primary = primary_name.as_deref() == Some(name.as_str());
-            Some(MonitorChoice {
+            MonitorChoice {
                 label: format!(
                     "Display {} · {}×{}{}",
                     i + 1,
@@ -645,7 +683,7 @@ pub fn list_widget_monitors(
                 selected: chosen.as_deref() == Some(name.as_str()),
                 primary,
                 name,
-            })
+            }
         })
         .collect()
 }
@@ -673,20 +711,12 @@ pub fn set_widget_monitor(
 
 /// Whether the widget can currently be placed, so Settings can say why it is
 /// switched on but not on screen.
+/// The placement the widget is actually running with, as recorded by the last
+/// `position` call. Not recalculated here — that is what let the note claim
+/// there was no taskbar while the widget was sitting on one.
 #[tauri::command]
-pub fn get_widget_placement(app: tauri::AppHandle) -> Placement {
-    let Some(window) = app.get_webview_window("widget") else {
-        return Placement::NoTaskbar;
-    };
-    let preferred = app.state::<WidgetState>().get().monitor.clone();
-    let Some(monitor) = widget_monitor(&window, preferred.as_deref()) else {
-        return Placement::NoTaskbar;
-    };
-    match taskbar_strip(&monitor) {
-        None => Placement::NoTaskbar,
-        Some(strip) if !strip.horizontal => Placement::VerticalTaskbar,
-        Some(_) => Placement::Ok,
-    }
+pub fn get_widget_placement(state: tauri::State<'_, WidgetState>) -> Placement {
+    *state.placement()
 }
 
 /// Tell the widget its settings changed. It renders from these, and it is a
