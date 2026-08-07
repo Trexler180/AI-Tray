@@ -535,40 +535,118 @@ pub fn uninstall_foreground_hook() {}
 #[cfg(not(windows))]
 pub fn forget_window() {}
 
-/// True when the foreground window covers a whole monitor — a fullscreen game
-/// or video, which an always-on-top widget has no business sitting over.
+/// State carried into the window scan below. `extern "system"` callbacks have
+/// nowhere to put a closure, so it travels as an LPARAM.
 #[cfg(windows)]
-fn fullscreen_app_active(window: &tauri::WebviewWindow) -> bool {
+struct Scan {
+    /// The widget's monitor, in physical pixels.
+    rect: Rect,
+    own_pid: u32,
+    covered: bool,
+}
+
+/// True when some window covers the widget's monitor edge to edge.
+///
+/// Deliberately not "is the foreground window fullscreen": focus and coverage
+/// are different questions, and asking the wrong one is wrong in both
+/// directions. Alt-tabbing from a fullscreen game to another screen leaves the
+/// game covering its own monitor — the widget must stay hidden there even
+/// though it is no longer foreground — while a game on one screen must not
+/// blank the widget on another.
+///
+/// Coverage is measured against the *whole* monitor, including the strip the
+/// taskbar occupies, which is what separates a fullscreen window from a merely
+/// maximised one.
+#[cfg(windows)]
+unsafe extern "system" fn scan_window(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    lparam: windows_sys::Win32::Foundation::LPARAM,
+) -> windows_sys::Win32::Foundation::BOOL {
     use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetDesktopWindow, GetForegroundWindow, GetShellWindow, GetWindowRect,
+        GetClassNameW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+    };
+
+    let scan = &mut *(lparam as *mut Scan);
+
+    if IsWindowVisible(hwnd) == 0 || IsIconic(hwnd) != 0 {
+        return 1;
+    }
+    // Our own windows are the thing being hidden, not something to hide from.
+    let mut pid = 0u32;
+    GetWindowThreadProcessId(hwnd, &mut pid);
+    if pid == scan.own_pid {
+        return 1;
+    }
+    // The desktop and the taskbar cover the screen by definition.
+    let mut class = [0u16; 64];
+    let n = GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32);
+    if n > 0 {
+        let name = String::from_utf16_lossy(&class[..n as usize]);
+        if matches!(
+            name.as_str(),
+            "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
+        ) {
+            return 1;
+        }
+    }
+    // UWP keeps invisible ghost windows around at full size; they are cloaked.
+    let mut cloaked = 0u32;
+    if DwmGetWindowAttribute(
+        hwnd,
+        DWMWA_CLOAKED as u32,
+        &mut cloaked as *mut _ as *mut core::ffi::c_void,
+        std::mem::size_of::<u32>() as u32,
+    ) == 0
+        && cloaked != 0
+    {
+        return 1;
+    }
+
+    let mut r = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    if GetWindowRect(hwnd, &mut r) == 0 {
+        return 1;
+    }
+    let (mx, my, mw, mh) = scan.rect;
+    if r.left <= mx && r.top <= my && r.right >= mx + mw && r.bottom >= my + mh {
+        scan.covered = true;
+        return 0; // found one; stop enumerating
+    }
+    1
+}
+
+#[cfg(windows)]
+fn monitor_is_covered(app: &tauri::AppHandle) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::EnumWindows;
+
+    let Some(window) = app.get_webview_window("widget") else {
+        return false;
+    };
+    let preferred = app.state::<WidgetState>().get().monitor.clone();
+    let Some(monitor) = widget_monitor(&window, preferred.as_deref()) else {
+        return false;
+    };
+    let pos = monitor.position();
+    let size = monitor.size();
+    let mut scan = Scan {
+        rect: (pos.x, pos.y, size.width as i32, size.height as i32),
+        own_pid: std::process::id(),
+        covered: false,
     };
     unsafe {
-        let fg = GetForegroundWindow();
-        if fg.is_null() || fg == GetShellWindow() || fg == GetDesktopWindow() {
-            return false;
-        }
-        let mut rect = RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        };
-        if GetWindowRect(fg, &mut rect) == 0 {
-            return false;
-        }
-        let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
-        let Ok(Some(monitor)) = window.monitor_from_point(rect.left as f64, rect.top as f64) else {
-            return false;
-        };
-        let size = monitor.size();
-        // Covers the monitor including the strip the taskbar would occupy.
-        w >= size.width as i32 && h >= size.height as i32
+        EnumWindows(Some(scan_window), &mut scan as *mut _ as isize);
     }
+    scan.covered
 }
 
 #[cfg(not(windows))]
-fn fullscreen_app_active(_window: &tauri::WebviewWindow) -> bool {
+fn monitor_is_covered(_app: &tauri::AppHandle) -> bool {
     false
 }
 
@@ -608,7 +686,9 @@ pub fn start_ticker(app: tauri::AppHandle) {
         let Some(window) = app.get_webview_window("widget") else {
             continue;
         };
-        if fullscreen_app_active(&window) {
+        // Checked before placement so a covered screen costs one scan, not a
+        // reposition as well.
+        if monitor_is_covered(&app) {
             let _ = window.hide();
             continue;
         }
