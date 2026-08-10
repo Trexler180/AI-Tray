@@ -6,6 +6,9 @@
   --codex: #2dd4bf;
   --claude: #f0a36a;
   --danger: #ef6b6b;
+  /* Recent-usage band. Held apart from the provider colours and from --danger
+     so it stays legible on top of any of them. */
+  --recent: #9380ec;
   /* Resolved against the taskbar, not the page: the widget sits on the bar, so
      it takes the bar's light/dark treatment rather than the app's. */
   --w-track: rgba(255, 255, 255, 0.17);
@@ -114,6 +117,23 @@ body {
 }
 .cell.hot > u {
   background: var(--danger);
+}
+/* Recent-usage band: what this window burned over the last stretch, filled
+   violet against the fill edge — matching the panel's meters, and for the same
+   reason: it is the hue neither provider colour uses, and it holds up against
+   the red a cell turns past 90% without needing a second shade for it. */
+.cell > s {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /* Pinned to the fill edge and grown leftwards, so the minimum width below
+     extends it back into the bar rather than out past the level it measures
+     from. These bars are ~50px wide, where a 1% band is half a pixel. */
+  right: calc((100 - var(--p)) * 1%);
+  width: calc(var(--r) * 1%);
+  min-width: 2px;
+  background: var(--recent);
+  box-shadow: 0 0 0 0.5px var(--w-halo);
 }
 /* Pace mark: how far through the window the clock is. */
 .cell > i {

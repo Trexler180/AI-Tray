@@ -15,6 +15,7 @@ use crate::history_cache;
 use crate::models::Usage;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 const CACHE_NAME: &str = "windows";
@@ -287,6 +288,88 @@ pub fn history() -> WindowHistory {
     store().lock().unwrap().clone()
 }
 
+/// Quota spent on one window over a recent stretch, in the same percent-of-
+/// allowance scale the gauges use. This is what the meters draw as a band at
+/// the fill edge, so both windows read it from here rather than each deriving
+/// it from the raw samples — two copies would drift the moment either is
+/// tweaked.
+#[derive(Serialize, Clone, Default, Debug, PartialEq)]
+pub struct RecentBurn {
+    pub spent: f64,
+    /// How far back the figure really reaches, which the record decides rather
+    /// than the range asked for: shorter when the app hasn't been running that
+    /// long, longer when a climb straddles the start of the range.
+    pub covered_seconds: i64,
+    /// Whether that is close enough to the range asked for to be drawn as one.
+    pub matched: bool,
+}
+
+/// How much further back than the range asked for a figure may reach and still
+/// be drawn. A climb recorded either side of a stretch with the app shut lands
+/// in a single pair of samples that can span hours; the reading is still
+/// honest, but a 20% band under a "15m" setting would be read as 20% in fifteen
+/// minutes, so the caller is told not to draw it.
+const STRETCH_LIMIT: i64 = 2;
+
+/// Recent spend for every window on record, keyed the same way the series are.
+pub fn recent(minutes: i64) -> HashMap<String, RecentBurn> {
+    recent_in(&store().lock().unwrap(), minutes, Utc::now().timestamp())
+}
+
+/// Only rises count, the same reasoning the timeline's burn strip uses: a
+/// rolling window's percentage falls as old usage ages out, and that is not
+/// quota coming back. Earlier instances are left out — they describe a window
+/// that has since reset, so their spend is no longer on the meter.
+pub fn recent_in(
+    history: &WindowHistory,
+    minutes: i64,
+    now: i64,
+) -> HashMap<String, RecentBurn> {
+    let minutes = minutes.max(1);
+    let from = now - minutes * 60;
+    let mut out = HashMap::new();
+
+    for series in &history.series {
+        let Some(samples) = series
+            .instances
+            .last()
+            .map(|instance| &instance.samples)
+            .filter(|samples| !samples.is_empty())
+        else {
+            continue;
+        };
+
+        // The last reading taken at or before the range opened is the baseline;
+        // every sample after it is inside the range.
+        let mut base = 0;
+        while base + 1 < samples.len() && samples[base + 1].at <= from {
+            base += 1;
+        }
+
+        let mut spent = 0.0;
+        let mut anchor = samples[base].at.max(from);
+        for i in base + 1..samples.len() {
+            let rise = samples[i].used - samples[i - 1].used;
+            if rise <= 0.0 {
+                continue;
+            }
+            spent += rise;
+            anchor = anchor.min(samples[i - 1].at);
+        }
+
+        let covered_seconds = now - anchor;
+        out.insert(
+            series.key.clone(),
+            RecentBurn {
+                spent,
+                covered_seconds,
+                matched: covered_seconds <= minutes * 60 * STRETCH_LIMIT,
+            },
+        );
+    }
+    out
+}
+
 pub fn clear() -> std::io::Result<()> {
     *store().lock().unwrap() = WindowHistory::default();
     history_cache::clear(CACHE_NAME)
@@ -388,6 +471,127 @@ mod tests {
 
         assert_eq!(history.series[0].instances.len(), 1);
         assert_eq!(history.series[0].instances[0].used, 10.0);
+    }
+
+    /// A series whose newest instance carries `samples`, given as
+    /// (minutes before `now`, used percent).
+    fn series_with(now: i64, samples: &[(i64, f64)]) -> WindowHistory {
+        WindowHistory {
+            series: vec![WindowSeries {
+                key: "codex||session".to_string(),
+                instances: vec![WindowInstance {
+                    samples: samples
+                        .iter()
+                        .map(|(ago, used)| Sample {
+                            at: now - ago * 60,
+                            used: *used,
+                        })
+                        .collect(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            recording_since: Some(now),
+        }
+    }
+
+    fn burn(now: i64, samples: &[(i64, f64)], minutes: i64) -> RecentBurn {
+        recent_in(&series_with(now, samples), minutes, now)
+            .remove("codex||session")
+            .expect("the series is on record")
+    }
+
+    #[test]
+    fn recent_spend_sums_the_climb_inside_the_range() {
+        let now = 1_800_000_000;
+        let got = burn(now, &[(70, 5.0), (10, 5.0), (5, 8.0), (0, 12.0)], 60);
+        assert_eq!(got.spent, 7.0);
+        assert_eq!(got.covered_seconds, 60 * 60);
+        assert!(got.matched);
+    }
+
+    #[test]
+    fn a_rolling_windows_fall_does_not_net_against_the_rises() {
+        let now = 1_800_000_000;
+        // 20 → 30 → 26 → 31: the dip is usage aging out, not quota returning.
+        let got = burn(now, &[(70, 20.0), (40, 30.0), (20, 26.0), (0, 31.0)], 60);
+        assert_eq!(got.spent, 15.0);
+        // The first climb straddles the start of the range, so the figure has to
+        // own up to reaching further back than an hour.
+        assert_eq!(got.covered_seconds, 70 * 60);
+    }
+
+    #[test]
+    fn a_record_shorter_than_the_range_only_speaks_for_what_it_covers() {
+        let now = 1_800_000_000;
+        let got = burn(now, &[(8, 40.0), (4, 43.0), (0, 45.0)], 60);
+        assert_eq!(got.spent, 5.0);
+        assert_eq!(got.covered_seconds, 8 * 60);
+        assert!(got.matched);
+    }
+
+    #[test]
+    fn an_idle_window_reads_as_no_usage_over_the_full_range() {
+        let now = 1_800_000_000;
+        // Flat windows only resample every SAMPLE_MIN_GAP_SECS, so the newest
+        // reading can predate the range without anything having happened.
+        let got = burn(now, &[(90, 30.0), (14, 30.0)], 10);
+        assert_eq!(got.spent, 0.0);
+        assert_eq!(got.covered_seconds, 10 * 60);
+        assert!(got.matched);
+    }
+
+    #[test]
+    fn a_climb_across_a_long_gap_is_reported_but_not_drawable() {
+        let now = 1_800_000_000;
+        // One pair spanning an app restart: honest, but not a fifteen-minute
+        // figure however it is labelled.
+        let got = burn(now, &[(70, 10.0), (1, 30.0)], 15);
+        assert_eq!(got.spent, 20.0);
+        assert_eq!(got.covered_seconds, 70 * 60);
+        assert!(!got.matched);
+    }
+
+    #[test]
+    fn a_window_that_only_fell_reads_as_no_usage() {
+        let now = 1_800_000_000;
+        let got = burn(now, &[(50, 60.0), (20, 52.0), (0, 44.0)], 60);
+        assert_eq!(got.spent, 0.0);
+        // The record starts 50 minutes in, so that is all it can speak for.
+        assert_eq!(got.covered_seconds, 50 * 60);
+    }
+
+    #[test]
+    fn a_window_with_no_samples_is_absent_rather_than_zero() {
+        let now = 1_800_000_000;
+        assert!(recent_in(&series_with(now, &[]), 60, now).is_empty());
+        assert!(recent_in(&WindowHistory::default(), 60, now).is_empty());
+    }
+
+    #[test]
+    fn only_the_live_instance_counts_toward_recent_spend() {
+        let now = 1_800_000_000;
+        let mut history = series_with(now, &[(10, 4.0), (0, 9.0)]);
+        // A window that closed inside the range: its spend is not on the meter
+        // any more, so it must not be added to the live one's.
+        history.series[0].instances.insert(
+            0,
+            WindowInstance {
+                samples: vec![
+                    Sample {
+                        at: now - 40 * 60,
+                        used: 50.0,
+                    },
+                    Sample {
+                        at: now - 20 * 60,
+                        used: 90.0,
+                    },
+                ],
+                ..Default::default()
+            },
+        );
+        let got = recent_in(&history, 60, now).remove("codex||session").unwrap();
+        assert_eq!(got.spent, 5.0);
     }
 
     #[test]

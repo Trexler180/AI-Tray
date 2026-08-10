@@ -29,6 +29,13 @@ const DEFAULT_TRAY_GAP: f64 = 10.0;
 /// Only used when the notification area can't be found: a fixed inset from the
 /// right edge of the bar, roughly the width of the clock plus a few icons.
 const FALLBACK_INSET: f64 = 220.0;
+/// Default reach of the recent-usage band. An hour is long enough that the
+/// coarse percentages the providers report can resolve it, short enough to
+/// still mean "lately".
+const DEFAULT_RECENT_MINUTES: u32 = 60;
+/// Range the band's reach is held to. The picker only offers a few values; this
+/// is a guard on the stored file, not the choice itself.
+const RECENT_MINUTES_RANGE: std::ops::RangeInclusive<u32> = 5..=1440;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct WidgetSettings {
@@ -50,6 +57,16 @@ pub struct WidgetSettings {
     /// bar fills the row on its own.
     #[serde(default = "yes")]
     pub show_weekly: bool,
+    /// Draw the recent-usage band — what the session window burned over the
+    /// last `recent_minutes`. Off by default: it is an extra mark on a bar a few
+    /// pixels tall, so it is worth asking for rather than arriving unannounced.
+    #[serde(default)]
+    pub show_recent: bool,
+    /// How far back that band reaches. Shared with the panel's meters, which is
+    /// why it lives here rather than in the panel's own display preferences:
+    /// this is the only store both windows can read and be notified about.
+    #[serde(default = "default_recent_minutes")]
+    pub recent_minutes: u32,
     /// Which display to sit on, as the OS device name (`\\.\DISPLAY2`). None
     /// means "wherever the window opens", which is normally the primary.
     ///
@@ -72,6 +89,10 @@ fn default_width() -> f64 {
     DEFAULT_WIDTH
 }
 
+fn default_recent_minutes() -> u32 {
+    DEFAULT_RECENT_MINUTES
+}
+
 impl Default for WidgetSettings {
     fn default() -> Self {
         Self {
@@ -80,6 +101,8 @@ impl Default for WidgetSettings {
             width: DEFAULT_WIDTH,
             show_pace: true,
             show_weekly: true,
+            show_recent: false,
+            recent_minutes: DEFAULT_RECENT_MINUTES,
             monitor: None,
         }
     }
@@ -820,8 +843,31 @@ pub fn set_widget_option(
         match name.as_str() {
             "show_pace" => settings.show_pace = value,
             "show_weekly" => settings.show_weekly = value,
+            "show_recent" => settings.show_recent = value,
             other => return Err(format!("unknown widget option: {other}")),
         }
+        settings.clone()
+    };
+    persist(&snapshot)?;
+    broadcast(&app, &snapshot);
+    Ok(())
+}
+
+/// How far back the recent-usage band reaches, on both the panel's meters and
+/// the widget's. Separate from `set_widget_option` because that one carries a
+/// flag; this is the one drawing preference the two windows share.
+#[tauri::command]
+pub fn set_recent_minutes(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WidgetState>,
+    minutes: u32,
+) -> Result<(), String> {
+    let snapshot = {
+        let mut settings = state.get();
+        settings.recent_minutes = minutes.clamp(
+            *RECENT_MINUTES_RANGE.start(),
+            *RECENT_MINUTES_RANGE.end(),
+        );
         settings.clone()
     };
     persist(&snapshot)?;

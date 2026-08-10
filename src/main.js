@@ -1,4 +1,4 @@
-import { clamp, elapsedPercent, esc } from "./shared.js";
+import { clamp, elapsedPercent, esc, historyKey } from "./shared.js";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -20,6 +20,25 @@ let meterFillsUp = localStorage.getItem("meterFillsUp") === "1";
 // A hairline on every time-based meter marking how far through the window the
 // clock is, so the bar can be read as a pace and not just a level.
 let meterPaceLine = localStorage.getItem("meterPaceLine") !== "0";
+// A band at the fill edge covering the quota spent over the last
+// `recentMinutes()`. Off by default: it can only speak for time the app was
+// running, which is worth opting into rather than appearing unannounced.
+// Whether the *widget* draws one is its own setting, but the reach is shared —
+// see `recent_minutes` in widget.rs.
+let showRecentBurn = localStorage.getItem("showRecentBurn") === "1";
+// The reaches the band offers. Anything shorter than a quarter of an hour reads
+// as 0% on most windows — the percentages providers report are too coarse to
+// resolve it — and anything longer stops being "recent".
+const RECENT_CHOICES = [
+  { minutes: 15, label: "15m" },
+  { minutes: 30, label: "30m" },
+  { minutes: 60, label: "1h" },
+  { minutes: 180, label: "3h" },
+];
+const recentMinutes = () => widgetSettings.recent_minutes || 60;
+// Recent spend per window key, computed by the recorder. Null until the first
+// load; an empty object means the record simply has nothing to say yet.
+let recentBurns = null;
 let notifyError = null; // provider whose toggle failed to save, if any
 let updateState = null; // updater status + version, pushed from Rust on change
 let updateError = null; // error from the last update toggle, if any
@@ -111,6 +130,28 @@ function refreshIcon(px = 14, stroke = 1.9) {
   </svg>`;
 }
 
+// ---------- window identity ----------
+const codexKey = (id) => historyKey("codex", "", id);
+const claudeKey = (account, id) => historyKey("claude", account, id);
+
+// ---------- recent usage ----------
+// What one window burned lately, as the recorder measured it (see `recent_in`
+// in windows_history.rs). Null when the band is switched off, the gauge has no
+// recorded window behind it, or nothing has been recorded for it yet.
+function recentBurn(key) {
+  if (!showRecentBurn || !key) return null;
+  return recentBurns?.[key] ?? null;
+}
+
+// "12% in the last 45m". The span is what the record covers, not what was asked
+// for, so a figure that can only speak for ten minutes says so.
+function recentText(recent) {
+  const span = agoText(recent.covered_seconds * 1000);
+  return recent.spent < 0.05
+    ? `no usage in the last ${span}`
+    : `${pctText(recent.spent)} in the last ${span}`;
+}
+
 // ---------- meters ----------
 // One bar with its text inside: label + headline on the left, reset time on
 // the right.
@@ -119,7 +160,16 @@ function refreshIcon(px = 14, stroke = 1.9) {
 // same reading in both fill directions; only the width and the headline flip.
 // Draining (the default) reads as "fuel left"; filling reads as "how much of
 // the allowance is gone".
-function meterBar(cls, usedPct, leftHtml, rightHtml, tip, attrs = "", elapsedPct = null) {
+function meterBar(
+  cls,
+  usedPct,
+  leftHtml,
+  rightHtml,
+  tip,
+  attrs = "",
+  elapsedPct = null,
+  recentPct = null
+) {
   const used = Math.min(100, Math.max(0, usedPct));
   const fill = meterFillsUp ? used : 100 - used;
   // Anything that rounds to 0% in the headline renders as a bare track: the
@@ -133,9 +183,27 @@ function meterBar(cls, usedPct, leftHtml, rightHtml, tip, attrs = "", elapsedPct
     elapsedPct === null
       ? ""
       : `<div class="bmark" style="left:${meterFillsUp ? elapsedPct : 100 - elapsedPct}%"></div>`;
+  // The recent band always ends at the fill edge, so it reads as the chunk just
+  // burned off whichever way the bar runs: over the fill when meters fill up,
+  // and into the emptied track when they drain. It can't exceed what has been
+  // spent in total — a window that rolled mid-range would otherwise report more
+  // recent usage than the meter shows.
+  const recent = Math.min(recentPct ?? 0, used);
+  // Pinned to the fill edge from whichever side it grows away from, so the
+  // minimum width a thin band gets in CSS extends it into the bar rather than
+  // pushing it out past the level it is measured from. Which side it hangs from
+  // is the only thing the fill direction changes — the band itself is the same
+  // colour over the fill as it is in the emptied track.
+  const band =
+    recent < 0.3
+      ? ""
+      : `<div class="brecent" style="${
+          meterFillsUp ? "right" : "left"
+        }:${100 - used}%;width:${recent}%"></div>`;
   return `
     <div class="bgauge ${cls}" title="${tip}" ${attrs}>
       <div class="bfill${empty ? " empty" : ""}" style="width:${empty ? 0 : fill}%"></div>
+      ${band}
       ${mark}
       <div class="btxt"><span class="bl">${leftHtml}</span><span class="rr">${rightHtml}</span></div>
     </div>`;
@@ -144,6 +212,10 @@ function meterBar(cls, usedPct, leftHtml, rightHtml, tip, attrs = "", elapsedPct
 // usedPercent 0..100. The headline follows the fill direction so the number
 // and the bar always describe the same thing; the other figure is in the
 // tooltip either way.
+// `opts.key` is the recorder's key for this window (see `liveWindows`), which
+// is what the recent-usage band is looked up by. A gauge without one — usage
+// credits, or a window the provider reports no length for — simply goes
+// without the band.
 function gauge(label, g, opts = {}) {
   if (!g) return "";
   const usedPercent = Math.min(100, Math.max(0, Number(g.used_percent) || 0));
@@ -151,13 +223,25 @@ function gauge(label, g, opts = {}) {
   const warn = usedPercent >= 80;
   const cls = [opts.claude ? "claude" : "", warn ? "warn" : ""].join(" ").trim();
   const elapsed = meterPaceLine ? elapsedPercent(g) : null;
+  const recent = recentBurn(opts.key);
   const tip = `${usedPercent.toFixed(0)}% used · ${left}% left${
     g.resets_in ? ` · resets in ${esc(g.resets_in)}` : ""
-  }${elapsed === null ? "" : ` · ${elapsed.toFixed(0)}% of the window gone`}`;
+  }${elapsed === null ? "" : ` · ${elapsed.toFixed(0)}% of the window gone`}${
+    recent === null ? "" : ` · ${recentText(recent)}`
+  }`;
   const headline = meterFillsUp
     ? `<b>${usedPercent.toFixed(0)}%</b><span class="sub"> used</span>`
     : `<b>${left}%</b><span class="sub"> left</span>`;
-  return meterBar(cls, usedPercent, `${esc(label)} ${headline}`, resetText(g), tip, "", elapsed);
+  return meterBar(
+    cls,
+    usedPercent,
+    `${esc(label)} ${headline}`,
+    resetText(g),
+    tip,
+    "",
+    elapsed,
+    recent?.matched ? recent.spent : null
+  );
 }
 
 // ---------- usage credits ----------
@@ -398,12 +482,13 @@ function renderCodex() {
   let html = header("Codex", extras);
 
   if ((c.quotas || []).length) {
-    for (const quota of c.quotas) html += gauge(quota.label, quota.gauge);
+    for (const quota of c.quotas)
+      html += gauge(quota.label, quota.gauge, { key: codexKey(quota.id) });
   } else {
     // No quota list means no reported window length, so the session label
     // can't name its own hours here.
-    html += gauge("Session", c.primary);
-    html += gauge("Weekly", c.secondary);
+    html += gauge("Session", c.primary, { key: codexKey("session") });
+    html += gauge("Weekly", c.secondary, { key: codexKey("weekly") });
   }
   if (!c.live)
     html += `<div class="banner">Live usage unavailable — showing the last numbers from local session logs.</div>`;
@@ -434,19 +519,21 @@ function renderCodex() {
 // ("Session (5h)") and the compact overview card ("Session").
 function claudeGauges(acct, sessionLabel) {
   let h = "";
+  const key = (id) => claudeKey(acct.id, id);
   if ((acct.quotas || []).length) {
     for (const quota of acct.quotas) {
       const scoped = quota.scope_model || quota.scope_surface;
       if (scoped && !showModelWeekly) continue;
       const label = quota.group === "session" ? sessionLabel : quota.label;
-      h += gauge(label, quota.gauge, { claude: true });
+      h += gauge(label, quota.gauge, { claude: true, key: key(quota.id) });
     }
     return h;
   }
-  h += gauge(sessionLabel, acct.five_hour, { claude: true });
-  h += gauge("Weekly", acct.seven_day, { claude: true });
+  h += gauge(sessionLabel, acct.five_hour, { claude: true, key: key("session") });
+  h += gauge("Weekly", acct.seven_day, { claude: true, key: key("weekly") });
   const mg = acct.seven_day_model;
-  if (mg && showModelWeekly) h += gauge(`Weekly (${mg.model})`, mg.gauge, { claude: true });
+  if (mg && showModelWeekly)
+    h += gauge(`Weekly (${mg.model})`, mg.gauge, { claude: true, key: key("weekly_model") });
   return h;
 }
 
@@ -535,10 +622,12 @@ function renderOverview() {
     </div>`;
   if ((cx.quotas || []).length) {
     for (const quota of cx.quotas)
-      html += gauge(quota.group === "session" ? "Session" : quota.label, quota.gauge);
+      html += gauge(quota.group === "session" ? "Session" : quota.label, quota.gauge, {
+        key: codexKey(quota.id),
+      });
   } else {
-    html += gauge("Session", cx.primary);
-    html += gauge("Weekly", cx.secondary);
+    html += gauge("Session", cx.primary, { key: codexKey("session") });
+    html += gauge("Weekly", cx.secondary, { key: codexKey("weekly") });
   }
   if (!cx.available) html += `<div class="sec-sub">No data</div>`;
   const resetCount = availableResets(cx).length;
@@ -688,6 +777,15 @@ function durText(ms) {
   return `${m}m`;
 }
 const pctText = (n) => (n >= 99.95 ? "100%" : `${n < 10 ? n.toFixed(1) : n.toFixed(0)}%`);
+// How long ago something was, for a sentence rather than a duration column:
+// "45m", "1h", "1h 20m". durText keeps the zero minutes ("1h 0m"), which reads
+// oddly mid-sentence.
+function agoText(ms) {
+  const m = Math.max(0, Math.round(ms / MINUTE));
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return m % 60 ? `${h}h ${m % 60}m` : `${h}h`;
+}
 // "5h" / "7d" — the row's own key, derived from the length the provider reports
 // rather than assumed.
 function spanShort(span) {
@@ -705,7 +803,7 @@ function liveWindows() {
     if (span <= 0) return;
     const end = gauge.resets_at * 1000;
     out.push({
-      key: `${provider}|${account}|${id}`,
+      key: historyKey(provider, account, id),
       credential: `${provider}|${account}`,
       provider,
       accountLabel,
@@ -1271,6 +1369,19 @@ async function loadWindowHistory() {
   if (activeTab === "windows") render();
 }
 
+// Kept separate from the history above: this is a handful of numbers the meters
+// need on every tab, where the full record is only the timeline's business.
+async function loadRecentBurn(repaint = false) {
+  if (!showRecentBurn) return;
+  try {
+    recentBurns = await invoke("get_recent_burn", { minutes: recentMinutes() });
+  } catch (_) {
+    // The meters simply go without their band.
+    return;
+  }
+  if (repaint) render();
+}
+
 async function setPanelExpanded(expanded) {
   if (panelExpanded === expanded) return;
   panelExpanded = expanded;
@@ -1284,6 +1395,26 @@ async function setPanelExpanded(expanded) {
 }
 
 // ---------- settings ----------
+// One reach, both surfaces — which is why it sits under Display rather than
+// being repeated in the widget's own group, and why it is worth saying out loud
+// that turning it here moves the widget's band too.
+function recentRangeRow() {
+  const sub = !showRecentBurn
+    ? "The stretch the widget's highlight covers"
+    : widgetSettings.show_recent
+      ? "The stretch the highlight covers, here and on the widget"
+      : "The stretch the highlight covers";
+  return `<div class="grp-row col">
+    <span class="rlab">How far back<span class="rsub">${esc(sub)}</span></span>
+    <div class="choices">${RECENT_CHOICES.map(
+      (choice) =>
+        `<button class="choice${
+          choice.minutes === recentMinutes() ? " on" : ""
+        }" data-recent-minutes="${choice.minutes}">${esc(choice.label)}</button>`
+    ).join("")}</div>
+  </div>`;
+}
+
 function settingRow(label, sub, attrs, enabled, claude) {
   return `<label class="grp-row">
     <span class="rlab">${esc(label)}${sub ? `<span class="rsub">${esc(sub)}</span>` : ""}</span>
@@ -1426,6 +1557,14 @@ function renderSettings() {
     meterPaceLine,
     true
   );
+  html += settingRow(
+    "Recent usage",
+    "Highlight what each window burned lately",
+    "data-meter-recent",
+    showRecentBurn,
+    true
+  );
+  if (showRecentBurn || widgetSettings.show_recent) html += recentRangeRow();
   if (scopes.length) {
     html += settingRow(
       "Scoped limits",
@@ -1436,6 +1575,8 @@ function renderSettings() {
     );
   }
   html += `</div>`;
+  if (showRecentBurn)
+    html += `<div class="sec-sub">Read from the recorded window history, so it only covers time this app was running — the highlight's tooltip says how far back it can actually speak for.</div>`;
 
   html += `<div class="grp-label">Taskbar widget</div><div class="grp">`;
   html += settingRow(
@@ -1458,6 +1599,13 @@ function renderSettings() {
       "A dim second bar under each session bar",
       "data-widget-option=\"show_weekly\"",
       widgetSettings.show_weekly !== false,
+      true
+    );
+    html += settingRow(
+      "Recent usage",
+      "Highlight what each session bar burned lately",
+      "data-widget-option=\"show_recent\"",
+      widgetSettings.show_recent === true,
       true
     );
     // Only worth a row when there is a choice to make. The drag is confined to
@@ -1757,6 +1905,33 @@ function render() {
       render();
     })
   );
+  content.querySelectorAll("[data-meter-recent]").forEach((input) =>
+    input.addEventListener("change", () => {
+      showRecentBurn = input.checked;
+      try {
+        localStorage.setItem("showRecentBurn", input.checked ? "1" : "0");
+      } catch (_) {}
+      // Nothing has been fetched while the band was off, so switching it on has
+      // to go and get the figures before the meters can draw them.
+      if (showRecentBurn) loadRecentBurn(true);
+      render();
+    })
+  );
+  content.querySelectorAll("[data-recent-minutes]").forEach((button) =>
+    button.addEventListener("click", async () => {
+      const minutes = Number(button.dataset.recentMinutes);
+      try {
+        await invoke("set_recent_minutes", { minutes });
+        widgetSettings = { ...widgetSettings, recent_minutes: minutes };
+      } catch (_) {
+        // Leave the old reach in place rather than showing a range the
+        // recorder wasn't asked for.
+        return;
+      }
+      await loadRecentBurn();
+      render();
+    })
+  );
   content.querySelectorAll("[data-model-weekly]").forEach((input) =>
     input.addEventListener("change", () => {
       showModelWeekly = input.checked;
@@ -1987,9 +2162,10 @@ async function refresh() {
     }
   }
   refreshing = false;
-  // The collection just fed the recorder, so the timeline's copy is a sample
-  // behind until it re-reads it.
+  // The collection just fed the recorder, so the timeline's copy and the
+  // meters' band are a sample behind until they re-read it.
   loadWindowHistory();
+  loadRecentBurn(true);
   const elapsed = Date.now() - started;
   spinUntil = Date.now() + (SPIN_MS - (elapsed % SPIN_MS));
   render();
@@ -2177,7 +2353,11 @@ listen("widget-placement", (event) => {
 
 listen("widget-settings", (event) => {
   // The widget can change these itself, by being dragged or resized.
+  const before = recentMinutes();
   if (event.payload) widgetSettings = event.payload;
+  // The band's reach is in here too, and it decides what the recorder was asked
+  // for — a stale figure would be labelled with the new range.
+  if (recentMinutes() !== before) loadRecentBurn(true);
   if (activeTab === "settings") render();
 });
 
@@ -2197,7 +2377,9 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) refresh();
 });
 loadNotificationSettings();
-loadWidgetSettings();
+// The band's reach lives in the widget settings, so its first load has to
+// finish before the meters can ask the recorder for the right stretch.
+loadWidgetSettings().then(() => loadRecentBurn(true));
 loadUpdateState();
 loadWindowHistory();
 refresh();

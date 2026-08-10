@@ -16,7 +16,7 @@ mod windows_history;
 use alerts::{AlertState, NotificationSettings};
 use updates::{UpdateSettings, UpdateSnapshot, UpdateState};
 use models::{ClaudeAccountUsage, Usage};
-use windows_history::WindowHistory;
+use windows_history::{RecentBurn, WindowHistory};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -404,6 +404,15 @@ fn get_window_history() -> WindowHistory {
     windows_history::history()
 }
 
+/// Quota spent on each window over the last `minutes`, for the meters' recent
+/// band. Both the panel and the taskbar widget ask for this rather than reading
+/// the samples themselves: the widget would otherwise need the whole record
+/// shipped to it every refresh just to derive one number per bar.
+#[tauri::command]
+fn get_recent_burn(minutes: i64) -> std::collections::HashMap<String, RecentBurn> {
+    windows_history::recent(minutes)
+}
+
 /// Forget the recorded windows. Unlike the log indexes this can't be rebuilt —
 /// the providers only report the window that is live now — so the timeline
 /// starts over from this moment.
@@ -514,6 +523,7 @@ pub fn run() {
             consume_codex_reset,
             clear_history_cache,
             get_window_history,
+            get_recent_burn,
             clear_window_history,
             set_panel_expanded,
             get_update_state,
@@ -529,6 +539,7 @@ pub fn run() {
             widget::set_widget_width,
             widget::set_widget_gap,
             widget::set_widget_option,
+            widget::set_recent_minutes,
             widget::reset_widget_position
         ])
         .setup(|app| {

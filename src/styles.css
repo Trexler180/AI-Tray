@@ -337,6 +337,26 @@ body {
   background: linear-gradient(90deg, rgba(214, 62, 62, 0.55), rgba(244, 110, 110, 0.7));
   border-right-color: #ff8a8a;
 }
+/* Recent-usage band: the quota spent in the last X minutes, filled violet
+   against the fill edge — the end of the bar that just moved.
+
+   Violet is the one saturated hue these meters don't already use. It reads
+   against the teal and the orange, and against the red a warn meter turns —
+   which is the whole reason it needs no per-state exception, where red did.
+   The credits meter is violet too, but a credits bar never carries a band: it
+   has no window in time, so `creditsBar` passes no history key to look one up
+   with. Haloed like the pace line so the edges stay crisp on any fill. */
+.bgauge .brecent {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /* A window barely moves in an hour, so most bands are a percent or two wide.
+     Without a floor they round away to nothing on a 300px bar. */
+  min-width: 3px;
+  background: rgba(147, 128, 236, 0.85);
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
 /* Pace line: where the clock has got to inside the window, drawn in the same
    direction as the fill so the two can be compared directly — fill short of the
    line means the allowance is going faster than the window refills it. Kept to

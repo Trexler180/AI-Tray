@@ -6,7 +6,7 @@
 // first Claude on top and the second Claude across the row underneath, instead
 // of one stretched Codex cell above a cramped pair.
 
-import { clamp, elapsedPercent, esc } from "./shared.js";
+import { clamp, elapsedPercent, esc, groupKey } from "./shared.js";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -50,12 +50,15 @@ function textWidth(text, px) {
 
 let data = null;
 /** Drawing options, owned by the panel's Settings tab and pushed here. */
-let opts = { show_pace: true, show_weekly: true };
+let opts = { show_pace: true, show_weekly: true, show_recent: false, recent_minutes: 60 };
+/** Recent spend per window key, from the recorder. Null while the band is off. */
+let burns = null;
 
-/** One account's two windows, in the shape the renderer wants. */
-function account(label, provider, five, week) {
+/** One account's two windows, in the shape the renderer wants. `keys` are the
+ *  recorder's, for looking up what each window burned lately. */
+function account(label, provider, five, week, keys = {}) {
   if (!five && !week) return null;
-  return { label, provider, five, week };
+  return { label, provider, five, week, fiveKey: keys.five, weekKey: keys.week };
 }
 
 /** Quota windows are grouped the same way the backend groups them when it
@@ -76,7 +79,10 @@ function accounts(usage) {
   if (cx?.available) {
     const five = cx.primary || gaugeForGroup(cx.quotas, "session");
     const week = cx.secondary || gaugeForGroup(cx.quotas, "weekly");
-    const a = account("Codex", "codex", five, week);
+    const a = account("Codex", "codex", five, week, {
+      five: groupKey("codex", "", cx.quotas, "session", "session"),
+      week: groupKey("codex", "", cx.quotas, "weekly", "weekly"),
+    });
     if (a) out.push(a);
   }
   const cl = usage?.claude;
@@ -84,10 +90,15 @@ function accounts(usage) {
     const list = cl.accounts?.length ? cl.accounts : null;
     if (list) {
       for (const acct of list) {
-        const a = account(acct.label || "Claude", "claude", acct.five_hour, acct.seven_day);
+        const a = account(acct.label || "Claude", "claude", acct.five_hour, acct.seven_day, {
+          five: groupKey("claude", acct.id, acct.quotas, "session", "session"),
+          week: groupKey("claude", acct.id, acct.quotas, "weekly", "weekly"),
+        });
         if (a) out.push(a);
       }
     } else {
+      // No account list means nothing was recorded against an account id
+      // either, so these windows have no history to look up.
       const a = account("Claude", "claude", cl.five_hour, cl.seven_day);
       if (a) out.push(a);
     }
@@ -136,8 +147,27 @@ function cell(g, colour, draw = {}) {
   const pace = draw.pace ? elapsedPercent(g) : null;
   const mark = pace === null ? "" : `<i style="--t:${pace.toFixed(1)}"></i>`;
   const label = draw.name ? `<b>${esc(draw.name)}</b>` : "";
+  // The band can't be wider than the fill it sits in: a rolling window that dipped
+  // and climbed again can total more rises than it currently reads.
+  const recent = Math.min(draw.recent || 0, p);
+  const band = recent < RECENT_MIN_PCT ? "" : `<s></s>`;
   return `<span class="cell ${hot ? "hot" : ""} ${draw.cls || ""}"
-    style="--p:${p.toFixed(1)};--c:${colour}"><u></u>${mark}${label}</span>`;
+    style="--p:${p.toFixed(1)};--c:${colour};--r:${recent.toFixed(
+    1
+  )}"><u></u>${band}${mark}${label}</span>`;
+}
+
+/** Below this the band is a sub-pixel sliver on a taskbar-width bar, which
+ *  reads as a rendering artefact rather than a reading. */
+const RECENT_MIN_PCT = 0.5;
+
+/** What a window burned lately, or null if there is nothing worth drawing:
+ *  the band is off, the window has no record, or the recorder says the figure
+ *  reaches too much further back than asked to pass as "the last X". */
+function burnFor(key) {
+  if (!opts.show_recent || !key) return null;
+  const burn = burns?.[key];
+  return burn?.matched ? burn.spent : null;
 }
 
 function column(acct, cols) {
@@ -158,11 +188,14 @@ function column(acct, cols) {
   // weekly bar is switched off, or it disappears from the widget entirely.
   const only = acct.five && week ? null : acct.five || acct.week;
   if (only) {
-    return `<div class="col">${cell(only, colour, { pace, name, cls: "solo" })}</div>`;
+    const recent = burnFor(acct.five ? acct.fiveKey : acct.weekKey);
+    return `<div class="col">${cell(only, colour, { pace, name, cls: "solo", recent })}</div>`;
   }
 
+  // No band on the weekly bar: it is a few pixels tall and a week's allowance
+  // barely moves in an hour, so it would be noise rather than a reading.
   return `<div class="col">
-    ${cell(acct.five, colour, { pace, name })}
+    ${cell(acct.five, colour, { pace, name, recent: burnFor(acct.fiveKey) })}
     ${cell(week, colour, { cls: "wk", pace })}
   </div>`;
 }
@@ -189,7 +222,23 @@ async function refresh() {
   } catch {
     // Keep the last snapshot on screen; the widget never blanks on a hiccup.
   }
+  await loadBurns();
   render();
+}
+
+/** The recorder does the measuring (see `recent_in` in windows_history.rs), so
+ *  the widget asks for one number per bar rather than having the whole window
+ *  history shipped to it on every refresh. */
+async function loadBurns() {
+  if (!opts.show_recent) {
+    burns = null;
+    return;
+  }
+  try {
+    burns = await invoke("get_recent_burn", { minutes: opts.recent_minutes || 60 });
+  } catch {
+    // The bars simply go without their band.
+  }
 }
 
 async function loadOptions() {
@@ -199,6 +248,7 @@ async function loadOptions() {
     // Defaults are the same as the backend's, so a failure here just means the
     // widget draws everything until the next change comes through.
   }
+  await loadBurns();
   render();
 }
 
@@ -215,8 +265,12 @@ function subscribe(name, handler) {
 subscribe("usage-updated", refresh);
 // ...and this when the Settings tab changes how the widget should draw.
 subscribe("widget-settings", (event) => {
+  const before = `${opts.show_recent}|${opts.recent_minutes}`;
   if (event.payload) opts = event.payload;
   render();
+  // A drag or resize broadcasts these too, so only go back to the recorder when
+  // the band itself changed.
+  if (`${opts.show_recent}|${opts.recent_minutes}` !== before) loadBurns().then(render);
 });
 // The strip changes height when the taskbar is switched to small icons, or when
 // the widget moves to a display at another scale. Labels are sized off that.
