@@ -438,16 +438,23 @@ mod tests {
     #[test]
     fn fixture_uses_event_dates_and_cached_subset_semantics() {
         let root = std::env::temp_dir().join(format!("ai-usage-codex-{}", uuid::Uuid::new_v4()));
-        let sessions = root.join("sessions/2026/07/15");
+        // The fixture's two token_count events must land on two different days
+        // inside the 30-day window, since that is what `used_days` counts. Three
+        // and two days back keeps them apart and keeps them recent. The dated
+        // folder is only realism — the scanner walks `sessions` whatever the
+        // layout underneath.
+        let sessions = root
+            .join("sessions")
+            .join(crate::util::days_ago_utc(3).replace('-', "/"));
         fs::create_dir_all(&sessions).unwrap();
-        fs::copy(
+        crate::util::copy_fixture_dated(
             Path::new(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/tests/fixtures/codex_token_count.jsonl"
             )),
-            sessions.join("rollout-fixture.jsonl"),
-        )
-        .unwrap();
+            &sessions.join("rollout-fixture.jsonl"),
+            &[("2026-07-14", 3), ("2026-07-15", 2)],
+        );
         let usage = collect_from_root(&root, false);
         assert_eq!(usage.tokens_30d, 1_800);
         assert_eq!(usage.token_breakdown.cached_input, 900);

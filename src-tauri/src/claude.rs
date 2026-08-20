@@ -321,14 +321,16 @@ mod tests {
     fn fixture_scans_and_preserves_separate_cache_categories() {
         let root = std::env::temp_dir().join(format!("ai-usage-claude-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
-        fs::copy(
+        // Re-dated on the way in: the assertions below read a 30-day window, so
+        // the fixture's own date has to stay inside it.
+        crate::util::copy_fixture_dated(
             Path::new(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/tests/fixtures/claude_assistant.jsonl"
             )),
-            root.join("fixture.jsonl"),
-        )
-        .unwrap();
+            &root.join("fixture.jsonl"),
+            &[("2026-07-15", 1)],
+        );
         let usage = collect_from_roots(std::slice::from_ref(&root), false);
         assert_eq!(usage.tokens_30d, 1_000);
         assert_eq!(usage.token_breakdown.cache_creation, 200);

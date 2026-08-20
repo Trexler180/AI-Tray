@@ -124,6 +124,33 @@ pub fn codex_window_meta_by_slot(slot: &str) -> (String, String, &'static str) {
     }
 }
 
+/// Test-only: copy a fixture across, landing its hardcoded calendar dates on
+/// recent ones.
+///
+/// The fixtures are written with absolute dates, but everything asserted about
+/// them reads a window measured from `now` — `tokens_30d`, the daily buckets.
+/// Left alone they pass until the fixture turns 30 days old and then fail for a
+/// reason that has nothing to do with the code under test, which is exactly
+/// what happened. `remap` pairs each date string in the file with how many days
+/// before today it should land on, so the spacing between them survives.
+#[cfg(test)]
+pub fn copy_fixture_dated(src: &std::path::Path, dest: &std::path::Path, remap: &[(&str, i64)]) {
+    let mut text = std::fs::read_to_string(src).expect("fixture is readable");
+    for (original, days_ago) in remap {
+        text = text.replace(original, &days_ago_utc(*days_ago));
+    }
+    std::fs::write(dest, text).expect("fixture copy is writable");
+}
+
+/// `YYYY-MM-DD`, that many days before today, UTC. Matches the date format the
+/// fixtures and the session folder layout both use.
+#[cfg(test)]
+pub fn days_ago_utc(days: i64) -> String {
+    (chrono::Utc::now() - Duration::days(days))
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
