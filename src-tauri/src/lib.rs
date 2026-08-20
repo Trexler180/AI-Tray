@@ -533,6 +533,7 @@ pub fn run() {
             open_panel,
             widget::get_widget_settings,
             widget::get_widget_placement,
+            widget::get_widget_edges,
             widget::list_widget_monitors,
             widget::set_widget_monitor,
             widget::set_widget_enabled,

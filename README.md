@@ -142,10 +142,12 @@ switched on in Settings → Taskbar widget.
 - Clicking it toggles the panel, exactly as the tray icon does. It never takes
   focus (`WS_EX_NOACTIVATE`), stays out of Alt-Tab, and hides itself while a
   fullscreen window owns the monitor.
-- Drag it along the taskbar to move it, or drag its left edge to resize (72–420
-  px; the right edge stays anchored to the tray). Both are remembered. Settings
-  has a width stepper, switches for the pace marks and the weekly bar, and a
-  Reset for position and size.
+- Drag it along the taskbar to move it, or drag either side edge to resize
+  (72–420 px). Dragging the left edge holds the right one against the tray;
+  dragging the right edge spends the tray gap so the left one holds still. A
+  grip disappears once that side is against the end of the bar. Both position
+  and size are remembered. Settings has a width stepper, switches for the pace
+  marks and the weekly bar, and a Reset for position and size.
 - With more than one display, Settings gains a Display picker. The drag is
   confined to a single taskbar — that is what stops the widget being dropped in
   the middle of the desktop — so choosing the screen is a setting rather than a

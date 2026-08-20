@@ -1626,7 +1626,7 @@ function renderSettings() {
       </div>`;
     }
     html += `<div class="grp-row">
-      <span class="rlab">Width<span class="rsub">Or drag the widget's left edge</span></span>
+      <span class="rlab">Width<span class="rsub">Or drag either side edge</span></span>
       <span class="stepper">
         <button class="acct-btn" data-widget-width="-10" title="Narrower">−</button>
         <b class="stepval">${Math.round(widgetSettings.width || 114)} px</b>
@@ -1860,6 +1860,9 @@ function render() {
         // duplicating the min and max in a third place.
         await invoke("set_widget_width", {
           width: (widgetSettings.width || 114) + step,
+          // The stepper only changes the width; the gap it is anchored by is
+          // the widget's own drag to set.
+          gap: null,
           commit: true,
         });
         widgetSettings = await invoke("get_widget_settings");

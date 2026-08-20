@@ -12,10 +12,14 @@
          than with data-tauri-drag-region, because that starts the OS drag on
          mousedown and eats the click. -->
     <div id="widget" class="w">
-      <!-- Left edge resizes. The right edge is anchored to the tray, so growing
-           leftwards is the only direction that keeps the widget where it is.
-           Kept a sibling of the content, which gets replaced on every render. -->
-      <div id="grip" class="grip" title="Drag to resize"></div>
+      <!-- Both side edges resize. The right edge is the one the window is
+           anchored by, so dragging that one trades width against the tray gap
+           to keep the left edge still (see set_widget_width). Each grip hides
+           when its side is up against the end of the bar and has nothing left
+           to give. Kept siblings of the content, which gets replaced on every
+           render. -->
+      <div id="grip-l" class="grip l" title="Drag to resize"></div>
+      <div id="grip-r" class="grip r" title="Drag to resize"></div>
       <div id="content" class="content"></div>
     </div>
     <script type="module" src="/src/widget.js"></script>

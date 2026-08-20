@@ -47,7 +47,7 @@ pub struct WidgetSettings {
     /// come and go. Updated when the user drags the widget.
     #[serde(default = "default_gap")]
     pub tray_gap: f64,
-    /// Logical width, set by dragging the widget's left edge.
+    /// Logical width, set by dragging either of the widget's side edges.
     #[serde(default = "default_width")]
     pub width: f64,
     /// Draw the pace mark — how far through each window the clock is.
@@ -115,6 +115,10 @@ pub struct WidgetState {
     /// disagree with the one that actually placed the window — and did, telling
     /// people there was no taskbar while the widget sat on it.
     placement: Mutex<Placement>,
+    /// Which ends of its travel it is up against, from the same run. Recorded
+    /// for the same reason as the placement: `place` is the one that does the
+    /// clamping, so it is the only thing that knows.
+    edges: Mutex<Edges>,
 }
 
 impl WidgetState {
@@ -122,11 +126,16 @@ impl WidgetState {
         Self {
             settings: Mutex::new(load_settings()),
             placement: Mutex::new(Placement::Ok),
+            edges: Mutex::new(Edges::default()),
         }
     }
 
     fn placement(&self) -> std::sync::MutexGuard<'_, Placement> {
         self.placement.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn edges(&self) -> std::sync::MutexGuard<'_, Edges> {
+        self.edges.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// A poisoned lock here means some other thread panicked mid-update; the
@@ -312,36 +321,74 @@ pub enum Placement {
     NoTaskbar,
 }
 
+/// Which ends of its travel the widget is sitting against, so it can drop the
+/// resize grip that has nowhere left to pull from. `left` is the left end of
+/// the taskbar strip; `right` is flush against the notification area, which is
+/// as far right as a non-negative tray gap can take it.
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub struct Edges {
+    pub left: bool,
+    pub right: bool,
+}
+
+/// Slack allowed before the widget counts as touching an end, in logical
+/// pixels. The gap survives a round trip through physical pixels, so it lands
+/// a fraction off zero rather than on it.
+const EDGE_SLACK: f64 = 0.5;
+
+/// Which ends the placement ran into: `x` is where the window was actually put,
+/// `sx` the left end of the strip, and `gap` what was left over to the tray
+/// once the clamp had its say.
+fn edges_at(x: i32, sx: i32, gap: f64) -> Edges {
+    let (left, right) = (x <= sx, gap <= EDGE_SLACK);
+    // Both at once — a widget as wide as the run it has to sit in — would leave
+    // it with no grip at all, and a grip shrinks as well as grows. Keep them.
+    if left && right {
+        return Edges::default();
+    }
+    Edges { left, right }
+}
+
 /// Size the window to the reserved strip and park it just left of the
 /// notification area. Returns why it declined, when it did: the caller hides
 /// the window rather than leaving it somewhere wrong.
 pub fn position(app: &tauri::AppHandle) -> Placement {
-    let result = place(app);
-    let changed = {
-        let state = app.state::<WidgetState>();
+    let (result, edges) = place(app);
+    let state = app.state::<WidgetState>();
+    let placement_changed = {
         let mut last = state.placement();
         let changed = *last != result;
         *last = result;
         changed
     };
-    // Only on a change: this runs every few seconds and the panel re-renders
-    // whenever it hears about it.
-    if changed {
-        use tauri::Emitter;
+    let edges_changed = {
+        let mut last = state.edges();
+        let changed = *last != edges;
+        *last = edges;
+        changed
+    };
+    // Only on a change: this runs every few seconds, and both windows re-render
+    // whenever they hear about one.
+    use tauri::Emitter;
+    if placement_changed {
         let _ = app.emit("widget-placement", result);
+    }
+    if edges_changed {
+        let _ = app.emit("widget-edges", edges);
     }
     result
 }
 
-/// The decision itself. Split out so `position` is the only thing that records
-/// and announces it.
-fn place(app: &tauri::AppHandle) -> Placement {
+/// The decision itself, and where the widget ended up against its limits. Split
+/// out so `position` is the only thing that records and announces either.
+fn place(app: &tauri::AppHandle) -> (Placement, Edges) {
+    let nowhere = Edges::default();
     let Some(window) = app.get_webview_window("widget") else {
-        return Placement::NoTaskbar;
+        return (Placement::NoTaskbar, nowhere);
     };
     let preferred = app.state::<WidgetState>().get().monitor.clone();
     let Some(monitor) = widget_monitor(&window, preferred.as_deref()) else {
-        return Placement::NoTaskbar;
+        return (Placement::NoTaskbar, nowhere);
     };
     let scale = monitor.scale_factor();
     // The reserved strip, not the taskbar's window rect: the window is taller
@@ -353,10 +400,10 @@ fn place(app: &tauri::AppHandle) -> Placement {
     // auto-hidden bar would leave the widget floating over whatever app owns
     // that space — neither is better than not drawing.
     let Some(strip) = taskbar_strip(&monitor) else {
-        return Placement::NoTaskbar;
+        return (Placement::NoTaskbar, nowhere);
     };
     if !strip.horizontal {
-        return Placement::VerticalTaskbar;
+        return (Placement::VerticalTaskbar, nowhere);
     }
     let (sx, sy, sw, sh) = strip.rect;
 
@@ -386,6 +433,11 @@ fn place(app: &tauri::AppHandle) -> Placement {
         state.get().tray_gap = effective_gap;
     }
 
+    // Read off the applied position rather than the asked-for one: a drag that
+    // ran past either end is exactly the case the widget wants to know about,
+    // and that is only visible after the clamp above.
+    let edges = edges_at(x, sx, effective_gap);
+
     // Only touch the window when something actually moved. This runs on a
     // timer, and set_size/set_position are window messages, not free.
     let h_px = (logical_h * scale).round() as u32;
@@ -401,7 +453,7 @@ fn place(app: &tauri::AppHandle) -> Placement {
     {
         let _ = window.set_position(PhysicalPosition::new(x, sy));
     }
-    Placement::Ok
+    (Placement::Ok, edges)
 }
 
 
@@ -822,6 +874,14 @@ pub fn get_widget_placement(state: tauri::State<'_, WidgetState>) -> Placement {
     *state.placement()
 }
 
+/// Which ends of the bar the widget is up against, as of the last `position`
+/// run. The widget listens for `widget-edges` from then on; this is how it
+/// learns the state it started in, since no change has been announced yet.
+#[tauri::command]
+pub fn get_widget_edges(state: tauri::State<'_, WidgetState>) -> Edges {
+    *state.edges()
+}
+
 /// Tell the widget its settings changed. It renders from these, and it is a
 /// separate window from the panel that changed them.
 fn broadcast(app: &tauri::AppHandle, settings: &WidgetSettings) {
@@ -919,23 +979,36 @@ pub fn set_widget_gap(
     Ok(())
 }
 
-/// Set the width, in logical pixels. Called repeatedly while the left edge is
-/// being dragged, so `commit` keeps the settings file out of the drag loop —
-/// only the release writes to disk.
+/// Set the width, in logical pixels. Called repeatedly while an edge is being
+/// dragged, so `commit` keeps the settings file out of the drag loop — only the
+/// release writes to disk.
+///
+/// `gap` comes along for a drag of the *right* edge. The window is anchored by
+/// its right edge (see `place`), so widening from the right has to buy the room
+/// out of the tray gap in the same breath, or the widget would grow leftwards
+/// and the edge under the pointer would not move at all. Both in one command
+/// because two would leave a frame drawn with one applied and not the other.
 #[tauri::command]
 pub fn set_widget_width(
     app: tauri::AppHandle,
     state: tauri::State<'_, WidgetState>,
     width: f64,
+    gap: Option<f64>,
     commit: bool,
 ) -> Result<(), String> {
-    let snapshot = {
+    {
         let mut settings = state.get();
         settings.width = width.clamp(MIN_WIDTH, MAX_WIDTH);
-        settings.clone()
-    };
+        if let Some(gap) = gap {
+            settings.tray_gap = gap.max(0.0);
+        }
+    }
     position(&app);
     if commit {
+        // After `position`, not before: it folds the strip clamp back into the
+        // gap, and persisting the asked-for value would bank travel that has to
+        // be given back before the next drag moves anything.
+        let snapshot = state.get().clone();
         persist(&snapshot)?;
         broadcast(&app, &snapshot);
     }
@@ -982,6 +1055,36 @@ mod tests {
         assert_eq!(settings.width, DEFAULT_WIDTH);
         assert!(settings.show_pace);
         assert!(settings.show_weekly);
+    }
+
+    /// The common case: room on both sides, so both grips stay.
+    #[test]
+    fn a_widget_in_the_middle_of_the_bar_is_against_neither_end() {
+        assert_eq!(edges_at(600, 0, 10.0), Edges::default());
+    }
+
+    #[test]
+    fn a_widget_dragged_to_the_start_of_the_bar_is_against_the_left() {
+        let edges = edges_at(0, 0, 480.0);
+        assert!(edges.left && !edges.right);
+    }
+
+    /// Right means flush against the notification area — as far right as the
+    /// gap goes — not the far end of the screen.
+    #[test]
+    fn a_widget_pushed_up_to_the_tray_is_against_the_right() {
+        let edges = edges_at(1500, 0, 0.0);
+        assert!(edges.right && !edges.left);
+        // The gap is a physical-pixel round trip, so it lands near zero.
+        assert!(edges_at(1500, 0, 0.4).right);
+        assert!(!edges_at(1500, 0, 2.0).right);
+    }
+
+    /// A strip too short to hold the widget touches both ends at once. Dropping
+    /// both grips would leave no way to resize it back down by hand.
+    #[test]
+    fn spanning_the_whole_run_keeps_both_grips() {
+        assert_eq!(edges_at(0, 0, -30.0), Edges::default());
     }
 
     const MON: Rect = (0, 0, 2048, 1152);

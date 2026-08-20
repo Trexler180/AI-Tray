@@ -183,21 +183,27 @@ body {
   opacity: 0.45;
 }
 
-/* Resize handle on the left edge. Invisible until the pointer is over the
-   widget, then a faint rule — enough to find, not enough to notice all day. */
+/* Resize handles, one per side edge. Invisible until the pointer is over the
+   widget, then a faint rule — enough to find, not enough to notice all day.
+   The `hidden` attribute (set from widget.js when that side is against the end
+   of the bar) takes them out of both the paint and the hit test. */
 .grip {
   position: absolute;
-  left: 0;
   top: 0;
   bottom: 0;
   width: 7px;
   cursor: col-resize;
   z-index: 3;
 }
+.grip.l {
+  left: 0;
+}
+.grip.r {
+  right: 0;
+}
 .grip::after {
   content: "";
   position: absolute;
-  left: 2px;
   top: 22%;
   bottom: 22%;
   width: 1px;
@@ -205,6 +211,12 @@ body {
   background: var(--w-on);
   opacity: 0;
   transition: opacity 0.15s;
+}
+.grip.l::after {
+  left: 2px;
+}
+.grip.r::after {
+  right: 2px;
 }
 .w:hover .grip::after {
   opacity: 0.35;

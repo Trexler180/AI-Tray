@@ -13,7 +13,10 @@ const { listen } = window.__TAURI__.event;
 
 const host = document.getElementById("widget");
 const content = document.getElementById("content");
-const grip = document.getElementById("grip");
+const grips = {
+  left: document.getElementById("grip-l"),
+  right: document.getElementById("grip-r"),
+};
 
 /** Horizontal padding on `.w`, doubled — the rail is the window less that. */
 const SIDE_PADDING = 18;
@@ -323,52 +326,98 @@ function scheduleMove(commit) {
 
 host.addEventListener("pointerdown", (e) => {
   if (e.button !== 0) return;
-  if (e.target === grip) {
-    startResize(e);
+  const side = sideOfGrip(e.target);
+  if (side) {
+    startResize(e, side);
     return;
   }
   press = { x: e.clientX, y: e.clientY };
 });
 
-// ---- resizing the left edge ----
-// Movement deltas rather than absolute coordinates: the window's left edge is
-// moving under the cursor as it resizes, so anything measured against the
-// window would chase itself.
+// ---- resizing from either side edge ----
+// Movement deltas rather than absolute coordinates: the edge being dragged is
+// moving under the cursor as the window resizes, so anything measured against
+// the window would chase itself.
 let resizing = null;
 let queued = false;
 
-function startResize(e) {
-  resizing = { from: window.innerWidth, dx: 0 };
-  grip.setPointerCapture?.(e.pointerId);
+function sideOfGrip(target) {
+  if (target === grips.left) return "left";
+  if (target === grips.right) return "right";
+  return null;
+}
+
+function startResize(e, side) {
+  // The gap is snapshotted here rather than read per frame because the drag
+  // itself changes it, and `opts` only catches up on the commit at the end.
+  resizing = { side, from: window.innerWidth, gap: opts.tray_gap ?? 10, dx: 0 };
+  grips[side].setPointerCapture?.(e.pointerId);
   e.preventDefault();
 }
 
 function resizeTo(commit) {
-  const width = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, resizing.from - resizing.dx));
-  invoke("set_widget_width", { width, commit }).catch(() => {});
+  const { side, from, dx } = resizing;
+  // Dragging the left edge left widens; dragging the right edge right widens.
+  const wanted = side === "left" ? from - dx : from + dx;
+  const width = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, wanted));
+  // The window hangs off its right edge, so widening from that side has to come
+  // out of the tray gap for the left edge to hold still. Measured off the width
+  // that was actually applied, not the raw travel: past MIN/MAX the widget then
+  // stops dead instead of sliding along the bar.
+  const gap = side === "right" ? Math.max(0, resizing.gap - (width - from)) : null;
+  invoke("set_widget_width", { width, gap, commit }).catch(() => {});
 }
 
-grip.addEventListener("pointermove", (e) => {
-  if (!resizing) return;
-  resizing.dx += e.movementX;
-  // One resize per frame at most; a pointermove can fire far more often, and
-  // each one is an IPC round trip plus a window resize.
-  if (queued) return;
-  queued = true;
-  requestAnimationFrame(() => {
-    queued = false;
-    if (resizing) resizeTo(false);
+for (const [side, grip] of Object.entries(grips)) {
+  grip.addEventListener("pointermove", (e) => {
+    if (resizing?.side !== side) return;
+    resizing.dx += e.movementX;
+    // One resize per frame at most; a pointermove can fire far more often, and
+    // each one is an IPC round trip plus a window resize.
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      if (resizing) resizeTo(false);
+    });
   });
-});
 
-for (const kind of ["pointerup", "pointercancel"]) {
-  grip.addEventListener(kind, (e) => {
-    if (!resizing) return;
-    resizeTo(true); // the release is the only thing that touches disk
-    resizing = null;
-    grip.releasePointerCapture?.(e.pointerId);
-  });
+  for (const kind of ["pointerup", "pointercancel"]) {
+    grip.addEventListener(kind, (e) => {
+      if (resizing?.side !== side) return;
+      resizeTo(true); // the release is the only thing that touches disk
+      resizing = null;
+      grip.releasePointerCapture?.(e.pointerId);
+      // Whatever the drag ran into is only safe to act on now — see showGrips.
+      if (pendingEdges) showGrips(pendingEdges);
+    });
+  }
 }
+
+// ---- grips at the ends of the bar ----
+// A side that is already up against the end of the taskbar has nothing left to
+// pull from, so its grip goes rather than sitting there dead. The backend is
+// the one that knows: it does the clamping when it places the window.
+let pendingEdges = null;
+
+function showGrips(edges) {
+  if (!edges) return;
+  // Never mid-drag: hiding the element the pointer is captured by drops the
+  // rest of the gesture, including the release that writes the size to disk.
+  if (resizing) {
+    pendingEdges = edges;
+    return;
+  }
+  pendingEdges = null;
+  grips.left.hidden = !!edges.left;
+  grips.right.hidden = !!edges.right;
+}
+
+subscribe("widget-edges", (event) => showGrips(event.payload));
+// The event only fires on a change, so the state at startup has to be asked for.
+invoke("get_widget_edges")
+  .then(showGrips)
+  .catch(() => {});
 
 host.addEventListener("pointermove", (e) => {
   if (moving) {
@@ -411,6 +460,13 @@ for (const kind of ["pointerup", "pointercancel"]) {
     if (moving) {
       scheduleMove(true);
       moving = null;
+    }
+    // A resize the grip's own handler didn't see — capture lost, say. Left set,
+    // it would treat the next hover over that grip as a continued drag.
+    if (resizing && !sideOfGrip(e.target)) {
+      resizeTo(true);
+      resizing = null;
+      showGrips(pendingEdges);
     }
   });
 }
