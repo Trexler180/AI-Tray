@@ -10,6 +10,7 @@ mod pricing;
 mod resets;
 mod updates;
 mod util;
+mod visibility;
 mod widget;
 mod windows_history;
 
@@ -510,6 +511,7 @@ pub fn run() {
         .manage(Quitting(AtomicBool::new(false)))
         .manage(Expanded(AtomicBool::new(false)))
         .manage(widget::WidgetState::load())
+        .manage(visibility::VisibilityState::load())
         .invoke_handler(tauri::generate_handler![
             get_usage,
             get_cached_usage,
@@ -531,6 +533,8 @@ pub fn run() {
             check_for_updates_now,
             install_update,
             open_panel,
+            visibility::get_account_visibility,
+            visibility::set_account_hidden,
             widget::get_widget_settings,
             widget::get_widget_placement,
             widget::get_widget_edges,

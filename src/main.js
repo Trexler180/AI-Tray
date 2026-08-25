@@ -1,4 +1,12 @@
-import { clamp, elapsedPercent, esc, historyKey } from "./shared.js";
+import {
+  accountShown,
+  clamp,
+  claudeAccount,
+  CODEX_ACCOUNT,
+  elapsedPercent,
+  esc,
+  historyKey,
+} from "./shared.js";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -54,7 +62,28 @@ let addFolderFocusPending = false; // focus the add-folder input once when opene
 const expandedHealth = new Set(); // diagnostic rows currently expanded (Settings)
 let windowHistory = null; // recorded quota windows, from the Rust recorder
 let windowRange = localStorage.getItem("windowRange") || "day"; // day | week | two
+// Which accounts each surface hides. Only the panel half is read here — the
+// widget keeps its own, so an account can be on the taskbar and out of the
+// panel or the other way round — but the whole record is held so Settings can
+// draw both switches.
+let accountVisibility = { panel_hidden: [], widget_hidden: [] };
 let panelExpanded = false; // timeline showing its wide layout in a widened panel
+
+// ---------- account visibility ----------
+// Whether an account is drawn in the panel. Settings deliberately ignores this:
+// it is the screen the switches live on, so it always lists every account.
+const panelShows = (id) => accountShown(accountVisibility, "panel", id);
+// The Claude accounts the panel is currently drawing.
+const shownClaudeAccounts = () =>
+  (data?.claude?.accounts || []).filter((a) => panelShows(claudeAccount(a.id)));
+// Whether the Claude side has anything to show. A snapshot with no per-account
+// list at all still stands for one account — the default folder — which the
+// empty id keys, matching the widget and the Settings row that toggles it.
+const claudeInPanel = () =>
+  (data?.claude?.accounts || []).length
+    ? shownClaudeAccounts().length > 0
+    : panelShows(claudeAccount(""));
+const codexInPanel = () => panelShows(CODEX_ACCOUNT);
 
 // ---------- formatting helpers ----------
 const usd = (n) => "$" + (Number.isFinite(n) ? n : 0).toFixed(2);
@@ -247,7 +276,7 @@ function gauge(label, g, opts = {}) {
 // ---------- usage credits ----------
 // Accounts whose live snapshot reported an extra_usage block at all.
 function creditAccounts() {
-  return (data?.claude?.accounts || []).filter((a) => a.extra_usage);
+  return shownClaudeAccounts().filter((a) => a.extra_usage);
 }
 // Credits are worth a meter only when the switch is on and a cap is set.
 function creditsActive(a) {
@@ -578,7 +607,7 @@ function renderClaude() {
       `<div class="empty-state">No Claude data.<br/>Sign in with Claude Code, or check <code>~/.claude</code>.</div>`
     );
 
-  const accounts = c.accounts || [];
+  const accounts = shownClaudeAccounts();
   const multi = accounts.length > 1;
   const primaryHealth = accounts.length ? accounts[0].health : null;
 
@@ -605,16 +634,11 @@ function renderClaude() {
   return html;
 }
 
-function renderOverview() {
-  const cx = data.codex,
-    cl = data.claude;
-  let html = header(
-    "Overview",
-    `<span class="pill">${usd(cx.cost_today + cl.cost_today)} today</span>`
-  );
-
-  // Codex card
-  html += `<div class="ov-card" data-goto="codex">
+// One provider card on the Overview. Split out of `renderOverview` because
+// either can now be absent — a provider whose accounts are all hidden here
+// draws nothing at all rather than an empty card.
+function overviewCodexCard(cx) {
+  let html = `<div class="ov-card" data-goto="codex">
     <div class="ov-head">
       <div class="ov-name">Codex ${healthBadge(cx.health)}
         ${cx.plan_type ? `<span class="pill">${esc(cx.plan_type)}</span>` : ""}</div>
@@ -635,12 +659,12 @@ function renderOverview() {
     html += `<div class="ov-reset">${resetCount} reset credit${
       resetCount > 1 ? "s" : ""
     } available</div>`;
-  html += `</div>`;
+  return html + `</div>`;
+}
 
-  // Claude card
-  const accounts = cl.accounts || [];
+function overviewClaudeCard(cl, accounts) {
   const multi = accounts.length > 1;
-  html += `<div class="ov-card" data-goto="claude">
+  let html = `<div class="ov-card" data-goto="claude">
     <div class="ov-head">
       <div class="ov-name">Claude
         ${multi ? "" : healthBadge(accounts.length ? accounts[0].health : null)}</div>
@@ -659,8 +683,30 @@ function renderOverview() {
   } else {
     html += `<div class="sec-sub">Live unavailable — open Claude Code</div>`;
   }
-  html += `</div>`;
+  return html + `</div>`;
+}
 
+function renderOverview() {
+  const cx = data.codex,
+    cl = data.claude;
+  const codex = codexInPanel();
+  const accounts = shownClaudeAccounts();
+  const claude = claudeInPanel();
+  // The headline follows the cards below it: a provider that isn't on this
+  // screen shouldn't be quietly inside its total. It can only be split by
+  // provider, not by account — the local logs the cost comes from carry no
+  // account id — so hiding one of several Claude accounts leaves it whole.
+  const today = (codex ? cx.cost_today : 0) + (claude ? cl.cost_today : 0);
+  let html = header("Overview", `<span class="pill">${usd(today)} today</span>`);
+
+  if (!codex && !claude) {
+    return (
+      html +
+      `<div class="empty-state">Every account is hidden here.<br/>Turn one back on in Settings → Accounts.</div>`
+    );
+  }
+  if (codex) html += overviewCodexCard(cx);
+  if (claude) html += overviewClaudeCard(cl, accounts);
   return html;
 }
 
@@ -679,7 +725,7 @@ function renderCredits() {
   </div>`;
 
   const accounts = creditAccounts();
-  const multi = (cl.accounts || []).length > 1;
+  const multi = shownClaudeAccounts().length > 1;
   if (accounts.length) {
     html += `<div class="grp-label">Claude</div>`;
     for (const a of accounts) {
@@ -713,7 +759,7 @@ function renderCredits() {
     html += `<div class="empty-state">No usage-credit info from Claude yet.<br/>It appears after a live refresh on plans with credits.</div>`;
   }
 
-  if (typeof cx.credits === "number") {
+  if (codexInPanel() && typeof cx.credits === "number") {
     html += `<div class="grp-label">Codex</div>`;
     html += `<div class="row"><span class="k">Balance</span>
       <span class="v">${esc(cx.credits.toFixed(2))}</span></div>`;
@@ -818,7 +864,7 @@ function liveWindows() {
   };
 
   const cx = data?.codex;
-  if (cx?.live) {
+  if (cx?.live && codexInPanel()) {
     if ((cx.quotas || []).length) {
       for (const q of cx.quotas) add("codex", "", "Codex", q.id, q.label, q.group, q.gauge);
     } else {
@@ -826,7 +872,7 @@ function liveWindows() {
       add("codex", "", "Codex", "weekly", "Weekly", "weekly", cx.secondary);
     }
   }
-  for (const a of (data?.claude?.accounts || []).filter((x) => x.live)) {
+  for (const a of shownClaudeAccounts().filter((x) => x.live)) {
     if ((a.quotas || []).length) {
       for (const q of a.quotas) {
         // Scoped limits follow the same Display setting as the gauges.
@@ -952,6 +998,15 @@ function burnBuckets(row, axis) {
 // long windows only and Today keeps the short ones.
 const rowsForRange = (credential, range) =>
   credential.rows.filter((row) => RANGES[range].days === 1 || row.span > SESSION_MAX_MS);
+
+// Why the timeline has nothing to draw. "Sign in and refresh" is the wrong
+// advice when the accounts are signed in and simply switched off here.
+function timelineEmptyText() {
+  if (timelineCredentials().length) return "Only short windows are live — see Today.";
+  if (!codexInPanel() && !claudeInPanel())
+    return "Every account is hidden here.<br/>Turn one back on in Settings → Accounts.";
+  return "No live quota windows.<br/>Sign in to Codex or Claude Code and refresh.";
+}
 
 // One credential per Codex install / Claude account, with its windows split
 // into the short ones and the long ones.
@@ -1125,11 +1180,7 @@ function renderWindows() {
   html += windowRangeControl();
 
   if (!credentials.length) {
-    html += `<div class="empty-state">${
-      timelineCredentials().length
-        ? "Only short windows are live — see Today."
-        : "No live quota windows.<br/>Sign in to Codex or Claude Code and refresh."
-    }</div>`;
+    html += `<div class="empty-state">${timelineEmptyText()}</div>`;
     return html;
   }
 
@@ -1279,8 +1330,7 @@ function wideRow(credential, row, axis, now, first) {
 
 function renderWindowsWide() {
   const now = Date.now();
-  const all = timelineCredentials();
-  const credentials = all
+  const credentials = timelineCredentials()
     .map((credential) => ({ ...credential, visible: rowsForRange(credential, windowRange) }))
     .filter((credential) => credential.visible.length);
   const axis = axisFor(windowRange, now, credentials.flatMap((c) => c.visible));
@@ -1310,14 +1360,7 @@ function renderWindowsWide() {
   </div>`;
 
   if (!credentials.length) {
-    return (
-      html +
-      `<div class="empty-state">${
-        all.length
-          ? "Only short windows are live — see Today."
-          : "No live quota windows.<br/>Sign in to Codex or Claude Code and refresh."
-      }</div>`
-    );
+    return html + `<div class="empty-state">${timelineEmptyText()}</div>`;
   }
 
   let rows = "";
@@ -1500,6 +1543,64 @@ function diagRow(key, label, health, estimate = null, localIsNormal = false) {
   </div>`;
 }
 
+// One account's two visibility switches, as a pair of chips: which surfaces
+// draw it. Chips rather than the `.sw` toggles the rest of Settings uses —
+// two switches on one row read as two unrelated settings, where a labelled
+// pair reads as the one choice it is.
+function visibilityChips(id) {
+  const surfaces = [
+    ["panel", "App"],
+    ["widget", "Widget"],
+  ];
+  return `<div class="acct-vis">
+    <span class="vis-lab">Show in</span>
+    <div class="choices">${surfaces
+      .map(([surface, label]) => {
+        const on = accountShown(accountVisibility, surface, id);
+        return `<button class="choice${on ? " on" : ""}" role="switch"
+          aria-checked="${on}" data-vis-surface="${surface}" data-vis-id="${esc(id)}"
+          title="${on ? "Hide from" : "Show in"} the ${label.toLowerCase()}">${esc(label)}</button>`;
+      })
+      .join("")}</div>
+  </div>`;
+}
+
+function codexAccountRow() {
+  return `<div class="acct-row col">
+    <div class="acct-line">
+      <span class="rlab"><span class="nm">Codex</span>${
+        data.codex.plan_type ? ` <span class="pill">${esc(data.codex.plan_type)}</span>` : ""
+      }<span class="pth">~/.codex</span></span>
+    </div>
+    ${visibilityChips(CODEX_ACCOUNT)}
+  </div>`;
+}
+
+function claudeAccountRow(a) {
+  return `<div class="acct-row col">
+    <div class="acct-line">
+      <span class="rlab"><span class="nm">${esc(a.label)}</span>${
+        a.active ? ` <span class="pill">default</span>` : ""
+      }${a.id ? `<span class="pth">${esc(a.id)}</span>` : ""}</span>
+      ${
+        a.id
+          ? `<span class="acts">
+        <button class="acct-btn" data-rename="${esc(a.id)}" title="Rename">✎</button>
+        ${
+          a.removable
+            ? `<button class="acct-btn" data-remove="${esc(
+                a.id
+              )}" title="Remove this folder">✕</button>`
+            : ""
+        }
+      </span>`
+          : ""
+      }
+    </div>
+    ${visibilityChips(claudeAccount(a.id))}
+  </div>`;
+}
+
 function renderSettings() {
   const cx = data.codex,
     cl = data.claude;
@@ -1531,7 +1632,7 @@ function renderSettings() {
   if (notifyError)
     html += `<div class="banner small">Couldn't save the notification setting — try again.</div>`;
 
-  if (creditAccounts().length || typeof cx.credits === "number") {
+  if (creditAccounts().length || (codexInPanel() && typeof cx.credits === "number")) {
     html += `<div class="grp-label">Usage credits</div><div class="grp">
       <div class="grp-row" data-credits>
         <span class="rlab">Manage credits<span class="rsub">Monthly caps and the past-limits switch</span></span>
@@ -1539,7 +1640,7 @@ function renderSettings() {
       </div></div>`;
   }
 
-  const scopes = scopedLimitNames(cl.accounts);
+  const scopes = scopedLimitNames(shownClaudeAccounts());
   html += `<div class="grp-label">Display</div><div class="grp">`;
   html += settingRow(
     "Meters fill as you use",
@@ -1656,31 +1757,25 @@ function renderSettings() {
   html += `<div class="sec-sub">Windows has no way to put a real button inside the taskbar, so this floats on top of it.</div>`;
 
   const accounts = cl.accounts || [];
-  html += `<div class="grp-label">Claude accounts</div>`;
+  html += `<div class="grp-label">Accounts</div>`;
+  // Built first so a machine with neither provider signed in gets the add-folder
+  // button on its own rather than an empty bordered box above it.
+  let rows = cx.available ? codexAccountRow() : "";
   if (accounts.length) {
-    html += `<div class="grp">`;
     for (const a of accounts) {
-      if (editingAccount === a.id) {
-        html += `<div class="acct-row">${renameField()}</div>`;
-        continue;
-      }
-      html += `<div class="acct-row">
-        <span class="rlab"><span class="nm">${esc(a.label)}</span>${
-          a.active ? ` <span class="pill">default</span>` : ""
-        }<span class="pth">${esc(a.id)}</span></span>
-        <span class="acts">
-          <button class="acct-btn" data-rename="${esc(a.id)}" title="Rename">✎</button>
-          ${
-            a.removable
-              ? `<button class="acct-btn" data-remove="${esc(
-                  a.id
-                )}" title="Remove this folder">✕</button>`
-              : ""
-          }
-        </span>
-      </div>`;
+      rows +=
+        editingAccount === a.id
+          ? `<div class="acct-row">${renameField()}</div>`
+          : claudeAccountRow(a);
     }
-    html += `</div>`;
+  } else if (cl.available) {
+    // A snapshot with no per-account list still stands for the default folder.
+    // Without a row here it would be the one account that couldn't be hidden.
+    rows += claudeAccountRow({ id: "", label: "Claude", active: true, removable: false });
+  }
+  if (rows) {
+    html += `<div class="grp">${rows}</div>`;
+    html += `<div class="sec-sub">Hiding an account only takes it off that surface — the folder stays registered, and its usage keeps being collected and recorded.</div>`;
   }
   html += addFolderControl();
 
@@ -1768,8 +1863,28 @@ function renderAbout() {
 }
 
 // ---------- render ----------
+// A provider with nothing left to show has no tab: an empty Codex screen is
+// worse than no Codex screen. Settings and Overview are always reachable, so
+// there is never a state with nowhere to turn it back on from.
+function applyTabVisibility() {
+  const showable = { codex: !data || codexInPanel(), claude: !data || claudeInPanel() };
+  for (const [tab, on] of Object.entries(showable)) {
+    const button = document.querySelector(`.tab[data-tab="${tab}"]`);
+    if (button) button.hidden = !on;
+  }
+  // Hiding the tab you are standing on would leave the panel on a screen the
+  // tab strip no longer offers a way back to.
+  if (showable[activeTab] === false) {
+    activeTab = "overview";
+    document
+      .querySelectorAll(".tab")
+      .forEach((t) => t.classList.toggle("active", t.dataset.tab === activeTab));
+  }
+}
+
 function render() {
   const content = document.getElementById("content");
+  applyTabVisibility();
   if (!data) {
     content.innerHTML = `<div class="loading">Loading usage…</div>`;
     fitWindowHeight();
@@ -2022,6 +2137,13 @@ function render() {
     el.addEventListener("click", cancelUseReset)
   );
 
+  // Per-account show/hide chips (Settings → Accounts).
+  content.querySelectorAll("[data-vis-surface]").forEach((btn) =>
+    btn.addEventListener("click", () =>
+      setAccountShown(btn.dataset.visSurface, btn.dataset.visId, !btn.classList.contains("on"))
+    )
+  );
+
   // Per-account rename / forget controls (Settings).
   content.querySelectorAll("[data-rename]").forEach((el) =>
     el.addEventListener("click", () => startRename(el.dataset.rename))
@@ -2268,6 +2390,36 @@ async function confirmUseReset(id) {
   refresh();
 }
 
+// ---------- account visibility ----------
+// Optimistic: the chip flips now and the backend confirms, so a click doesn't
+// wait on a disk write. A refusal puts the old record back rather than leaving
+// the panel drawing something the file disagrees with.
+async function setAccountShown(surface, id, shown) {
+  const previous = accountVisibility;
+  const key = `${surface}_hidden`;
+  const hidden = new Set(previous[key] || []);
+  if (shown) hidden.delete(id);
+  else hidden.add(id);
+  accountVisibility = { ...previous, [key]: [...hidden] };
+  render();
+  try {
+    accountVisibility = await invoke("set_account_hidden", { surface, id, hidden: !shown });
+  } catch (_) {
+    accountVisibility = previous;
+  }
+  render();
+}
+
+async function loadAccountVisibility() {
+  try {
+    accountVisibility = await invoke("get_account_visibility");
+  } catch (_) {
+    // Nothing hidden is the safe reading: a card too many is a smaller failure
+    // than an account that silently isn't there.
+  }
+  render();
+}
+
 // ---------- Claude account management ----------
 function startRename(id) {
   const a = (data?.claude?.accounts || []).find((x) => x.id === id);
@@ -2364,6 +2516,12 @@ listen("widget-settings", (event) => {
   if (activeTab === "settings") render();
 });
 
+// The record is shared with the widget, so it is pushed rather than polled.
+listen("account-visibility", (event) => {
+  if (event.payload) accountVisibility = event.payload;
+  render();
+});
+
 listen("update-state", (event) => {
   updateState = event.payload;
   if (activeTab === "settings") render();
@@ -2380,6 +2538,7 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) refresh();
 });
 loadNotificationSettings();
+loadAccountVisibility();
 // The band's reach lives in the widget settings, so its first load has to
 // finish before the meters can ask the recorder for the right stretch.
 loadWidgetSettings().then(() => loadRecentBurn(true));

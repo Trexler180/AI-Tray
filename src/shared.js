@@ -40,3 +40,18 @@ export function elapsedPercent(g) {
   const end = g.resets_at * 1000;
   return clamp(((Date.now() - (end - span)) / span) * 100, 0, 100);
 }
+
+// ---------- account visibility ----------
+// The key an account is shown or hidden by, on both surfaces. Claude accounts
+// are identified everywhere else by their config directory, so that is what
+// this keys on; Codex is a single login with no directory behind it and gets a
+// fixed id. Prefixed so the two providers can never collide on a bare path.
+export const CODEX_ACCOUNT = "codex";
+export const claudeAccount = (id) => `claude:${id}`;
+
+// Whether one account is drawn on one surface ("panel" | "widget"). The stored
+// list is of *hidden* ids, so anything the file has never heard of — a folder
+// added since it was written — shows by default.
+export function accountShown(visibility, surface, id) {
+  return !(visibility?.[`${surface}_hidden`] || []).includes(id);
+}

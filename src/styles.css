@@ -113,6 +113,12 @@ body {
 .tab.gear {
   flex: 0 0 34px;
 }
+/* A provider hidden from the panel loses its tab, and the remaining ones share
+   the width out between them. Needs saying explicitly: `.tab` is a flex item,
+   which overrides the `hidden` attribute's own display: none. */
+.tab[hidden] {
+  display: none;
+}
 
 /* ---- Content ---- */
 .content {
@@ -686,6 +692,38 @@ body {
   display: flex;
   gap: 4px;
   flex: 0 0 auto;
+}
+/* An account row carrying its show/hide chips: the name and its buttons on one
+   line, the chips under them. Side by side there is no room for both on a
+   380px panel, and the chips are the wider half. */
+.acct-row.col {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
+}
+.acct-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.acct-vis {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.vis-lab {
+  font-size: 10.5px;
+  color: var(--faint);
+  flex: 0 0 auto;
+}
+/* The off state has to read as off rather than just unselected — this is a
+   switch, not one of several ranges to pick from. */
+.choice[role="switch"] {
+  min-width: 58px;
+  opacity: 0.6;
+}
+.choice[role="switch"].on {
+  opacity: 1;
 }
 /* A settings row whose control needs the full width under its label rather than
    sitting beside it. */

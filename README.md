@@ -19,6 +19,8 @@ and an API-equivalent value estimate in a compact popover.
   in rather than to a literal seven days, which could not hold a seven-day
   window and its start at once. `⤢` widens the panel to a full-width version
   that stays open until you close it.
+- **Settings** — notifications, meter display options, the taskbar widget, and
+  per-account **Show in App / Widget** switches.
 - **Credits** — a dedicated screen (opened from the violet meter on any tab)
   with each account's usage-credit spend, monthly cap, and whether "use
   credits past plan limits" is switched on, plus the Codex credit balance.
@@ -119,6 +121,36 @@ cannot be rebuilt, which is why
 **Settings → Data sources → Quota window history** reports how much exists
 before offering to clear it.
 
+## Showing and hiding accounts
+
+**Settings → Accounts** lists every account — Codex, then each Claude config
+folder — with a **Show in** pair: **App** and **Widget**. The two are
+independent, so an account can sit on the taskbar while staying out of the
+panel, or the other way round.
+
+Hiding is not removing. The folder stays registered, its credentials are left
+alone, its quota windows keep being recorded, and turning it back on restores
+everything at once. Removing a folder (`✕`) is still the way to forget it.
+
+A hidden account disappears from the Overview, the provider tabs, the Windows
+timeline and the Credits screen, and its spend drops out of the Overview's
+"today" figure. A provider with no visible accounts left loses its tab
+entirely — an empty Codex screen is worse than no Codex screen — and standing on
+that tab when it goes moves you to Overview. Settings always lists everything,
+which is what keeps the switch reachable.
+
+Because the local Claude logs carry no account id, the cost and token history is
+machine-wide: hiding one of several Claude accounts leaves those figures whole.
+
+The choice is stored in
+
+```text
+%APPDATA%\AI Usage Tray\account-visibility.json
+```
+
+as the *hidden* ids rather than the visible ones, so a folder added after
+that file was written shows up by default instead of arriving invisible.
+
 ## Taskbar widget
 
 An optional always-visible strip of per-account meters, off by default and
@@ -148,6 +180,10 @@ switched on in Settings → Taskbar widget.
   grip disappears once that side is against the end of the bar. Both position
   and size are remembered. Settings has a width stepper, switches for the pace
   marks and the weekly bar, and a Reset for position and size.
+- Which accounts get a cell is its own choice, separate from the panel's — see
+  [Showing and hiding accounts](#showing-and-hiding-accounts). With every
+  account switched off the widget stays on the bar as a dim placeholder, so it
+  is still there to click and still there to put back.
 - With more than one display, Settings gains a Display picker. The drag is
   confined to a single taskbar — that is what stops the widget being dropped in
   the middle of the desktop — so choosing the screen is a setting rather than a

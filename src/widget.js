@@ -6,7 +6,15 @@
 // first Claude on top and the second Claude across the row underneath, instead
 // of one stretched Codex cell above a cramped pair.
 
-import { clamp, elapsedPercent, esc, groupKey } from "./shared.js";
+import {
+  accountShown,
+  clamp,
+  claudeAccount,
+  CODEX_ACCOUNT,
+  elapsedPercent,
+  esc,
+  groupKey,
+} from "./shared.js";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -56,6 +64,13 @@ let data = null;
 let opts = { show_pace: true, show_weekly: true, show_recent: false, recent_minutes: 60 };
 /** Recent spend per window key, from the recorder. Null while the band is off. */
 let burns = null;
+/** Which accounts the two surfaces hide. Only the widget half is read here; the
+ *  panel keeps its own, so an account can be on the taskbar and out of the
+ *  panel or the other way round. */
+let visibility = { panel_hidden: [], widget_hidden: [] };
+
+/** Whether this account has a cell on the widget. */
+const shown = (id) => accountShown(visibility, "widget", id);
 
 /** One account's two windows, in the shape the renderer wants. `keys` are the
  *  recorder's, for looking up what each window burned lately. */
@@ -79,7 +94,7 @@ function gaugeForGroup(quotas, group) {
 function accounts(usage) {
   const out = [];
   const cx = usage?.codex;
-  if (cx?.available) {
+  if (cx?.available && shown(CODEX_ACCOUNT)) {
     const five = cx.primary || gaugeForGroup(cx.quotas, "session");
     const week = cx.secondary || gaugeForGroup(cx.quotas, "weekly");
     const a = account("Codex", "codex", five, week, {
@@ -93,15 +108,18 @@ function accounts(usage) {
     const list = cl.accounts?.length ? cl.accounts : null;
     if (list) {
       for (const acct of list) {
+        if (!shown(claudeAccount(acct.id))) continue;
         const a = account(acct.label || "Claude", "claude", acct.five_hour, acct.seven_day, {
           five: groupKey("claude", acct.id, acct.quotas, "session", "session"),
           week: groupKey("claude", acct.id, acct.quotas, "weekly", "weekly"),
         });
         if (a) out.push(a);
       }
-    } else {
+    } else if (shown(claudeAccount(""))) {
       // No account list means nothing was recorded against an account id
-      // either, so these windows have no history to look up.
+      // either, so these windows have no history to look up. It is still one
+      // account as far as hiding goes, keyed by the empty directory the panel
+      // uses for the same fallback row.
       const a = account("Claude", "claude", cl.five_hour, cl.seven_day);
       if (a) out.push(a);
     }
@@ -244,6 +262,15 @@ async function loadBurns() {
   }
 }
 
+async function loadVisibility() {
+  try {
+    visibility = await invoke("get_account_visibility");
+  } catch {
+    // Nothing hidden is the safe reading: a cell too many is a smaller failure
+    // than an account silently missing from the bar.
+  }
+}
+
 async function loadOptions() {
   try {
     opts = await invoke("get_widget_settings");
@@ -251,6 +278,7 @@ async function loadOptions() {
     // Defaults are the same as the backend's, so a failure here just means the
     // widget draws everything until the next change comes through.
   }
+  await loadVisibility();
   await loadBurns();
   render();
 }
@@ -274,6 +302,13 @@ subscribe("widget-settings", (event) => {
   // A drag or resize broadcasts these too, so only go back to the recorder when
   // the band itself changed.
   if (`${opts.show_recent}|${opts.recent_minutes}` !== before) loadBurns().then(render);
+});
+// ...and this when an account is shown or hidden. Only the widget's own half of
+// the payload matters here, but it arrives whole so the panel can use the same
+// event.
+subscribe("account-visibility", (event) => {
+  if (event.payload) visibility = event.payload;
+  render();
 });
 // The strip changes height when the taskbar is switched to small icons, or when
 // the widget moves to a display at another scale. Labels are sized off that.
