@@ -164,6 +164,14 @@ switched on in Settings → Taskbar widget.
   spans the row below, so every cell keeps a roughly equal share of the width.
   Account count never changes the widget's width — more accounts narrow the
   cells instead.
+- **Settings → Taskbar widget → Layout** overrides that flow. Each account can
+  be pinned to the **Top** or **Bottom** row, or left on **Auto**. Since a row
+  shares its width equally, an account alone on a row spans the whole widget —
+  so pinning one account to one row and the rest to the other is how you give
+  the full width to an account that isn't the one the split happens to leave
+  over. Pinning everything to a single row is how you ask for one row of
+  full-height bars. A live preview above the pickers shows where they land, and
+  a row left empty is dropped rather than drawn.
 - An account whose plan reports only one window (Codex meters weekly only on
   some plans) draws that single bar filling the row, rather than a real bar over
   an empty one.
@@ -183,7 +191,9 @@ switched on in Settings → Taskbar widget.
 - Which accounts get a cell is its own choice, separate from the panel's — see
   [Showing and hiding accounts](#showing-and-hiding-accounts). With every
   account switched off the widget stays on the bar as a dim placeholder, so it
-  is still there to click and still there to put back.
+  is still there to click and still there to put back. Row pins are kept for
+  accounts that are switched off or signed out, so the arrangement comes back
+  as it was rather than being rebuilt from scratch.
 - With more than one display, Settings gains a Display picker. The drag is
   confined to a single taskbar — that is what stops the widget being dropped in
   the middle of the desktop — so choosing the screen is a setting rather than a

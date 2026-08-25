@@ -55,3 +55,40 @@ export const claudeAccount = (id) => `claude:${id}`;
 export function accountShown(visibility, surface, id) {
   return !(visibility?.[`${surface}_hidden`] || []).includes(id);
 }
+
+// ---------- widget layout ----------
+// Split the widget's accounts into its rows. Lives here because the panel
+// draws a preview of the same arrangement in Settings — two copies of this rule
+// would drift the moment either was tweaked, and the preview would then be
+// quietly lying about where things land.
+//
+// The widget has room for two rows and shares each row's width equally between
+// the accounts on it, so an account alone on a row spans the whole widget.
+// `pinned` (account id → "top" | "bottom") is therefore the entire layout
+// vocabulary: pinning one account to one row and the rest to the other is how
+// you give the full width to an account that isn't the one the balanced split
+// happens to leave over.
+//
+// Anything unpinned keeps the flow the widget has always used — ceil(n/2) on
+// top — filling in around whatever was pinned. An empty row is dropped rather
+// than drawn, so pinning everything to one row is also how you ask for a
+// single row of full-height bars.
+export function widgetRows(list, pinned = {}) {
+  if (list.length <= 1) return [list];
+  const rowOf = (a) => pinned?.[a.id];
+  const top = new Set(list.filter((a) => rowOf(a) === "top"));
+  const bottom = new Set(list.filter((a) => rowOf(a) === "bottom"));
+  // Never fewer than what is already pinned there: the pin is the instruction,
+  // and the balanced split is only the fallback for everything else.
+  const wanted = Math.max(top.size, Math.ceil(list.length / 2));
+  for (const a of list) {
+    if (rowOf(a)) continue;
+    (top.size < wanted ? top : bottom).add(a);
+  }
+  // Membership is decided above; position inside a row is not. A pin says which
+  // row an account belongs on, so Codex-then-Claude reading order still holds
+  // within each one rather than pinned accounts jumping to the front.
+  return [list.filter((a) => top.has(a)), list.filter((a) => bottom.has(a))].filter(
+    (row) => row.length
+  );
+}

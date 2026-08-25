@@ -6,6 +6,7 @@ import {
   elapsedPercent,
   esc,
   historyKey,
+  widgetRows,
 } from "./shared.js";
 
 const { invoke } = window.__TAURI__.core;
@@ -84,6 +85,34 @@ const claudeInPanel = () =>
     ? shownClaudeAccounts().length > 0
     : panelShows(claudeAccount(""));
 const codexInPanel = () => panelShows(CODEX_ACCOUNT);
+
+// ---------- widget layout ----------
+// The accounts the widget is drawing, in its own order — Codex first, then each
+// Claude account — so Settings can offer a row for each and preview where they
+// land. Identity and order only; the widget itself adds the gauges.
+function widgetAccounts() {
+  const out = [];
+  const cx = data?.codex;
+  if (cx?.available && accountShown(accountVisibility, "widget", CODEX_ACCOUNT))
+    out.push({ id: CODEX_ACCOUNT, label: "Codex", provider: "codex" });
+  const cl = data?.claude;
+  if (cl?.available) {
+    const list = cl.accounts || [];
+    if (list.length) {
+      for (const a of list) {
+        const id = claudeAccount(a.id);
+        if (accountShown(accountVisibility, "widget", id))
+          out.push({ id, label: a.label || "Claude", provider: "claude" });
+      }
+      // The same fallback the widget draws when a snapshot carries no
+      // per-account list at all.
+    } else if (accountShown(accountVisibility, "widget", claudeAccount(""))) {
+      out.push({ id: claudeAccount(""), label: "Claude", provider: "claude" });
+    }
+  }
+  return out;
+}
+const widgetRowOf = (id) => widgetSettings.account_rows?.[id] || "auto";
 
 // ---------- formatting helpers ----------
 const usd = (n) => "$" + (Number.isFinite(n) ? n : 0).toFixed(2);
@@ -1601,6 +1630,63 @@ function claudeAccountRow(a) {
   </div>`;
 }
 
+// Settings → Taskbar widget → Layout. One picker per account the widget is
+// drawing, over a preview of where they land.
+//
+// Only offered from two accounts up: with one there is a single full-width bar
+// whatever you pick, so the control would be a choice with one outcome.
+function widgetLayoutRows() {
+  const list = widgetAccounts();
+  if (list.length < 2) return "";
+  const choices = [
+    ["auto", "Auto"],
+    ["top", "Top"],
+    ["bottom", "Bottom"],
+  ];
+  let html = `<div class="grp-row col">
+    <span class="rlab">Layout<span class="rsub">Which row each account sits on — alone on a row is full width</span></span>
+    ${widgetLayoutPreview(list)}
+  </div>`;
+  for (const a of list) {
+    const current = widgetRowOf(a.id);
+    html += `<div class="grp-row wlay">
+      <span class="rlab"><span class="wdot ${
+        a.provider === "claude" ? "claude" : ""
+      }"></span>${esc(a.label)}</span>
+      <div class="choices">${choices
+        .map(
+          ([value, label]) =>
+            `<button class="choice${
+              value === current ? " on" : ""
+            }" data-widget-row="${esc(a.id)}" data-widget-row-value="${value}">${esc(
+              label
+            )}</button>`
+        )
+        .join("")}</div>
+    </div>`;
+  }
+  return html;
+}
+
+// A miniature of the widget's own arrangement, built from the same split rule
+// the widget uses (`widgetRows`), so it can't claim a layout the bar won't draw.
+function widgetLayoutPreview(list) {
+  const rows = widgetRows(list, widgetSettings.account_rows);
+  return `<div class="wprev">${rows
+    .map(
+      (row) =>
+        `<div class="wprev-row">${row
+          .map(
+            (a) =>
+              `<span class="wprev-cell${
+                a.provider === "claude" ? " claude" : ""
+              }" title="${esc(a.label)}">${esc(a.label)}</span>`
+          )
+          .join("")}</div>`
+    )
+    .join("")}</div>`;
+}
+
 function renderSettings() {
   const cx = data.codex,
     cl = data.claude;
@@ -1709,6 +1795,7 @@ function renderSettings() {
       widgetSettings.show_recent === true,
       true
     );
+    html += widgetLayoutRows();
     // Only worth a row when there is a choice to make. The drag is confined to
     // one taskbar, so this is the only way across screens.
     if (widgetMonitors.length > 1) {
@@ -1982,6 +2069,29 @@ function render() {
         });
         widgetSettings = await invoke("get_widget_settings");
       } catch (_) {}
+      render();
+    })
+  );
+  content.querySelectorAll("[data-widget-row]").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.widgetRow;
+      const row = btn.dataset.widgetRowValue;
+      const previous = widgetSettings;
+      // Flip the preview now; the widget redraws off the broadcast that the
+      // command sends, so the two land within a frame of each other either way.
+      const rows = { ...(previous.account_rows || {}) };
+      if (row === "auto") delete rows[id];
+      else rows[id] = row;
+      widgetSettings = { ...previous, account_rows: rows };
+      render();
+      try {
+        widgetSettings = await invoke("set_widget_account_row", {
+          id,
+          row: row === "auto" ? null : row,
+        });
+      } catch (_) {
+        widgetSettings = previous;
+      }
       render();
     })
   );

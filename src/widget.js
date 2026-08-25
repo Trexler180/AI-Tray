@@ -14,6 +14,7 @@ import {
   elapsedPercent,
   esc,
   groupKey,
+  widgetRows,
 } from "./shared.js";
 
 const { invoke } = window.__TAURI__.core;
@@ -60,8 +61,15 @@ function textWidth(text, px) {
 }
 
 let data = null;
-/** Drawing options, owned by the panel's Settings tab and pushed here. */
-let opts = { show_pace: true, show_weekly: true, show_recent: false, recent_minutes: 60 };
+/** Drawing options, owned by the panel's Settings tab and pushed here.
+ *  `account_rows` pins accounts to a row; empty means the balanced flow. */
+let opts = {
+  show_pace: true,
+  show_weekly: true,
+  show_recent: false,
+  recent_minutes: 60,
+  account_rows: {},
+};
 /** Recent spend per window key, from the recorder. Null while the band is off. */
 let burns = null;
 /** Which accounts the two surfaces hide. Only the widget half is read here; the
@@ -72,11 +80,12 @@ let visibility = { panel_hidden: [], widget_hidden: [] };
 /** Whether this account has a cell on the widget. */
 const shown = (id) => accountShown(visibility, "widget", id);
 
-/** One account's two windows, in the shape the renderer wants. `keys` are the
- *  recorder's, for looking up what each window burned lately. */
-function account(label, provider, five, week, keys = {}) {
+/** One account's two windows, in the shape the renderer wants. `id` is the key
+ *  it is shown, hidden and pinned to a row by; `keys` are the recorder's, for
+ *  looking up what each window burned lately. */
+function account(id, label, provider, five, week, keys = {}) {
   if (!five && !week) return null;
-  return { label, provider, five, week, fiveKey: keys.five, weekKey: keys.week };
+  return { id, label, provider, five, week, fiveKey: keys.five, weekKey: keys.week };
 }
 
 /** Quota windows are grouped the same way the backend groups them when it
@@ -97,7 +106,7 @@ function accounts(usage) {
   if (cx?.available && shown(CODEX_ACCOUNT)) {
     const five = cx.primary || gaugeForGroup(cx.quotas, "session");
     const week = cx.secondary || gaugeForGroup(cx.quotas, "weekly");
-    const a = account("Codex", "codex", five, week, {
+    const a = account(CODEX_ACCOUNT, "Codex", "codex", five, week, {
       five: groupKey("codex", "", cx.quotas, "session", "session"),
       week: groupKey("codex", "", cx.quotas, "weekly", "weekly"),
     });
@@ -108,8 +117,9 @@ function accounts(usage) {
     const list = cl.accounts?.length ? cl.accounts : null;
     if (list) {
       for (const acct of list) {
-        if (!shown(claudeAccount(acct.id))) continue;
-        const a = account(acct.label || "Claude", "claude", acct.five_hour, acct.seven_day, {
+        const id = claudeAccount(acct.id);
+        if (!shown(id)) continue;
+        const a = account(id, acct.label || "Claude", "claude", acct.five_hour, acct.seven_day, {
           five: groupKey("claude", acct.id, acct.quotas, "session", "session"),
           week: groupKey("claude", acct.id, acct.quotas, "weekly", "weekly"),
         });
@@ -120,18 +130,11 @@ function accounts(usage) {
       // either, so these windows have no history to look up. It is still one
       // account as far as hiding goes, keyed by the empty directory the panel
       // uses for the same fallback row.
-      const a = account("Claude", "claude", cl.five_hour, cl.seven_day);
+      const a = account(claudeAccount(""), "Claude", "claude", cl.five_hour, cl.seven_day);
       if (a) out.push(a);
     }
   }
   return out;
-}
-
-/** ceil(n/2) on top, the rest below. One account gets a single full row. */
-function rows(list) {
-  if (list.length <= 1) return [list];
-  const top = Math.ceil(list.length / 2);
-  return [list.slice(0, top), list.slice(top)];
 }
 
 const pct = (g) => clamp(Number(g?.used_percent) || 0, 0, 100);
@@ -228,7 +231,7 @@ function render() {
     content.innerHTML = `<div class="idle"></div>`;
     return;
   }
-  content.innerHTML = `<div class="grid">${rows(list)
+  content.innerHTML = `<div class="grid">${widgetRows(list, opts.account_rows)
     .map(
       (row) =>
         `<div class="row">${row.map((a) => column(a, row.length)).join("")}</div>`

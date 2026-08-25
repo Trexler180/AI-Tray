@@ -716,6 +716,77 @@ body {
   color: var(--faint);
   flex: 0 0 auto;
 }
+/* ---- Widget layout (Settings → Taskbar widget) ---- */
+/* A miniature of the widget's arrangement. Proportions rather than pixels: the
+   point is which account holds which row and how the width is shared, not the
+   taskbar's real geometry. */
+.wprev {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.22);
+}
+.wprev-row {
+  display: flex;
+  gap: 2px;
+  height: 15px;
+}
+.wprev-cell {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+  padding: 0 3px;
+  font-size: 8.5px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  line-height: 1;
+  color: #05201d;
+  background: var(--codex);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.wprev-cell.claude {
+  color: #2a1508;
+  background: var(--claude);
+}
+/* One account's row picker: name on the left, the three choices on the right.
+   The label carries a provider dot so a name shared between the preview and
+   this list can be matched by colour, the way the widget's own cells are. */
+.grp-row.wlay {
+  cursor: default;
+}
+.wlay .rlab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.wlay .choices {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}
+.wdot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--codex);
+}
+.wdot.claude {
+  background: var(--claude);
+}
+
 /* The off state has to read as off rather than just unselected — this is a
    switch, not one of several ranges to pick from. */
 .choice[role="switch"] {

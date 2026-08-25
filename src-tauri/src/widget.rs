@@ -11,6 +11,7 @@
 
 use crate::util::config_dir;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -67,6 +68,17 @@ pub struct WidgetSettings {
     /// this is the only store both windows can read and be notified about.
     #[serde(default = "default_recent_minutes")]
     pub recent_minutes: u32,
+    /// Which row each account is pinned to — `"top"` or `"bottom"` — keyed by
+    /// the same account id the visibility store uses. An account with no entry
+    /// is left to the balanced flow.
+    ///
+    /// This is the whole of the layout choice. The widget draws at most two
+    /// rows and splits each row's width equally between the accounts on it, so
+    /// "give this one the full width" is the same statement as "put this one on
+    /// a row by itself" — and pinning is the only way to say that about an
+    /// account other than whichever one the split happens to leave over.
+    #[serde(default)]
+    pub account_rows: HashMap<String, String>,
     /// Which display to sit on, as the OS device name (`\\.\DISPLAY2`). None
     /// means "wherever the window opens", which is normally the primary.
     ///
@@ -103,6 +115,7 @@ impl Default for WidgetSettings {
             show_weekly: true,
             show_recent: false,
             recent_minutes: DEFAULT_RECENT_MINUTES,
+            account_rows: HashMap::new(),
             monitor: None,
         }
     }
@@ -913,6 +926,38 @@ pub fn set_widget_option(
     Ok(())
 }
 
+/// Pin one account to a row of the widget, or pass `None` to hand it back to
+/// the balanced flow. Separate from `set_widget_option` because that one is a
+/// flag on the widget as a whole; this is one account's place in the layout.
+///
+/// Unknown ids are accepted deliberately: an account can be pinned while its
+/// provider is signed out, and rejecting it here would mean the arrangement
+/// quietly forgot rows for accounts that were only temporarily absent.
+#[tauri::command]
+pub fn set_widget_account_row(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WidgetState>,
+    id: String,
+    row: Option<String>,
+) -> Result<WidgetSettings, String> {
+    let snapshot = {
+        let mut settings = state.get();
+        match row.as_deref() {
+            None | Some("") | Some("auto") => {
+                settings.account_rows.remove(&id);
+            }
+            Some(row @ ("top" | "bottom")) => {
+                settings.account_rows.insert(id, row.to_string());
+            }
+            Some(other) => return Err(format!("unknown widget row: {other}")),
+        }
+        settings.clone()
+    };
+    persist(&snapshot)?;
+    broadcast(&app, &snapshot);
+    Ok(snapshot)
+}
+
 /// How far back the recent-usage band reaches, on both the panel's meters and
 /// the widget's. Separate from `set_widget_option` because that one carries a
 /// flag; this is the one drawing preference the two windows share.
@@ -1055,6 +1100,21 @@ mod tests {
         assert_eq!(settings.width, DEFAULT_WIDTH);
         assert!(settings.show_pace);
         assert!(settings.show_weekly);
+        // No pins, so every account is left to the balanced flow.
+        assert!(settings.account_rows.is_empty());
+    }
+
+    /// Round-trips through the file, so a pinned layout survives a restart.
+    #[test]
+    fn pinned_rows_survive_a_save_and_load() {
+        let mut settings = WidgetSettings::default();
+        settings.account_rows.insert("codex".into(), "bottom".into());
+        let body = serde_json::to_string(&settings).unwrap();
+        let back: WidgetSettings = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            back.account_rows.get("codex").map(String::as_str),
+            Some("bottom")
+        );
     }
 
     /// The common case: room on both sides, so both grips stay.

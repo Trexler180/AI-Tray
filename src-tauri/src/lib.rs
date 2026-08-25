@@ -544,6 +544,7 @@ pub fn run() {
             widget::set_widget_width,
             widget::set_widget_gap,
             widget::set_widget_option,
+            widget::set_widget_account_row,
             widget::set_recent_minutes,
             widget::reset_widget_position
         ])
