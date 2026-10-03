@@ -276,6 +276,7 @@ pub(crate) fn collect_usage_sync() -> Usage {
                 seven_day_model: a.seven_day_model,
                 quotas: a.quotas,
                 extra_usage: a.extra_usage,
+                resets: a.resets,
                 health: a.health,
             })
             .collect();
@@ -348,6 +349,19 @@ async fn consume_codex_reset(app: tauri::AppHandle, credit_id: String) -> Result
         .map_err(|e| e.to_string())??;
     alerts::refresh_for_alerts(app);
     Ok(())
+}
+
+/// Claim a banked Claude reset for one account. Like the Codex command this
+/// spends the reset, so it only runs from an explicit user action. Returns the
+/// outcome (`reset`, `nothingToReset`, `alreadyRedeemed`, `noCredit`) for the
+/// panel to report; the panel refreshes afterwards.
+#[tauri::command]
+async fn consume_claude_reset(account_id: String, credit_id: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        resets::consume_claude_reset(&account_id, &credit_id).map(str::to_string)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Rename a Claude account. An empty label clears back to the derived default.
@@ -529,6 +543,7 @@ pub fn run() {
             add_claude_directory,
             remove_claude_directory,
             consume_codex_reset,
+            consume_claude_reset,
             clear_history_cache,
             get_window_history,
             get_recent_burn,

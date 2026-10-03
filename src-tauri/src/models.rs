@@ -169,6 +169,20 @@ pub struct ExtraUsage {
     pub currency: Option<String>,
 }
 
+/// Banked Claude usage-limit resets (the CLI's `cedar_ember` program), reported
+/// by the oauth usage endpoint. Shaped like T3 Code's contract: a count plus the
+/// one grant the server says to claim next. Only grants that are claimable now
+/// count — paused or expired ones are left out.
+#[derive(Serialize, Clone, Default)]
+pub struct ClaudeResets {
+    pub available_count: u64,
+    /// The grant a claim spends, when there's anything to claim.
+    pub next_credit_id: Option<String>,
+    /// Unix seconds when that grant stops being usable, if it has a deadline.
+    pub next_expires_at: Option<i64>,
+    pub next_expires_in: Option<String>,
+}
+
 /// Live rate-limit windows for one Claude account. Cost/token history is not
 /// represented here: the local logs carry no account identifier, so that data
 /// stays machine-wide on `ClaudeUsage`.
@@ -193,6 +207,8 @@ pub struct ClaudeAccountUsage {
     pub quotas: Vec<QuotaWindow>,
     /// Usage-credit state, when the endpoint reported it.
     pub extra_usage: Option<ExtraUsage>,
+    /// Banked resets, when the account is eligible for them.
+    pub resets: Option<ClaudeResets>,
     pub health: DataHealth,
 }
 

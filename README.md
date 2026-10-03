@@ -12,6 +12,10 @@ and an API-equivalent value estimate in a compact popover.
   "limit used up" notification says when the reserve takes over.
 - **Claude** — live account and scoped quota windows plus model-aware local
   Claude Code history. Multiple Claude config directories are supported.
+  Accounts with **banked resets** (the ones Claude Code offers at a usage
+  limit) show how many are left and when the next one expires, with a
+  **Use reset** button that claims one the same way Claude Code and T3 Code
+  do. Settings → Notifications can announce new resets and expiring ones.
 - **Windows** — a timeline of every quota window: bar length is the window's
   span, the fill is what was spent inside it, and a notch marks now, so a fill
   running ahead of the notch means the allowance is going faster than the
@@ -250,6 +254,9 @@ stays as the reference for the geometry.
   seconds. A result under 45 seconds old is reused, and after a rate-limit
   response (HTTP 429) the account is left alone for five minutes, showing its
   last numbers with their age. Local cost and token history is unaffected.
+  Banked resets ride along on that same request (`cedar_ember=1`), so they
+  cost nothing extra; claiming one skips the 45-second reuse for that account
+  so the cleared limits show straight away.
 - The app starts on login by registering itself under
   `HKCU\...\CurrentVersion\Run`. Switch it off in **Settings → About →
   Start with Windows**; the choice is kept in

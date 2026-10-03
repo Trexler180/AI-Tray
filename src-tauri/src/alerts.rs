@@ -1,4 +1,4 @@
-use crate::models::{CodexResets, Gauge, QuotaWindow, ResetCredit, Usage};
+use crate::models::{ClaudeAccountUsage, CodexResets, Gauge, QuotaWindow, ResetCredit, Usage};
 use chrono::Utc;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
@@ -93,6 +93,9 @@ pub struct NotificationSettings {
     /// the `codex` limit-warning toggle.
     #[serde(default)]
     pub codex_resets: bool,
+    /// The same for Claude's banked resets.
+    #[serde(default)]
+    pub claude_resets: bool,
 }
 
 struct Exhaustion {
@@ -132,6 +135,22 @@ struct ResetAlertState {
     known: HashMap<String, CreditAlert>,
 }
 
+/// What was last seen of one Claude account's banked resets.
+#[derive(Default)]
+struct ClaudeResetAlert {
+    count: u64,
+    /// The grant the expiry stages belong to; a new next grant starts them over.
+    grant: Option<String>,
+    fired_stages: HashSet<&'static str>,
+}
+
+/// Claude reset bookkeeping, per account. An account seen for the first time
+/// (at launch, or newly added) is a silent baseline, like the Codex credits.
+#[derive(Default)]
+struct ClaudeResetAlertState {
+    known: HashMap<String, ClaudeResetAlert>,
+}
+
 #[derive(Default)]
 struct AlertRuntime {
     latest_usage: Option<Usage>,
@@ -140,6 +159,7 @@ struct AlertRuntime {
     /// of order; an older snapshot must not step the state machine backwards.
     applied_generation: u64,
     resets: ResetAlertState,
+    claude_resets: ClaudeResetAlertState,
 }
 
 pub struct AlertState {
@@ -184,6 +204,7 @@ impl AlertState {
             "codex" => settings.codex = enabled,
             "claude" => settings.claude = enabled,
             "codex_resets" => settings.codex_resets = enabled,
+            "claude_resets" => settings.claude_resets = enabled,
             _ => return Err(format!("unknown provider: {provider}")),
         }
         persist_settings(&settings)?;
@@ -324,6 +345,12 @@ impl AlertState {
                 &mut runtime.resets,
                 settings.codex_resets,
                 usage.codex.resets.as_ref(),
+                Utc::now().timestamp(),
+            ));
+            to_notify.extend(claude_reset_events(
+                &mut runtime.claude_resets,
+                settings.claude_resets,
+                &usage.claude.accounts,
                 Utc::now().timestamp(),
             ));
         }
@@ -757,6 +784,69 @@ fn reset_events(
     out
 }
 
+fn claude_stage_body(who: &str, stage: &str) -> String {
+    match stage {
+        "day" => format!("A {who} reset expires in about a day."),
+        "today" => format!("A {who} reset expires today."),
+        "hours" => format!("A {who} reset expires in a few hours — use it before it's gone."),
+        _ => format!("A {who} reset is expiring."),
+    }
+}
+
+/// Notifications for Claude's banked resets: the count going up, and each
+/// expiry stage of the grant that would be spent next. Accounts whose live
+/// fetch failed are skipped untouched, so a dropped request never reads as
+/// "resets gone" and their return never reads as "resets granted".
+fn claude_reset_events(
+    state: &mut ClaudeResetAlertState,
+    enabled: bool,
+    accounts: &[ClaudeAccountUsage],
+    now: i64,
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let multi = accounts.len() > 1;
+    for acct in accounts.iter().filter(|a| a.live) {
+        let who = if multi {
+            format!("Claude ({})", acct.label)
+        } else {
+            "Claude".to_string()
+        };
+        let count = acct.resets.as_ref().map_or(0, |r| r.available_count);
+        let grant = acct.resets.as_ref().and_then(|r| r.next_credit_id.clone());
+        let expires_at = acct.resets.as_ref().and_then(|r| r.next_expires_at);
+
+        let first = !state.known.contains_key(&acct.id);
+        let entry = state.known.entry(acct.id.clone()).or_default();
+        let emit = enabled && !first;
+
+        if count > entry.count && emit {
+            let body = match acct.resets.as_ref().and_then(|r| r.next_expires_in.as_deref()) {
+                Some(left) => format!("A {who} usage-limit reset is available — use it within {left}."),
+                None => format!("A {who} usage-limit reset is available."),
+            };
+            out.push(("Claude reset available".to_string(), body));
+        }
+        entry.count = count;
+
+        if entry.grant != grant {
+            entry.grant = grant;
+            entry.fired_stages.clear();
+        }
+        if let Some(exp) = expires_at.filter(|_| count > 0) {
+            for stage in stages_met(now, exp) {
+                if entry.fired_stages.insert(stage) && emit {
+                    out.push(("Claude reset expiring".to_string(), claude_stage_body(&who, stage)));
+                }
+            }
+        }
+    }
+    // Forget removed accounts, so re-adding one is a fresh baseline.
+    state
+        .known
+        .retain(|id, _| accounts.iter().any(|a| &a.id == id));
+    out
+}
+
 fn usage_watch_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Some(codex) = crate::util::codex_home() {
@@ -812,6 +902,7 @@ mod tests {
                 codex,
                 claude,
                 codex_resets: false,
+                claude_resets: false,
             }),
             runtime: Mutex::new(AlertRuntime::default()),
             watcher: Mutex::new(None),
@@ -846,6 +937,7 @@ mod tests {
             seven_day_model: None,
             quotas: Vec::new(),
             extra_usage: None,
+            resets: None,
             health: Default::default(),
         };
         Usage {
@@ -1090,6 +1182,67 @@ mod tests {
             available_count,
             credits,
         }
+    }
+
+    fn claude_account(count: u64, expires_at: Option<i64>) -> ClaudeAccountUsage {
+        ClaudeAccountUsage {
+            id: "dir".to_string(),
+            label: "Pro".to_string(),
+            live: true,
+            resets: Some(crate::models::ClaudeResets {
+                available_count: count,
+                next_credit_id: (count > 0).then(|| "tenure".to_string()),
+                next_expires_at: expires_at,
+                next_expires_in: None,
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn claude_reset_baseline_is_silent_then_a_new_reset_notifies() {
+        let mut st = ClaudeResetAlertState::default();
+        let now = 1_000_000;
+        let far = Some(now + 30 * 86400);
+
+        assert!(claude_reset_events(&mut st, true, &[claude_account(1, far)], now).is_empty());
+        assert!(claude_reset_events(&mut st, true, &[claude_account(1, far)], now).is_empty());
+
+        let ev = claude_reset_events(&mut st, true, &[claude_account(2, far)], now);
+        assert_eq!(ev.len(), 1);
+        assert_eq!(ev[0].0, "Claude reset available");
+
+        // Spending one is not news.
+        assert!(claude_reset_events(&mut st, true, &[claude_account(1, far)], now).is_empty());
+    }
+
+    #[test]
+    fn claude_reset_skips_failed_fetches_and_fires_expiry_once() {
+        let mut st = ClaudeResetAlertState::default();
+        let expires = 1_700_000_000;
+        let acct = claude_account(1, Some(expires));
+        assert!(claude_reset_events(&mut st, true, &[acct], expires - 5 * 86400).is_empty());
+
+        // A failed fetch serves no resets; it must not reset the count.
+        let mut down = claude_account(0, None);
+        down.live = false;
+        assert!(claude_reset_events(&mut st, true, &[down], expires - 5 * 86400).is_empty());
+
+        let ev = claude_reset_events(
+            &mut st,
+            true,
+            &[claude_account(1, Some(expires))],
+            expires - 10 * 3600,
+        );
+        assert!(ev.iter().all(|(t, _)| t == "Claude reset expiring"));
+        assert!(ev.iter().any(|(_, b)| b.contains("about a day")));
+        let ev = claude_reset_events(
+            &mut st,
+            true,
+            &[claude_account(1, Some(expires))],
+            expires - 10 * 3600,
+        );
+        assert!(ev.is_empty());
     }
 
     #[test]

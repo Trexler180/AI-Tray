@@ -1179,6 +1179,23 @@ body {
   color: var(--codex);
   border-color: var(--codex-2);
 }
+.reset-use:disabled {
+  cursor: default;
+  filter: saturate(0.4) brightness(0.85);
+  transform: none;
+}
+/* Claude's banked resets wear Claude's colour. */
+.reset-card.claude .reset-use {
+  color: #2a1406;
+  background: linear-gradient(90deg, var(--claude-2), var(--claude));
+}
+.reset-card.claude .reset-confirm .acct-btn.save:hover {
+  color: var(--claude);
+  border-color: var(--claude-2);
+}
+.ov-reset.claude {
+  color: var(--claude);
+}
 
 /* ---- Quota windows (timeline) ----
    Everything here is drawn on a time axis: horizontal position is when, bar

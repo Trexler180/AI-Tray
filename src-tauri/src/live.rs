@@ -1,7 +1,8 @@
 //! Live usage straight from the same endpoints the official CLIs use.
 //!
-//! Claude: GET https://api.anthropic.com/api/oauth/usage
+//! Claude: GET https://api.anthropic.com/api/oauth/usage?cedar_ember=1
 //!         Bearer <accessToken>, anthropic-beta: oauth-2025-04-20
+//!         (`cedar_ember=1` adds the banked-reset grants; see `resets`)
 //! Codex:  GET https://chatgpt.com/backend-api/wham/usage
 //!         Bearer <access_token>, chatgpt-account-id: <account_id>
 //!
@@ -14,7 +15,9 @@
 
 use crate::auth::{self, RefreshError};
 use crate::http::get_json_retrying;
-use crate::models::{DataHealth, DataSource, ExtraUsage, Gauge, ModelGauge, QuotaWindow};
+use crate::models::{
+    ClaudeResets, DataHealth, DataSource, ExtraUsage, Gauge, ModelGauge, QuotaWindow,
+};
 use crate::util::{codex_window_meta, codex_window_meta_by_slot, human_until};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -61,6 +64,19 @@ fn claude_backoff() -> MutexGuard<'static, HashMap<String, i64>> {
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .unwrap_or_else(|error| error.into_inner())
+}
+
+/// Accounts whose next collection should skip the fetch gap, because something
+/// just changed their limits server-side (a claimed reset).
+static CLAUDE_FORCED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Ask the endpoint about this account on the next collection even if its last
+/// success is recent. A 429 back-off still wins.
+pub fn force_claude_refetch(account_id: &str) {
+    let mut forced = CLAUDE_FORCED.lock().unwrap_or_else(|error| error.into_inner());
+    if !forced.iter().any(|id| id == account_id) {
+        forced.push(account_id.to_string());
+    }
 }
 
 struct Cached<T> {
@@ -201,6 +217,7 @@ pub struct ClaudeLive {
     pub seven_day_model: Option<ModelGauge>,
     pub quotas: Vec<QuotaWindow>,
     pub extra_usage: Option<ExtraUsage>,
+    pub resets: Option<ClaudeResets>,
 }
 
 /// One account's live gauges, ready for the UI/alerts layer.
@@ -219,6 +236,7 @@ pub struct ClaudeAccountLive {
     pub seven_day_model: Option<ModelGauge>,
     pub quotas: Vec<QuotaWindow>,
     pub extra_usage: Option<ExtraUsage>,
+    pub resets: Option<ClaudeResets>,
     pub health: DataHealth,
 }
 
@@ -361,6 +379,7 @@ fn parse_claude(v: &Value) -> Option<ClaudeLive> {
         seven_day_model,
         quotas,
         extra_usage: parse_extra_usage(v),
+        resets: crate::resets::parse_claude_resets(&v["cedar_ember"], Utc::now().timestamp()),
     };
     // A response with no recognizable window is a failure, not "no limits";
     // treating it as success would poison the cache with an empty snapshot.
@@ -374,18 +393,21 @@ fn fetch_claude_for(
     token: Option<String>,
     refresh: impl FnOnce(&str) -> Option<String>,
 ) -> Result<ClaudeLive, FetchFailure> {
-    const URL: &str = "https://api.anthropic.com/api/oauth/usage";
-    const HDR: [(&str, &str); 1] = [("anthropic-beta", "oauth-2025-04-20")];
+    const URL: &str = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1";
+    let hdr = [
+        ("anthropic-beta", "oauth-2025-04-20"),
+        ("User-Agent", crate::resets::claude_user_agent()),
+    ];
 
     let token = token.ok_or_else(FetchFailure::missing_credentials)?;
-    match get_json_retrying(URL, &token, &HDR) {
+    match get_json_retrying(URL, &token, &hdr) {
         Ok(v) => parse_claude(&v).ok_or_else(|| FetchFailure {
             kind: "decode",
             message: "Provider response did not contain recognized quota windows".to_string(),
         }),
         Err(401) | Err(403) => {
             let fresh = refresh(&token).ok_or_else(|| FetchFailure::status(401))?;
-            get_json_retrying(URL, &fresh, &HDR)
+            get_json_retrying(URL, &fresh, &hdr)
                 .map_err(FetchFailure::status)
                 .and_then(|v| parse_claude(&v).ok_or_else(|| FetchFailure {
                     kind: "decode",
@@ -407,6 +429,10 @@ fn serve_cached_claude(cached: &ClaudeLive) -> Option<ClaudeLive> {
         // Credit spend has no reset boundary inside the grace window, so the
         // cached snapshot serves as-is.
         extra_usage: cached.extra_usage.clone(),
+        resets: cached
+            .resets
+            .as_ref()
+            .map(|resets| crate::resets::serve_cached_claude_resets(resets, Utc::now().timestamp())),
     };
     (live.five_hour.is_some() || live.seven_day.is_some() || !live.quotas.is_empty())
         .then_some(live)
@@ -473,17 +499,17 @@ fn claude_cached(
 pub fn claude_live_accounts() -> Vec<ClaudeAccountLive> {
     let accounts = crate::accounts::list();
     let now = Utc::now().timestamp();
+    let forced = std::mem::take(&mut *CLAUDE_FORCED.lock().unwrap_or_else(|error| error.into_inner()));
     let paces: Vec<Pace> = {
         let cache = claude_cache();
         let backoff = claude_backoff();
         accounts
             .iter()
             .map(|acct| {
-                claude_pace(
-                    now,
-                    cache.get(&acct.id).map(|cached| cached.fetched_at),
-                    backoff.get(&acct.id).copied(),
-                )
+                let last_success = (!forced.contains(&acct.id))
+                    .then(|| cache.get(&acct.id).map(|cached| cached.fetched_at))
+                    .flatten();
+                claude_pace(now, last_success, backoff.get(&acct.id).copied())
             })
             .collect()
     };
@@ -540,7 +566,7 @@ pub fn claude_live_accounts() -> Vec<ClaudeAccountLive> {
                 (_, None) => claude_cached(&acct.id, Err(FetchFailure::status(429))),
             };
             let live = served.is_some();
-            let (five_hour, seven_day, seven_day_model, quotas, extra_usage) = served
+            let (five_hour, seven_day, seven_day_model, quotas, extra_usage, resets) = served
                 .map(|l| {
                     (
                         l.five_hour,
@@ -548,9 +574,10 @@ pub fn claude_live_accounts() -> Vec<ClaudeAccountLive> {
                         l.seven_day_model,
                         l.quotas,
                         l.extra_usage,
+                        l.resets,
                     )
                 })
-                .unwrap_or((None, None, None, Vec::new(), None));
+                .unwrap_or((None, None, None, Vec::new(), None, None));
             ClaudeAccountLive {
                 id: acct.id,
                 label: acct.label,
@@ -563,6 +590,7 @@ pub fn claude_live_accounts() -> Vec<ClaudeAccountLive> {
                 seven_day_model,
                 quotas,
                 extra_usage,
+                resets,
                 health,
             }
         })

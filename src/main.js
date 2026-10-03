@@ -16,7 +16,12 @@ const { listen } = window.__TAURI__.event;
 let data = null;
 let activeTab = "overview";
 let creditsOpen = false; // the Credits detail screen, layered over any tab
-let notificationSettings = { codex: false, claude: false, codex_resets: false };
+let notificationSettings = {
+  codex: false,
+  claude: false,
+  codex_resets: false,
+  claude_resets: false,
+};
 let widgetSettings = { enabled: false, tray_gap: 10, width: 114 };
 // "ok" | "vertical_taskbar" | "no_taskbar" — why the widget is or is not placeable.
 let widgetPlacement = "ok";
@@ -54,8 +59,12 @@ let updateState = null; // updater status + version, pushed from Rust on change
 let updateError = null; // error from the last update toggle, if any
 let startOnLogin = null; // whether the app registers itself to run at sign-in
 let startOnLoginError = false; // the last start-on-login toggle failed to save
-let confirmingReset = null; // credit id awaiting the inline "Use reset" confirm
-let resetError = null; // error from the last consume attempt, if any
+// Reset keys are "codex:<credit id>" or "claude:<account id>" — a Claude claim
+// spends whichever grant the server names next, so the account is the handle.
+let confirmingReset = null; // reset key awaiting the inline "Use reset" confirm
+let usingReset = null; // reset key whose claim is in flight
+let resetError = null; // error from the last Codex consume attempt, if any
+let claudeResetNotice = null; // { acct, text, error } from the last Claude claim
 let editingAccount = null; // account id whose Claude label is being renamed inline
 let editingDraft = ""; // in-progress label text, kept across background re-renders
 let editFocusPending = false; // focus the rename input once when editing starts
@@ -483,33 +492,77 @@ function availableResets(c) {
   return ((c.resets && c.resets.credits) || []).filter((x) => x.status === "available");
 }
 
-// One reset-credit card: title, expiry, and a Use action that expands into an
-// inline two-step confirm (no native dialog). Tinted amber when it expires
-// within a day.
-function resetCard(cr) {
-  const soon =
-    typeof cr.expires_at === "number" && cr.expires_at * 1000 - Date.now() <= 24 * 3600 * 1000;
-  const title = cr.title || "Free rate-limit reset";
-  const expires = cr.expires_at
+// Whether a deadline is within a day, which tints a reset card amber.
+const expiresSoon = (unix) => typeof unix === "number" && unix * 1000 - Date.now() <= 24 * 3600 * 1000;
+
+// One reset card: title, expiry line (already escaped), and a Use action that
+// expands into an inline two-step confirm (no native dialog).
+function resetCard(key, title, meta, soon, extraClass = "") {
+  const action =
+    usingReset === key
+      ? `<button class="reset-use" disabled>Using…</button>`
+      : confirmingReset === key
+        ? `<div class="reset-confirm">
+            <span class="reset-q">Use it?</span>
+            <button class="acct-btn save" data-reset-confirm="${esc(key)}" title="Confirm">✓</button>
+            <button class="acct-btn" data-reset-cancel title="Cancel">✕</button>
+          </div>`
+        : `<button class="reset-use" data-reset-use="${esc(key)}"${
+            usingReset ? " disabled" : ""
+          }>Use reset</button>`;
+  return `<div class="reset-card ${extraClass} ${soon ? "soon" : ""}">
+    <div class="reset-info">
+      <div class="reset-title">${esc(title)}</div>
+      ${meta ? `<div class="reset-meta ${soon ? "soon" : ""}">${meta}</div>` : ""}
+    </div>
+    ${action}
+  </div>`;
+}
+
+function codexResetCard(cr) {
+  const meta = cr.expires_at
     ? `Expires ${fmtDate(cr.expires_at)}${cr.expires_in ? ` · ${esc(cr.expires_in)} left` : ""}`
     : cr.granted_at
       ? `Granted ${fmtDate(cr.granted_at)}`
       : "";
-  const action =
-    confirmingReset === cr.id
-      ? `<div class="reset-confirm">
-          <span class="reset-q">Use it?</span>
-          <button class="acct-btn save" data-reset-confirm="${esc(cr.id)}" title="Confirm">✓</button>
-          <button class="acct-btn" data-reset-cancel title="Cancel">✕</button>
-        </div>`
-      : `<button class="reset-use" data-reset-use="${esc(cr.id)}">Use reset</button>`;
-  return `<div class="reset-card ${soon ? "soon" : ""}">
-    <div class="reset-info">
-      <div class="reset-title">${esc(title)}</div>
-      ${expires ? `<div class="reset-meta ${soon ? "soon" : ""}">${expires}</div>` : ""}
-    </div>
-    ${action}
-  </div>`;
+  return resetCard(
+    `codex:${cr.id}`,
+    cr.title || "Free rate-limit reset",
+    meta,
+    expiresSoon(cr.expires_at)
+  );
+}
+
+// What a Claude claim came back with, in T3 Code's words.
+const CLAUDE_RESET_OUTCOMES = {
+  reset: "Reset applied. Your windows have cleared.",
+  nothingToReset: "Nothing to reset right now — you're not at a limit, so the reset was kept.",
+  noCredit: "No reset credit left.",
+  alreadyRedeemed: "That credit was already redeemed.",
+};
+
+const claudeResetCount = (a) => (a.live && a.resets ? a.resets.available_count || 0 : 0);
+
+// Banked resets for one Claude account, under its meters. Nothing at all for
+// an account that isn't eligible; a quiet line when it is but has none banked.
+function claudeResetBlock(a) {
+  const r = a.resets;
+  const notice = claudeResetNotice && claudeResetNotice.acct === a.id ? claudeResetNotice : null;
+  let html = notice
+    ? `<div class="${notice.error ? "banner small" : "sec-sub"}">${
+        notice.error ? `Couldn't use that reset — ${esc(notice.text)}` : esc(notice.text)
+      }</div>`
+    : "";
+  if (!r) return html;
+  const count = claudeResetCount(a);
+  if (!count || !r.next_credit_id) return html + `<div class="sec-sub">No resets banked.</div>`;
+  const meta = r.next_expires_at
+    ? `Use by ${fmtDate(r.next_expires_at)}${
+        r.next_expires_in ? ` · ${esc(r.next_expires_in)} left` : ""
+      }`
+    : "Refills your limits now";
+  const title = `${count} reset${count === 1 ? "" : "s"} banked`;
+  return html + resetCard(`claude:${a.id}`, title, meta, expiresSoon(r.next_expires_at), "claude");
 }
 
 // The "Reset credits" section for the Codex tab. The notify toggle that used to
@@ -524,7 +577,7 @@ function resetSection(c) {
     html += `<div class="banner small">Couldn't use that reset — ${esc(resetError)}</div>`;
   if (!r) html += `<div class="sec-sub">Live reset-credit info unavailable.</div>`;
   else if (!credits.length) html += `<div class="sec-sub">No reset credits right now.</div>`;
-  else for (const cr of credits) html += resetCard(cr);
+  else for (const cr of credits) html += codexResetCard(cr);
   return html;
 }
 
@@ -651,7 +704,7 @@ function renderClaudeAccount(a, multi) {
     ${a.active && multi ? `<span class="pill">default</span>` : ""}
   </div>`;
   const body = a.live
-    ? claudeGauges(a, "Session (5h)") + creditsBar(a, { link: true })
+    ? claudeGauges(a, "Session (5h)") + creditsBar(a, { link: true }) + claudeResetBlock(a)
     : `<div class="banner small">Live usage unavailable — open Claude Code signed in as this account to refresh it.</div>`;
   return `<div class="acct" data-acct="${esc(a.id)}">${multi ? head : ""}${body}</div>`;
 }
@@ -751,6 +804,11 @@ function overviewClaudeCard(cl, accounts) {
   } else {
     html += `<div class="sec-sub">Live unavailable — open Claude Code</div>`;
   }
+  const resetCount = accounts.reduce((sum, a) => sum + claudeResetCount(a), 0);
+  if (resetCount)
+    html += `<div class="ov-reset claude">${resetCount} reset${
+      resetCount > 1 ? "s" : ""
+    } banked</div>`;
   return html + `</div>`;
 }
 
@@ -1753,6 +1811,13 @@ function renderSettings() {
     notificationSettings.claude,
     true
   );
+  html += settingRow(
+    "Claude resets",
+    "When a reset is banked or about to expire",
+    'data-notify-provider="claude_resets"',
+    notificationSettings.claude_resets,
+    true
+  );
   html += `</div>`;
   if (notifyError)
     html += `<div class="banner small">Couldn't save the notification setting — try again.</div>`;
@@ -2547,10 +2612,11 @@ async function setNotifyEnabled(provider, enabled) {
   render();
 }
 
-// ---------- Codex reset credits ----------
-function startUseReset(id) {
-  confirmingReset = id;
+// ---------- reset credits (Codex) and banked resets (Claude) ----------
+function startUseReset(key) {
+  confirmingReset = key;
   resetError = null;
+  claudeResetNotice = null;
   render();
 }
 
@@ -2559,15 +2625,42 @@ function cancelUseReset() {
   render();
 }
 
-async function confirmUseReset(id) {
+async function confirmUseReset(key) {
   confirmingReset = null;
   resetError = null;
+  claudeResetNotice = null;
+  usingReset = key;
   render();
-  try {
-    await invoke("consume_codex_reset", { creditId: id });
-  } catch (e) {
-    resetError = String(e);
+  if (key.startsWith("claude:")) {
+    const accountId = key.slice("claude:".length);
+    const acct = (data.claude.accounts || []).find((a) => a.id === accountId);
+    try {
+      const creditId = acct?.resets?.next_credit_id;
+      if (!creditId) throw "No reset credit left.";
+      const outcome = await invoke("consume_claude_reset", { accountId, creditId });
+      const notice = {
+        acct: accountId,
+        text: CLAUDE_RESET_OUTCOMES[outcome] || "Done.",
+        error: false,
+      };
+      claudeResetNotice = notice;
+      // The outcome is news for a moment, not a permanent caption.
+      setTimeout(() => {
+        if (claudeResetNotice !== notice) return;
+        claudeResetNotice = null;
+        render();
+      }, 60000);
+    } catch (e) {
+      claudeResetNotice = { acct: accountId, text: String(e), error: true };
+    }
+  } else {
+    try {
+      await invoke("consume_codex_reset", { creditId: key.slice("codex:".length) });
+    } catch (e) {
+      resetError = String(e);
+    }
   }
+  usingReset = null;
   // Pull fresh numbers either way: success drops the spent credit, failure
   // restores the list so the user can retry.
   refresh();
