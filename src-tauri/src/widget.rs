@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{LogicalSize, Manager, PhysicalPosition, Size};
+use tauri::{Manager, PhysicalPosition, PhysicalSize, Size};
 
 /// Logical width the widget starts at. Account count never changes it — more
 /// accounts narrow the cells instead — but the user can drag it wider when the
@@ -141,6 +141,12 @@ impl WidgetState {
             placement: Mutex::new(Placement::Ok),
             edges: Mutex::new(Edges::default()),
         }
+    }
+
+    /// Whether the widget is switched on. The background poll runs faster while
+    /// it is, since it keeps usage on screen permanently.
+    pub fn enabled(&self) -> bool {
+        self.get().enabled
     }
 
     fn placement(&self) -> std::sync::MutexGuard<'_, Placement> {
@@ -443,7 +449,13 @@ fn place(app: &tauri::AppHandle) -> (Placement, Edges) {
     // given back before the widget starts moving again.
     let effective_gap = (anchor - (x + w_px)) as f64 / scale;
     if (effective_gap - gap).abs() > 0.5 {
-        state.get().tray_gap = effective_gap;
+        // Only if nobody moved it since it was read above: the ticker runs this
+        // on its own thread while a drag is updating the gap, and writing back a
+        // value derived from the old gap would snap the widget backwards.
+        let mut settings = state.get();
+        if settings.tray_gap == gap {
+            settings.tray_gap = effective_gap;
+        }
     }
 
     // Read off the applied position rather than the asked-for one: a drag that
@@ -453,18 +465,24 @@ fn place(app: &tauri::AppHandle) -> (Placement, Edges) {
 
     // Only touch the window when something actually moved. This runs on a
     // timer, and set_size/set_position are window messages, not free.
+    //
+    // Move first, then size in physical pixels. Both figures were worked out
+    // at the *target* monitor's scale; a logical size would be converted at
+    // whatever scale the window is on now, and a move onto a screen with a
+    // different DPI rescales the window anyway — so sizing last, exactly,
+    // is what makes it right on the first pass.
     let h_px = (logical_h * scale).round() as u32;
-    if window
-        .outer_size()
-        .is_ok_and(|s| s.width != w_px as u32 || s.height != h_px)
-    {
-        let _ = window.set_size(Size::Logical(LogicalSize::new(width, logical_h)));
-    }
     if window
         .outer_position()
         .is_ok_and(|p| p.x != x || p.y != sy)
     {
         let _ = window.set_position(PhysicalPosition::new(x, sy));
+    }
+    if window
+        .outer_size()
+        .is_ok_and(|s| s.width != w_px as u32 || s.height != h_px)
+    {
+        let _ = window.set_size(Size::Physical(PhysicalSize::new(w_px as u32, h_px)));
     }
     (Placement::Ok, edges)
 }

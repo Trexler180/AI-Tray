@@ -153,6 +153,36 @@ mod tests {
         assert_eq!(priced.confidence, EstimateConfidence::High);
     }
 
+    /// Output price per million tokens a model id resolves to, for asserting
+    /// which catalog entry won.
+    fn claude_output_rate(model: &str) -> (f64, EstimateConfidence) {
+        let priced = claude_value(model, 0, 1_000_000, 0, 0);
+        (priced.cost, priced.confidence)
+    }
+
+    /// Entries are matched first-to-last, so a newer model whose id starts with
+    /// an older family's prefix has to be listed ahead of it. These are the
+    /// cases that went wrong when a newer id was missing from the catalog.
+    #[test]
+    fn newer_claude_models_are_not_caught_by_older_prefixes() {
+        // Not the $75 Opus 4 / 4.1 rate that `claude-opus-4` carries.
+        assert_eq!(claude_output_rate("claude-opus-4-7").0, 25.0);
+        assert_eq!(claude_output_rate("claude-opus-4-5-20251101").0, 25.0);
+        assert_eq!(claude_output_rate("claude-opus-4-1-20250805").0, 75.0);
+        // Opus 5.5 is its own price, not Opus 5's.
+        assert_eq!(claude_output_rate("claude-opus-5-5").0, 20.0);
+        assert_eq!(claude_output_rate("claude-opus-5").0, 25.0);
+        assert_ne!(claude_output_rate("claude-opus-5").1, EstimateConfidence::Low);
+    }
+
+    #[test]
+    fn fable_5_1_cache_reads_use_its_own_rate() {
+        let priced = claude_value("claude-fable-5-1", 0, 0, 0, 1_000_000);
+        assert!((priced.cost - 0.25).abs() < 1e-9);
+        let older = claude_value("claude-fable-5", 0, 0, 0, 1_000_000);
+        assert!((older.cost - 1.0).abs() < 1e-9);
+    }
+
     #[test]
     fn unknown_models_are_explicitly_low_confidence() {
         let priced = codex_value("future-model", 1, 0, 0);

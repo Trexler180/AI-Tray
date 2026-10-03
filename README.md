@@ -5,7 +5,11 @@ and an API-equivalent value estimate in a compact popover.
 
 - **Overview** — both providers at a glance and today's combined estimated value.
 - **Codex** — live quota windows, plan and credit details, reset credits, and
-  model-aware local token history.
+  model-aware local token history. Accounts with **Luna Reserve** — the
+  separately metered GPT-5.6 Luna allowance Codex opens once the regular limit
+  is used up — get its meter under the main ones, marked *standing by* or
+  *in use*. It appears on the Overview only while it's being spent, and the
+  "limit used up" notification says when the reserve takes over.
 - **Claude** — live account and scoped quota windows plus model-aware local
   Claude Code history. Multiple Claude config directories are supported.
 - **Windows** — a timeline of every quota window: bar length is the window's
@@ -61,7 +65,9 @@ provider pricing changes.
 
 - **Live quota data** uses the same authenticated endpoints as the official
   CLIs, with credentials already stored in `~/.claude/.credentials.json` and
-  `~/.codex/auth.json`. Rotated access tokens are written back atomically.
+  `CODEX_HOME/auth.json`. Rotated access tokens are written back atomically,
+  and parallel fetches that find the same token expired share one refresh
+  rather than each spending the single-use refresh token.
 - **Codex history** comes from both
   `CODEX_HOME/sessions/**/rollout-*.jsonl` and
   `CODEX_HOME/archived_sessions/**/rollout-*.jsonl`. If `CODEX_HOME` is unset,
@@ -89,7 +95,10 @@ configuration directory:
 ```
 
 The scanner reuses unchanged files and reads only newly appended, complete
-JSONL records. Files changed in place or truncated are rescanned. Cache writes
+JSONL records. Files changed in place or truncated are rescanned. Only the last
+month is kept: log files untouched for 31 days are skipped, and events older
+than 30 days are dropped from the index, so it doesn't grow with every session
+ever recorded. Cache writes
 use atomic replacement, and an unreadable or older cache version is ignored and
 rebuilt. The cache stores token facts rather than currency totals, so a pricing
 catalog update reprices history without forcing a log rescan.
@@ -172,6 +181,9 @@ switched on in Settings → Taskbar widget.
   over. Pinning everything to a single row is how you ask for one row of
   full-height bars. A live preview above the pickers shows where they land, and
   a row left empty is dropped rather than drawn.
+- While Codex's regular limit is used up and Luna Reserve still has room, the
+  Codex cell shows the reserve instead, since a full bar says nothing new. It
+  switches back once the regular limit resets or the reserve runs out too.
 - An account whose plan reports only one window (Codex meters weekly only on
   some plans) draws that single bar filling the row, rather than a real bar over
   an empty one.
@@ -228,11 +240,20 @@ stays as the reference for the geometry.
   read alongside other windows.
 - Right-click the tray icon for Refresh or Quit.
 - The panel refreshes when opened and every 60 seconds while visible.
-- When notifications are enabled, a lightweight background refresh checks
-  quota thresholds approximately every five minutes even while the panel is
-  hidden. Local usage-file changes also schedule a refresh.
+- A lightweight background refresh runs every five minutes even while the
+  panel is hidden — every two while the taskbar widget is on — so the widget,
+  the Windows timeline and notifications all see usage from other devices.
+  Local usage-file changes also schedule a refresh; a change that arrives
+  while one was just made is held back and run shortly after, not dropped.
+- Claude's usage endpoint is paced per account, because an active Claude Code
+  session writes logs constantly and would otherwise have it asked every 30
+  seconds. A result under 45 seconds old is reused, and after a rate-limit
+  response (HTTP 429) the account is left alone for five minutes, showing its
+  last numbers with their age. Local cost and token history is unaffected.
 - The app starts on login by registering itself under
-  `HKCU\...\CurrentVersion\Run`. Disable it in Task Manager's Startup apps.
+  `HKCU\...\CurrentVersion\Run`. Switch it off in **Settings → About →
+  Start with Windows**; the choice is kept in
+  `%APPDATA%\AI Usage Tray\startup.json`.
 - A second launch opens the existing single instance.
 - Windows acrylic and native rounded corners gracefully fall back to a solid
   panel when unavailable.

@@ -16,7 +16,7 @@ use crate::models::Usage;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 const CACHE_NAME: &str = "windows";
 const CACHE_VERSION: u32 = 1;
@@ -93,14 +93,20 @@ pub struct Observation {
     pub used: f64,
 }
 
-fn store() -> &'static Mutex<WindowHistory> {
+/// The record, loaded on first use. A poisoned lock is recovered rather than
+/// propagated: the record is still coherent, and losing the timeline for the
+/// rest of the session would be worse than continuing with it.
+fn store() -> MutexGuard<'static, WindowHistory> {
     static STORE: OnceLock<Mutex<WindowHistory>> = OnceLock::new();
-    STORE.get_or_init(|| {
-        Mutex::new(history_cache::load::<WindowHistory>(
-            CACHE_NAME,
-            CACHE_VERSION,
-        ))
-    })
+    STORE
+        .get_or_init(|| {
+            Mutex::new(history_cache::load::<WindowHistory>(
+                CACHE_NAME,
+                CACHE_VERSION,
+            ))
+        })
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
 }
 
 /// Sample every live window in a snapshot. Called from the one place every
@@ -142,7 +148,7 @@ pub fn record(usage: &Usage) {
     }
 
     let now = Utc::now().timestamp();
-    let mut history = store().lock().unwrap();
+    let mut history = store();
     if !apply(&mut history, &observations, now) {
         return;
     }
@@ -285,7 +291,7 @@ fn prune(history: &mut WindowHistory, now: i64) {
 }
 
 pub fn history() -> WindowHistory {
-    store().lock().unwrap().clone()
+    store().clone()
 }
 
 /// Quota spent on one window over a recent stretch, in the same percent-of-
@@ -313,7 +319,7 @@ const STRETCH_LIMIT: i64 = 2;
 
 /// Recent spend for every window on record, keyed the same way the series are.
 pub fn recent(minutes: i64) -> HashMap<String, RecentBurn> {
-    recent_in(&store().lock().unwrap(), minutes, Utc::now().timestamp())
+    recent_in(&store(), minutes, Utc::now().timestamp())
 }
 
 /// Only rises count, the same reasoning the timeline's burn strip uses: a
@@ -371,7 +377,7 @@ pub fn recent_in(
 }
 
 pub fn clear() -> std::io::Result<()> {
-    *store().lock().unwrap() = WindowHistory::default();
+    *store() = WindowHistory::default();
     history_cache::clear(CACHE_NAME)
 }
 

@@ -12,17 +12,56 @@
 //! period, so one dropped request, a 429, or a token-refresh race with the
 //! CLI doesn't flip the UI and the alert pipeline to "logs only".
 
-use crate::auth;
+use crate::auth::{self, RefreshError};
+use crate::http::get_json_retrying;
 use crate::models::{DataHealth, DataSource, ExtraUsage, Gauge, ModelGauge, QuotaWindow};
 use crate::util::{codex_window_meta, codex_window_meta_by_slot, human_until};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 /// How long a stale snapshot keeps serving while the endpoint is unreachable.
 const LIVE_CACHE_SECS: i64 = 15 * 60;
+
+/// Claude's usage endpoint rate-limits hard, and refreshes arrive far more
+/// often than its numbers need re-asking: every local log write during an
+/// active Claude Code session schedules one, as often as every 30 seconds.
+/// Within this gap of the last successful fetch, that result is reused as-is.
+const CLAUDE_MIN_FETCH_GAP_SECS: i64 = 45;
+/// After a 429, leave the account alone this long instead of re-asking on
+/// every refresh — which is what kept an account rate-limited indefinitely.
+const CLAUDE_RATE_LIMIT_BACKOFF_SECS: i64 = 5 * 60;
+
+/// Whether to call the Claude usage endpoint for an account right now.
+#[derive(Debug, PartialEq, Eq)]
+enum Pace {
+    Fetch,
+    /// The last success is recent enough to serve as current.
+    Recent,
+    /// Still inside the back-off after a 429.
+    BackingOff,
+}
+
+fn claude_pace(now: i64, last_success: Option<i64>, retry_after: Option<i64>) -> Pace {
+    if retry_after.is_some_and(|until| now < until) {
+        return Pace::BackingOff;
+    }
+    if last_success.is_some_and(|at| now - at < CLAUDE_MIN_FETCH_GAP_SECS) {
+        return Pace::Recent;
+    }
+    Pace::Fetch
+}
+
+/// Per-account time before which the usage endpoint is not asked again.
+static CLAUDE_BACKOFF: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
+
+fn claude_backoff() -> MutexGuard<'static, HashMap<String, i64>> {
+    CLAUDE_BACKOFF
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
 
 struct Cached<T> {
     fetched_at: i64,
@@ -51,6 +90,20 @@ impl FetchFailure {
         Self {
             kind: "missing_credentials",
             message: "No usable provider credentials were found".to_string(),
+        }
+    }
+
+    fn refresh(error: RefreshError) -> Self {
+        match error {
+            RefreshError::Missing => Self::missing_credentials(),
+            RefreshError::Rejected => Self::status(401),
+            RefreshError::SaveFailed(error) => Self {
+                kind: "credentials_write",
+                message: format!(
+                    "Refreshed the login but could not save it ({error}); \
+                     sign in with the CLI again if it stops working"
+                ),
+            },
         }
     }
 }
@@ -92,50 +145,11 @@ fn cached_health(now: i64, fetched_at: i64, failure: &FetchFailure) -> DataHealt
 static CLAUDE_CACHE: OnceLock<Mutex<HashMap<String, Cached<ClaudeLive>>>> = OnceLock::new();
 static CODEX_CACHE: Mutex<Option<Cached<CodexLive>>> = Mutex::new(None);
 
-fn claude_cache() -> &'static Mutex<HashMap<String, Cached<ClaudeLive>>> {
-    CLAUDE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(10))
-        .build()
-}
-
-/// GET with bearer auth. Returns Ok(json), or Err(status) where 401 signals
-/// an expired token and 0 signals a transport error.
-fn get_json(url: &str, token: &str, extra: &[(&str, &str)]) -> Result<Value, u16> {
-    let mut req = agent()
-        .get(url)
-        .set("Authorization", &format!("Bearer {token}"))
-        .set("Content-Type", "application/json");
-    for (k, v) in extra {
-        req = req.set(k, v);
-    }
-    match req.call() {
-        Ok(resp) => {
-            let body = resp.into_string().map_err(|_| 0u16)?;
-            serde_json::from_str(&body).map_err(|_| 0u16)
-        }
-        Err(ureq::Error::Status(code, _)) => Err(code),
-        Err(_) => Err(0),
-    }
-}
-
-/// Like get_json, but retries transport errors and 5xx with backoff
-/// (3 attempts total). Auth errors and 429 pass straight through.
-fn get_json_retrying(url: &str, token: &str, extra: &[(&str, &str)]) -> Result<Value, u16> {
-    let mut delay_ms = 500;
-    for _ in 0..2 {
-        match get_json(url, token, extra) {
-            Err(0) | Err(500) | Err(502) | Err(503) | Err(504) => {
-                std::thread::sleep(Duration::from_millis(delay_ms));
-                delay_ms *= 3;
-            }
-            other => return other,
-        }
-    }
-    get_json(url, token, extra)
+fn claude_cache() -> MutexGuard<'static, HashMap<String, Cached<ClaudeLive>>> {
+    CLAUDE_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
 }
 
 fn gauge_from_pct(used: f64, resets_at_unix: Option<i64>, window_minutes: i64) -> Gauge {
@@ -382,6 +396,41 @@ fn fetch_claude_for(
     }
 }
 
+/// A cached snapshot made ready to serve: windows that have reset since are
+/// dropped and countdowns recomputed. None when nothing is left to show.
+fn serve_cached_claude(cached: &ClaudeLive) -> Option<ClaudeLive> {
+    let live = ClaudeLive {
+        five_hour: serve_cached_gauge(&cached.five_hour),
+        seven_day: serve_cached_gauge(&cached.seven_day),
+        seven_day_model: serve_cached_model_gauge(&cached.seven_day_model),
+        quotas: cached.quotas.iter().filter_map(serve_cached_quota).collect(),
+        // Credit spend has no reset boundary inside the grace window, so the
+        // cached snapshot serves as-is.
+        extra_usage: cached.extra_usage.clone(),
+    };
+    (live.five_hour.is_some() || live.seven_day.is_some() || !live.quotas.is_empty())
+        .then_some(live)
+}
+
+/// What a paced account serves: its last success, which is recent enough to
+/// count as live. Health says so, with the real age, rather than pretending
+/// the endpoint was asked again.
+fn claude_recent(org: &str) -> (Option<ClaudeLive>, DataHealth) {
+    let now = Utc::now().timestamp();
+    let cache = claude_cache();
+    let Some(cached) = cache.get(org) else {
+        return (None, failed_health(now, &FetchFailure::missing_credentials()));
+    };
+    let health = DataHealth {
+        source: DataSource::LiveApi,
+        fetched_at: Some(cached.fetched_at),
+        attempted_at: Some(cached.fetched_at),
+        stale_age_seconds: Some((now - cached.fetched_at).max(0)),
+        ..Default::default()
+    };
+    (serve_cached_claude(&cached.value), health)
+}
+
 /// Cache the fetched snapshot for `org`, or serve its last-good one within the
 /// grace window when the fetch failed.
 fn claude_cached(
@@ -389,7 +438,7 @@ fn claude_cached(
     fetched: Result<ClaudeLive, FetchFailure>,
 ) -> (Option<ClaudeLive>, DataHealth) {
     let now = Utc::now().timestamp();
-    let mut cache = claude_cache().lock().unwrap();
+    let mut cache = claude_cache();
     match fetched {
         Ok(live) => {
             cache.insert(
@@ -408,25 +457,10 @@ fn claude_cached(
             if now - cached.fetched_at > LIVE_CACHE_SECS {
                 return (None, failed_health(now, &failure));
             }
-            let live = ClaudeLive {
-                five_hour: serve_cached_gauge(&cached.value.five_hour),
-                seven_day: serve_cached_gauge(&cached.value.seven_day),
-                seven_day_model: serve_cached_model_gauge(&cached.value.seven_day_model),
-                quotas: cached
-                    .value
-                    .quotas
-                    .iter()
-                    .filter_map(serve_cached_quota)
-                    .collect(),
-                // Credit spend has no reset boundary inside the grace window,
-                // so the cached snapshot serves as-is.
-                extra_usage: cached.value.extra_usage.clone(),
-            };
-            let value = (live.five_hour.is_some()
-                || live.seven_day.is_some()
-                || !live.quotas.is_empty())
-            .then_some(live);
-            (value, cached_health(now, cached.fetched_at, &failure))
+            (
+                serve_cached_claude(&cached.value),
+                cached_health(now, cached.fetched_at, &failure),
+            )
         }
     }
 }
@@ -437,14 +471,74 @@ fn claude_cached(
 /// fetch the live gauges, and (on a 401) refreshed in place in that same file —
 /// so the CLI pointed at that directory keeps working with the rotated token.
 pub fn claude_live_accounts() -> Vec<ClaudeAccountLive> {
-    let mut out: Vec<ClaudeAccountLive> = crate::accounts::list()
+    let accounts = crate::accounts::list();
+    let now = Utc::now().timestamp();
+    let paces: Vec<Pace> = {
+        let cache = claude_cache();
+        let backoff = claude_backoff();
+        accounts
+            .iter()
+            .map(|acct| {
+                claude_pace(
+                    now,
+                    cache.get(&acct.id).map(|cached| cached.fetched_at),
+                    backoff.get(&acct.id).copied(),
+                )
+            })
+            .collect()
+    };
+
+    // One thread per account that is due: each fetch can take several seconds
+    // with its retries, and one slow or unreachable account shouldn't hold up
+    // the rest. Accounts that aren't due get None and are served from cache.
+    let fetched: Vec<Option<Result<ClaudeLive, FetchFailure>>> = std::thread::scope(|s| {
+        let handles: Vec<_> = accounts
+            .iter()
+            .zip(&paces)
+            .map(|(acct, pace)| {
+                (*pace == Pace::Fetch).then(|| {
+                    s.spawn(move || {
+                        let creds = crate::accounts::creds_file(&acct.dir);
+                        fetch_claude_for(auth::claude_access_token_at(&creds), |t| {
+                            auth::refresh_claude_creds_after_rejection_at(&creds, t)
+                        })
+                    })
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle.map(|handle| {
+                    handle.join().unwrap_or_else(|_| {
+                        Err(FetchFailure {
+                            kind: "internal",
+                            message: "The usage fetch for this account crashed".to_string(),
+                        })
+                    })
+                })
+            })
+            .collect()
+    });
+
+    let mut out: Vec<ClaudeAccountLive> = accounts
         .into_iter()
-        .map(|acct| {
-            let creds = crate::accounts::creds_file(&acct.dir);
-            let fetched = fetch_claude_for(auth::claude_access_token_at(&creds), |t| {
-                auth::refresh_claude_creds_after_rejection_at(&creds, t)
-            });
-            let (served, health) = claude_cached(&acct.id, fetched);
+        .zip(paces)
+        .zip(fetched)
+        .map(|((acct, pace), fetched)| {
+            let (served, health) = match (pace, fetched) {
+                (_, Some(fetched)) => {
+                    if matches!(&fetched, Err(failure) if failure.kind == "rate_limited") {
+                        claude_backoff()
+                            .insert(acct.id.clone(), now + CLAUDE_RATE_LIMIT_BACKOFF_SECS);
+                    }
+                    claude_cached(&acct.id, fetched)
+                }
+                (Pace::Recent, None) => claude_recent(&acct.id),
+                // Serves the last good snapshot within the grace window, and
+                // keeps reporting the rate limit that caused the wait.
+                (_, None) => claude_cached(&acct.id, Err(FetchFailure::status(429))),
+            };
             let live = served.is_some();
             let (five_hour, seven_day, seven_day_model, quotas, extra_usage) = served
                 .map(|l| {
@@ -502,35 +596,59 @@ fn codex_window(node: &Value) -> Option<Gauge> {
     ))
 }
 
+/// The `*_window` gauges inside one rate-limit block, in the order reported.
+fn codex_windows(rl: &Value) -> Vec<(String, Gauge)> {
+    let Some(windows) = rl.as_object() else {
+        return Vec::new();
+    };
+    windows
+        .iter()
+        .filter(|(key, _)| key.ends_with("_window"))
+        .filter_map(|(key, node)| Some((key.clone(), codex_window(node)?)))
+        .collect()
+}
+
 fn parse_codex(v: &Value) -> Option<CodexLive> {
-    let rl = &v["rate_limit"];
     let mut quotas = Vec::new();
     let mut used_ids = HashSet::new();
-    if let Some(windows) = rl.as_object() {
-        for (key, node) in windows {
-            if !key.ends_with("_window") {
-                continue;
+    for (key, gauge) in codex_windows(&v["rate_limit"]) {
+        let slot = key.trim_end_matches("_window");
+        // Named from the window's own length, not its slot: Codex moves
+        // limits between slots when it turns one on or off.
+        let (mut id, label, group) = codex_window_meta(gauge.window_minutes)
+            .unwrap_or_else(|| codex_window_meta_by_slot(slot));
+        if !used_ids.insert(id.clone()) {
+            id = format!("{id}:{slot}");
+            used_ids.insert(id.clone());
+        }
+        quotas.push(QuotaWindow {
+            id,
+            label,
+            kind: key,
+            group: group.to_string(),
+            gauge,
+            ..Default::default()
+        });
+    }
+    // Allowances metered beside the main limit, Luna Reserve among them. Each
+    // entry carries its own rate-limit block in the same shape as the main one
+    // (`AdditionalRateLimitDetails` in the Codex CLI's backend models); the
+    // field is null for accounts that have none.
+    for entry in v["additional_rate_limits"].as_array().into_iter().flatten() {
+        let windows = codex_windows(&entry["rate_limit"]);
+        if windows.is_empty() {
+            continue;
+        }
+        for mut quota in crate::util::codex_additional_quotas(
+            entry["limit_name"].as_str().unwrap_or(""),
+            entry["metered_feature"].as_str().unwrap_or(""),
+            windows,
+        ) {
+            if !used_ids.insert(quota.id.clone()) {
+                quota.id = format!("{}:{}", quota.id, used_ids.len());
+                used_ids.insert(quota.id.clone());
             }
-            let Some(gauge) = codex_window(node) else {
-                continue;
-            };
-            let slot = key.trim_end_matches("_window");
-            // Named from the window's own length, not its slot: Codex moves
-            // limits between slots when it turns one on or off.
-            let (mut id, label, group) = codex_window_meta(gauge.window_minutes)
-                .unwrap_or_else(|| codex_window_meta_by_slot(slot));
-            if !used_ids.insert(id.clone()) {
-                id = format!("{id}:{slot}");
-                used_ids.insert(id.clone());
-            }
-            quotas.push(QuotaWindow {
-                id,
-                label,
-                kind: key.clone(),
-                group: group.to_string(),
-                gauge,
-                ..Default::default()
-            });
+            quotas.push(quota);
         }
     }
     let by_group = |group: &str| {
@@ -552,16 +670,7 @@ fn parse_codex(v: &Value) -> Option<CodexLive> {
 fn fetch_codex_live() -> Result<CodexLive, FetchFailure> {
     const URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 
-    let path = auth::codex_auth_path().ok_or_else(FetchFailure::missing_credentials)?;
-    let auth_json = auth::read_json(&path).ok_or_else(FetchFailure::missing_credentials)?;
-    let token = auth_json["tokens"]["access_token"]
-        .as_str()
-        .ok_or_else(FetchFailure::missing_credentials)?
-        .to_string();
-    let account = auth_json["tokens"]["account_id"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let (token, account) = auth::codex_token().ok_or_else(FetchFailure::missing_credentials)?;
 
     match get_json_retrying(URL, &token, &[("chatgpt-account-id", account.as_str())]) {
         Ok(v) => parse_codex(&v).ok_or_else(|| FetchFailure {
@@ -569,8 +678,8 @@ fn fetch_codex_live() -> Result<CodexLive, FetchFailure> {
             message: "Provider response did not contain recognized quota windows".to_string(),
         }),
         Err(401) | Err(403) => {
-            let (fresh, acc) =
-                auth::refresh_codex_creds().ok_or_else(|| FetchFailure::status(401))?;
+            let (fresh, acc) = auth::refresh_codex_creds_after_rejection(&token)
+                .map_err(FetchFailure::refresh)?;
             get_json_retrying(URL, &fresh, &[("chatgpt-account-id", acc.as_str())])
                 .map_err(FetchFailure::status)
                 .and_then(|v| parse_codex(&v).ok_or_else(|| FetchFailure {
@@ -585,7 +694,7 @@ fn fetch_codex_live() -> Result<CodexLive, FetchFailure> {
 pub fn codex_live() -> (Option<CodexLive>, DataHealth) {
     let fetched = fetch_codex_live();
     let now = Utc::now().timestamp();
-    let mut cache = CODEX_CACHE.lock().unwrap();
+    let mut cache = CODEX_CACHE.lock().unwrap_or_else(|error| error.into_inner());
     match fetched {
         Ok(live) => {
             *cache = Some(Cached {
@@ -751,6 +860,48 @@ mod tests {
         assert_eq!(live.secondary.as_ref().unwrap().used_percent, 61.0);
     }
 
+    /// Luna Reserve arrives under `additional_rate_limits`, in the shape the
+    /// Codex CLI's backend models define. It must show up as its own window
+    /// and never stand in for the main session or weekly gauge.
+    #[test]
+    fn luna_reserve_is_parsed_beside_the_main_limit() {
+        let v: Value = serde_json::from_str(
+            r#"{"plan_type": "plus",
+                "rate_limit": {"allowed": false, "limit_reached": true,
+                  "primary_window": {"used_percent": 100, "limit_window_seconds": 18000, "reset_at": 1784077200},
+                  "secondary_window": {"used_percent": 73, "limit_window_seconds": 604800, "reset_at": 1784592000}},
+                "additional_rate_limits": [
+                  {"limit_name": "Luna Reserve", "metered_feature": "codex_reserve",
+                   "rate_limit": {"allowed": true, "limit_reached": false,
+                     "primary_window": {"used_percent": 20, "limit_window_seconds": 604800, "reset_at": 1784592000},
+                     "secondary_window": null}},
+                  {"limit_name": "Nothing metered yet", "metered_feature": "other", "rate_limit": null}
+                ]}"#,
+        )
+        .unwrap();
+        let live = parse_codex(&v).expect("parses");
+        assert_eq!(live.quotas.len(), 3, "two main windows plus the reserve");
+        let reserve = live.quotas.iter().find(|q| q.group == "reserve").unwrap();
+        assert_eq!(reserve.label, "Luna Reserve");
+        assert_eq!(reserve.gauge.used_percent, 20.0);
+        // The main gauges are still the main windows, not the reserve.
+        assert_eq!(live.primary.as_ref().unwrap().used_percent, 100.0);
+        assert_eq!(live.secondary.as_ref().unwrap().used_percent, 73.0);
+        let ids: HashSet<_> = live.quotas.iter().map(|q| &q.id).collect();
+        assert_eq!(ids.len(), 3);
+    }
+
+    /// What every account without an extra allowance gets today.
+    #[test]
+    fn a_null_additional_rate_limits_adds_nothing() {
+        let v: Value = serde_json::from_str(
+            r#"{"rate_limit": {"primary_window": {"used_percent": 2, "limit_window_seconds": 18000}},
+                "additional_rate_limits": null}"#,
+        )
+        .unwrap();
+        assert_eq!(parse_codex(&v).unwrap().quotas.len(), 1);
+    }
+
     /// No duration reported: fall back to the slot, and don't invent an hour
     /// count for the session bar.
     #[test]
@@ -777,6 +928,34 @@ mod tests {
         let live = parse_codex(&v).expect("parses");
         let ids: std::collections::HashSet<_> = live.quotas.iter().map(|q| &q.id).collect();
         assert_eq!(ids.len(), 2);
+    }
+
+    #[test]
+    fn an_account_never_fetched_is_fetched() {
+        assert_eq!(claude_pace(1_000, None, None), Pace::Fetch);
+    }
+
+    /// Refreshes during an active Claude Code session arrive every 30 seconds;
+    /// the endpoint is asked at most once per gap.
+    #[test]
+    fn a_recent_success_is_reused_until_the_gap_passes() {
+        let at = 1_000;
+        assert_eq!(claude_pace(at + 30, Some(at), None), Pace::Recent);
+        assert_eq!(
+            claude_pace(at + CLAUDE_MIN_FETCH_GAP_SECS, Some(at), None),
+            Pace::Fetch
+        );
+    }
+
+    /// The failure this exists for: re-asking a rate-limited account on every
+    /// refresh kept it rate-limited, and it never showed a number.
+    #[test]
+    fn a_rate_limited_account_is_left_alone_until_the_back_off_ends() {
+        let until = 1_000 + CLAUDE_RATE_LIMIT_BACKOFF_SECS;
+        assert_eq!(claude_pace(1_100, None, Some(until)), Pace::BackingOff);
+        // Back-off wins even when the last success looks recent.
+        assert_eq!(claude_pace(1_100, Some(1_090), Some(until)), Pace::BackingOff);
+        assert_eq!(claude_pace(until, None, Some(until)), Pace::Fetch);
     }
 
     #[test]

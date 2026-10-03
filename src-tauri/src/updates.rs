@@ -296,6 +296,7 @@ async fn run_install(app: &AppHandle) -> Result<(), String> {
 
     let handle = app.clone();
     let mut downloaded: u64 = 0;
+    let mut last_percent: Option<u8> = None;
     update
         .download_and_install(
             move |chunk, total| {
@@ -306,6 +307,12 @@ async fn run_install(app: &AppHandle) -> Result<(), String> {
                     }
                     _ => 0,
                 };
+                // Chunks arrive far faster than the percentage moves; each
+                // broadcast re-renders the panel, so only send real progress.
+                if last_percent == Some(percent) {
+                    return;
+                }
+                last_percent = Some(percent);
                 let state = handle.state::<UpdateState>();
                 state.set_status(UpdateStatus::Downloading { percent });
                 broadcast(&handle);

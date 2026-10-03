@@ -3,6 +3,7 @@ import {
   clamp,
   claudeAccount,
   CODEX_ACCOUNT,
+  codexReserve,
   elapsedPercent,
   esc,
   historyKey,
@@ -51,6 +52,8 @@ let recentBurns = null;
 let notifyError = null; // provider whose toggle failed to save, if any
 let updateState = null; // updater status + version, pushed from Rust on change
 let updateError = null; // error from the last update toggle, if any
+let startOnLogin = null; // whether the app registers itself to run at sign-in
+let startOnLoginError = false; // the last start-on-login toggle failed to save
 let confirmingReset = null; // credit id awaiting the inline "Use reset" confirm
 let resetError = null; // error from the last consume attempt, if any
 let editingAccount = null; // account id whose Claude label is being renamed inline
@@ -525,6 +528,29 @@ function resetSection(c) {
   return html;
 }
 
+// Luna Reserve's meters, with a line saying where it stands. It only spends
+// once the regular limit is drained, so "how full" means little without "is it
+// in use yet" beside it.
+function reserveBlock(cx) {
+  const reserve = codexReserve(cx);
+  if (!reserve) return "";
+  let html = "";
+  for (const quota of reserve.quotas)
+    html += gauge(quota.label, quota.gauge, { key: codexKey(quota.id) });
+  html += `<div class="sec-sub">${esc(reserveStatus(reserve))}</div>`;
+  return html;
+}
+
+function reserveStatus(reserve) {
+  if (reserve.spent)
+    return reserve.drained
+      ? "Reserve used up too — both come back when their windows reset."
+      : "Reserve used up — it refills when its window resets.";
+  return reserve.drained
+    ? "In use — your regular limit is used up, so Codex is drawing on the reserve."
+    : "Standing by — used once your regular limit runs out.";
+}
+
 // ---------- tab renderers ----------
 function renderCodex() {
   const c = data.codex;
@@ -541,7 +567,9 @@ function renderCodex() {
 
   if ((c.quotas || []).length) {
     for (const quota of c.quotas)
-      html += gauge(quota.label, quota.gauge, { key: codexKey(quota.id) });
+      if (quota.group !== "reserve")
+        html += gauge(quota.label, quota.gauge, { key: codexKey(quota.id) });
+    html += reserveBlock(c);
   } else {
     // No quota list means no reported window length, so the session label
     // can't name its own hours here.
@@ -674,10 +702,21 @@ function overviewCodexCard(cx) {
       <span class="ov-cost">${usd(cx.cost_today)} today</span>
     </div>`;
   if ((cx.quotas || []).length) {
-    for (const quota of cx.quotas)
+    for (const quota of cx.quotas) {
+      if (quota.group === "reserve") continue;
       html += gauge(quota.group === "session" ? "Session" : quota.label, quota.gauge, {
         key: codexKey(quota.id),
       });
+    }
+    // The overview is a glance, so the reserve only earns a line here once
+    // it's the thing being spent.
+    const reserve = codexReserve(cx);
+    if (reserve?.drained) {
+      html += gauge(reserve.primary.label, reserve.primary.gauge, {
+        key: codexKey(reserve.primary.id),
+      });
+      html += `<div class="sec-sub">${esc(reserveStatus(reserve))}</div>`;
+    }
   } else {
     html += gauge("Session", cx.primary, { key: codexKey("session") });
     html += gauge("Weekly", cx.secondary, { key: codexKey("weekly") });
@@ -1937,6 +1976,14 @@ function renderAbout() {
     updateState.settings.install_automatically,
     false
   );
+  if (startOnLogin !== null)
+    html += settingRow(
+      "Start with Windows",
+      "Open in the tray when you sign in",
+      "data-start-on-login",
+      startOnLogin,
+      false
+    );
   html += `</div>`;
 
   // The raw error is shown separately: it can be long, and the row above keeps
@@ -1945,6 +1992,8 @@ function renderAbout() {
     html += `<div class="banner small">${esc(status.message)}</div>`;
   if (updateError)
     html += `<div class="banner small">Couldn't save the update setting — try again.</div>`;
+  if (startOnLoginError)
+    html += `<div class="banner small">Couldn't change the startup setting — try again.</div>`;
 
   return html;
 }
@@ -2173,6 +2222,9 @@ function render() {
     input.addEventListener("change", () =>
       setUpdateSetting(input.dataset.updateToggle, input.checked)
     )
+  );
+  content.querySelectorAll("[data-start-on-login]").forEach((input) =>
+    input.addEventListener("change", () => setStartOnLogin(input.checked))
   );
   content.querySelectorAll("[data-update-check]").forEach((button) =>
     button.addEventListener("click", () => {
@@ -2460,6 +2512,27 @@ async function setUpdateSetting(key, enabled) {
   render();
 }
 
+async function loadStartOnLogin() {
+  try {
+    startOnLogin = await invoke("get_start_on_login");
+    render();
+  } catch (_) {}
+}
+
+async function setStartOnLogin(enabled) {
+  const previous = startOnLogin;
+  startOnLogin = enabled;
+  startOnLoginError = false;
+  render();
+  try {
+    startOnLogin = await invoke("set_start_on_login", { enabled });
+  } catch (_) {
+    startOnLogin = previous;
+    startOnLoginError = true;
+  }
+  render();
+}
+
 async function setNotifyEnabled(provider, enabled) {
   const previous = { ...notificationSettings };
   notificationSettings = { ...notificationSettings, [provider]: enabled };
@@ -2647,11 +2720,23 @@ invoke("glass_enabled")
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) refresh();
 });
+// ...and every minute while it stays open. A hidden panel skips the tick; the
+// background poll in Rust keeps the numbers moving for the widget and alerts.
+//
+// Asks the window, not `document.hidden`: WebView2 keeps reporting the page as
+// visible after the panel's window is hidden, so that check would run a full
+// collection — and a usage call per Claude account — every minute, forever.
+setInterval(async () => {
+  try {
+    if (await window.__TAURI__.window.getCurrentWindow().isVisible()) refresh();
+  } catch (_) {}
+}, 60_000);
 loadNotificationSettings();
 loadAccountVisibility();
 // The band's reach lives in the widget settings, so its first load has to
 // finish before the meters can ask the recorder for the right stretch.
 loadWidgetSettings().then(() => loadRecentBurn(true));
 loadUpdateState();
+loadStartOnLogin();
 loadWindowHistory();
 refresh();

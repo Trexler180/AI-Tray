@@ -33,6 +33,34 @@ export function groupKey(provider, account, quotas, group, fallbackId) {
   return match ? historyKey(provider, account, match.id) : null;
 }
 
+// ---------- Codex Luna Reserve ----------
+// The separately metered allowance Codex opens once the regular limit is
+// drained. The backend files it under the "reserve" group; everything that
+// isn't reserve or another add-on allowance is the main limit.
+//
+// Returns null when the account has no reserve. `drained` means a main window
+// is used up — the moment the reserve is what's being spent — and `primary` is
+// the reserve window closest to running out, which is the one worth drawing
+// when there's room for only one. The panel and the widget both read this, so
+// they can't disagree about whether the reserve is in play.
+export function codexReserve(cx) {
+  const quotas = cx?.quotas || [];
+  const reserve = quotas.filter((q) => q.group === "reserve" && q.gauge);
+  if (!reserve.length) return null;
+  const main = quotas.filter((q) => q.group !== "reserve" && q.group !== "additional");
+  const mainGauges = main.length
+    ? main.map((q) => q.gauge)
+    : [cx.primary, cx.secondary].filter(Boolean);
+  const used = (g) => Number(g?.used_percent) || 0;
+  const primary = reserve.reduce((a, b) => (used(b.gauge) > used(a.gauge) ? b : a));
+  return {
+    quotas: reserve,
+    primary,
+    drained: mainGauges.some((g) => used(g) >= 100),
+    spent: used(primary.gauge) >= 100,
+  };
+}
+
 export function elapsedPercent(g) {
   if (!g || typeof g.resets_at !== "number") return null;
   const span = (Number(g.window_minutes) || 0) * 60000;

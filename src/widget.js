@@ -11,9 +11,11 @@ import {
   clamp,
   claudeAccount,
   CODEX_ACCOUNT,
+  codexReserve,
   elapsedPercent,
   esc,
   groupKey,
+  historyKey,
   widgetRows,
 } from "./shared.js";
 
@@ -106,10 +108,19 @@ function accounts(usage) {
   if (cx?.available && shown(CODEX_ACCOUNT)) {
     const five = cx.primary || gaugeForGroup(cx.quotas, "session");
     const week = cx.secondary || gaugeForGroup(cx.quotas, "weekly");
-    const a = account(CODEX_ACCOUNT, "Codex", "codex", five, week, {
-      five: groupKey("codex", "", cx.quotas, "session", "session"),
-      week: groupKey("codex", "", cx.quotas, "weekly", "weekly"),
-    });
+    const reserve = codexReserve(cx);
+    // With the regular limit drained, a full bar says nothing new; what's
+    // worth a glance is how much Luna Reserve is left. So the cell becomes the
+    // reserve until the regular limit is back — or the reserve runs dry too.
+    const a =
+      reserve?.drained && !reserve.spent
+        ? account(CODEX_ACCOUNT, reserve.primary.label, "codex", reserve.primary.gauge, null, {
+            five: historyKey("codex", "", reserve.primary.id),
+          })
+        : account(CODEX_ACCOUNT, "Codex", "codex", five, week, {
+            five: groupKey("codex", "", cx.quotas, "session", "session"),
+            week: groupKey("codex", "", cx.quotas, "weekly", "weekly"),
+          });
     if (a) out.push(a);
   }
   const cl = usage?.claude;

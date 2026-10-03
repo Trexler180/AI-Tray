@@ -4,10 +4,12 @@ mod auth;
 mod claude;
 mod codex;
 mod history_cache;
+mod http;
 mod live;
 mod models;
 mod pricing;
 mod resets;
+mod startup;
 mod updates;
 mod util;
 mod visibility;
@@ -296,7 +298,11 @@ async fn get_usage(
     let usage = tauri::async_runtime::spawn_blocking(collect_usage_sync)
         .await
         .map_err(|e| e.to_string())?;
+    alerts.note_collection();
     alerts.observe_usage(&app, &usage, generation);
+    // The taskbar widget repaints from the cached snapshot this just replaced;
+    // without the nudge it would show the older numbers until the next poll.
+    let _ = app.emit("usage-updated", ());
     Ok(usage)
 }
 
@@ -533,6 +539,8 @@ pub fn run() {
             check_for_updates_now,
             install_update,
             open_panel,
+            startup::get_start_on_login,
+            startup::set_start_on_login,
             visibility::get_account_visibility,
             visibility::set_account_hidden,
             widget::get_widget_settings,
@@ -563,12 +571,9 @@ pub fn run() {
                     .unwrap_or("AI Usage Tray"),
             );
 
-            // Register this exe to start on login (keeps the registry entry
-            // pointed at wherever the app currently lives).
-            {
-                use tauri_plugin_autostart::ManagerExt;
-                let _ = app.autolaunch().enable();
-            }
+            // Start on login, per the user's choice. While on, this keeps the
+            // registry entry pointed at wherever the app currently lives.
+            startup::apply_on_launch(app.handle());
 
             let handle = app.handle().clone();
             let _ = alerts::start_usage_watcher(&handle);

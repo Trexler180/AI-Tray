@@ -1,4 +1,4 @@
-use crate::models::{CodexResets, Gauge, ResetCredit, Usage};
+use crate::models::{CodexResets, Gauge, QuotaWindow, ResetCredit, Usage};
 use chrono::Utc;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
@@ -19,9 +19,15 @@ const WARN_CLEAR_PERCENT: f64 = 80.0;
 /// Minimum spacing between alert-driven refreshes. File events arrive every
 /// second during an active CLI session; the usage APIs don't need that.
 const MIN_REFRESH_SECS: i64 = 30;
-/// Periodic poll, so limits exhausted from another device on the same account
-/// still notify even without local file activity.
+/// Periodic poll, so usage from another device or the web shows up — in
+/// notifications, the taskbar widget and the window timeline — even without
+/// local file activity. Runs regardless of the notification settings: the
+/// widget and the timeline only ever see what a collection brings back.
 const POLL_INTERVAL_SECS: i64 = 300;
+/// The same poll while the taskbar widget is on. It is on screen permanently
+/// and re-reads the cached snapshot every minute, so five-minute-old numbers
+/// are visible in a way they aren't behind a closed panel.
+const WIDGET_POLL_INTERVAL_SECS: i64 = 120;
 /// Ticker cadence. Wall-clock comparisons, so it survives system suspend.
 const TICK: Duration = Duration::from_secs(30);
 
@@ -144,6 +150,10 @@ pub struct AlertState {
     generation: AtomicU64,
     refresh_inflight: AtomicBool,
     last_refresh: Mutex<i64>,
+    /// A refresh was asked for while throttled or already running. The ticker
+    /// runs it once the throttle allows, so the last burst of file activity
+    /// before a CLI goes quiet is still picked up.
+    refresh_pending: AtomicBool,
 }
 
 impl AlertState {
@@ -156,6 +166,7 @@ impl AlertState {
             generation: AtomicU64::new(0),
             refresh_inflight: AtomicBool::new(false),
             last_refresh: Mutex::new(0),
+            refresh_pending: AtomicBool::new(false),
         }
     }
 
@@ -181,6 +192,14 @@ impl AlertState {
 
     pub fn latest_usage(&self) -> Option<Usage> {
         self.runtime.lock().unwrap().latest_usage.clone()
+    }
+
+    /// Record that a collection outside this module (the panel's own refresh)
+    /// just ran, so the background poll and any deferred refresh don't repeat
+    /// it straight away.
+    pub fn note_collection(&self) {
+        *self.last_refresh.lock().unwrap() = Utc::now().timestamp();
+        self.refresh_pending.store(false, Ordering::SeqCst);
     }
 
     /// Reserve an ordering slot for a collection that is about to start.
@@ -214,6 +233,7 @@ impl AlertState {
                 let provider = snapshot.key.provider;
                 let label = snapshot.label;
                 let name = snapshot.name;
+                let group = snapshot.group;
                 let current = snapshot.gauge.used_percent;
                 let reset_at = snapshot.gauge.resets_at.unwrap_or(0);
                 let state = runtime.windows.entry(snapshot.key).or_default();
@@ -268,10 +288,15 @@ impl AlertState {
                             reset_check_done: false,
                         });
                         if !first {
-                            to_notify.push((
-                                format!("{name} limit used up"),
-                                format!("{name} {label} window is at 100% used."),
-                            ));
+                            let mut body = format!("{name} {label} window is at 100% used.");
+                            // Draining the main limit is exactly when a reserve
+                            // starts to matter, so say it's there.
+                            if provider == Provider::Codex && group != "reserve" {
+                                if let Some(reserve) = codex_reserve_left(usage) {
+                                    body.push_str(&format!(" {} takes over from here.", reserve.label));
+                                }
+                            }
+                            to_notify.push((format!("{name} limit used up"), body));
                         }
                     }
                 } else if current >= WARN_PERCENT {
@@ -367,6 +392,7 @@ pub fn start_usage_watcher(app: &AppHandle) -> Result<(), String> {
 /// clock, so a laptop suspend can't strand a pending notification:
 /// - confirms a reset shortly after an exhausted window's reset time passes,
 /// - polls on a slow interval so usage from other devices is noticed,
+/// - runs a refresh that the throttle deferred,
 /// - re-arms file watches for paths created after startup.
 pub fn start_alert_ticker(app: AppHandle) {
     let _ = std::thread::Builder::new()
@@ -378,13 +404,16 @@ pub fn start_alert_ticker(app: AppHandle) {
                 let state = app.state::<AlertState>();
                 state.watch_missing_paths();
 
-                let settings = state.settings();
-                if !settings.codex && !settings.claude && !settings.codex_resets {
-                    continue;
-                }
-
+                let interval = if app.state::<crate::widget::WidgetState>().enabled() {
+                    WIDGET_POLL_INTERVAL_SECS
+                } else {
+                    POLL_INTERVAL_SECS
+                };
                 let now = Utc::now().timestamp();
-                let mut due = now - last_poll >= POLL_INTERVAL_SECS;
+                // Any collection counts as the poll, whoever started it.
+                last_poll = last_poll.max(*state.last_refresh.lock().unwrap());
+                let mut due = now - last_poll >= interval
+                    || state.refresh_pending.load(Ordering::SeqCst);
                 {
                     let mut runtime = state.runtime.lock().unwrap();
                     for window in runtime.windows.values_mut() {
@@ -413,12 +442,15 @@ pub fn refresh_for_alerts(app: AppHandle) {
         let now = Utc::now().timestamp();
         {
             let mut last = state.last_refresh.lock().unwrap();
-            if now - *last < MIN_REFRESH_SECS {
+            // Deferred rather than dropped: the ticker picks it up once the
+            // throttle allows, so the final change in a burst isn't lost.
+            if now - *last < MIN_REFRESH_SECS
+                || state.refresh_inflight.swap(true, Ordering::SeqCst)
+            {
+                state.refresh_pending.store(true, Ordering::SeqCst);
                 return;
             }
-            if state.refresh_inflight.swap(true, Ordering::SeqCst) {
-                return;
-            }
+            state.refresh_pending.store(false, Ordering::SeqCst);
             *last = now;
         }
         state.next_generation()
@@ -460,7 +492,7 @@ pub(crate) fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
                         account: String::new(),
                     },
                     name: name.to_string(),
-                    label: quota.label.to_ascii_lowercase(),
+                    label: sentence_label(quota),
                     display_label: quota.label.clone(),
                     group: quota.group.clone(),
                     account_label: name.to_string(),
@@ -578,6 +610,28 @@ pub(crate) fn usage_windows(usage: &Usage) -> Vec<WindowSnapshot<'_>> {
         }
     }
     out
+}
+
+/// A window's label for use mid-sentence. Generic window names are lowercased
+/// ("weekly limit almost used"); a named allowance such as Luna Reserve keeps
+/// its capitalisation, since it is a name rather than a description.
+fn sentence_label(quota: &QuotaWindow) -> String {
+    if matches!(quota.group.as_str(), "reserve" | "additional") {
+        quota.label.clone()
+    } else {
+        quota.label.to_ascii_lowercase()
+    }
+}
+
+/// The reserve allowance still available once a main Codex window is used up,
+/// for the "used up" notification to point at. None when there is no reserve,
+/// or it is itself spent.
+fn codex_reserve_left(usage: &Usage) -> Option<&QuotaWindow> {
+    usage
+        .codex
+        .quotas
+        .iter()
+        .find(|quota| quota.group == "reserve" && quota.gauge.used_percent < 100.0)
 }
 
 fn provider_enabled(settings: &NotificationSettings, provider: Provider) -> bool {
@@ -705,16 +759,9 @@ fn reset_events(
 
 fn usage_watch_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        let mut codex_sessions = home.clone();
-        codex_sessions.push(".codex");
-        codex_sessions.push("sessions");
-        paths.push(codex_sessions);
-
-        let mut codex_auth = home;
-        codex_auth.push(".codex");
-        codex_auth.push("auth.json");
-        paths.push(codex_auth);
+    if let Some(codex) = crate::util::codex_home() {
+        paths.push(codex.join("sessions"));
+        paths.push(codex.join("auth.json"));
     }
 
     // Every Claude config directory we track: its credentials file (a re-login
@@ -772,6 +819,7 @@ mod tests {
             generation: AtomicU64::new(0),
             refresh_inflight: AtomicBool::new(false),
             last_refresh: Mutex::new(0),
+            refresh_pending: AtomicBool::new(false),
         }
     }
 
@@ -910,6 +958,61 @@ mod tests {
         let events = state.notification_events(&codex_session_usage(100.0, 2_000), 7);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].0, "Codex limit used up");
+    }
+
+    fn codex_with_reserve(main_used: f64, reserve_used: f64) -> Usage {
+        let quota = |id: &str, label: &str, group: &str, used: f64| QuotaWindow {
+            id: id.to_string(),
+            label: label.to_string(),
+            group: group.to_string(),
+            gauge: Gauge {
+                used_percent: used,
+                window_minutes: 300,
+                resets_at: Some(1_000),
+                resets_in: None,
+            },
+            ..Default::default()
+        };
+        Usage {
+            codex: CodexUsage {
+                available: true,
+                live: true,
+                quotas: vec![
+                    quota("session", "Session (5h)", "session", main_used),
+                    quota("codex_reserve:weekly", "Luna Reserve", "reserve", reserve_used),
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Draining the main limit is when the reserve starts to matter, so the
+    /// "used up" notice points at it — and names it with its capitals intact.
+    #[test]
+    fn a_drained_main_limit_points_at_the_reserve() {
+        let state = test_state();
+        assert!(state
+            .notification_events(&codex_with_reserve(95.0, 0.0), 1)
+            .is_empty());
+        let events = state.notification_events(&codex_with_reserve(100.0, 0.0), 2);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "Codex limit used up");
+        assert!(events[0].1.contains("Luna Reserve takes over"), "{}", events[0].1);
+
+        // The reserve's own warnings keep its name capitalised.
+        let events = state.notification_events(&codex_with_reserve(100.0, 92.0), 3);
+        assert_eq!(events.len(), 1);
+        assert!(events[0].1.starts_with("Codex Luna Reserve window"), "{}", events[0].1);
+    }
+
+    #[test]
+    fn a_spent_reserve_is_not_offered() {
+        let state = test_state();
+        state.notification_events(&codex_with_reserve(95.0, 100.0), 1);
+        let events = state.notification_events(&codex_with_reserve(100.0, 100.0), 2);
+        let used_up: Vec<_> = events.iter().filter(|e| e.1.contains("Session")).collect();
+        assert!(used_up.iter().all(|e| !e.1.contains("takes over")));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use crate::models::DayBucket;
+use crate::models::{DayBucket, Gauge, QuotaWindow};
 use chrono::{Duration, Local};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -10,6 +10,19 @@ pub fn config_dir() -> Option<PathBuf> {
     let mut root = dirs::config_dir().or_else(dirs::home_dir)?;
     root.push("AI Usage Tray");
     Some(root)
+}
+
+/// The Codex CLI's home: `CODEX_HOME` when it names a real folder, otherwise
+/// `~/.codex`. Everything Codex-related — credentials, session logs, the file
+/// watcher — resolves through here, so they can never disagree about which
+/// install they are looking at.
+pub fn codex_home() -> Option<PathBuf> {
+    if let Some(root) = std::env::var_os("CODEX_HOME").map(PathBuf::from) {
+        if root.is_dir() {
+            return Some(root);
+        }
+    }
+    Some(dirs::home_dir()?.join(".codex"))
 }
 
 /// Write a file by filling a sibling temp file and renaming it over the target,
@@ -124,6 +137,67 @@ pub fn codex_window_meta_by_slot(slot: &str) -> (String, String, &'static str) {
     }
 }
 
+/// Quota windows for one of Codex's *additional* limits — the extra allowances
+/// reported beside the main one, of which Luna Reserve is the first: separately
+/// metered usage that only comes into play once the regular limit is drained.
+///
+/// `name` is the provider's display name (`limit_name`), `feature` its stable
+/// identifier (`metered_feature` live, `limit_id` in the session logs), and
+/// `windows` the (slot, gauge) pairs it reported. Ids are prefixed with the
+/// feature so they can never collide with the main windows, and the group is
+/// `reserve` for a reserve allowance and `additional` for anything else — never
+/// `session`/`weekly`, which is what keeps the widget and the alerts' "main
+/// window" lookups from picking one of these up by mistake.
+pub fn codex_additional_quotas(
+    name: &str,
+    feature: &str,
+    windows: Vec<(String, Gauge)>,
+) -> Vec<QuotaWindow> {
+    let slug = |s: &str| -> String {
+        s.to_ascii_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect()
+    };
+    let prefix = if feature.trim().is_empty() {
+        slug(name)
+    } else {
+        slug(feature)
+    };
+    let base = if name.trim().is_empty() {
+        feature.replace(['_', '-'], " ")
+    } else {
+        name.trim().to_string()
+    };
+    let is_reserve = |s: &str| s.to_ascii_lowercase().contains("reserve");
+    let group = if is_reserve(name) || is_reserve(feature) {
+        "reserve"
+    } else {
+        "additional"
+    };
+    let single = windows.len() == 1;
+    windows
+        .into_iter()
+        .map(|(slot, gauge)| {
+            let (window_id, window_label, _) = codex_window_meta(gauge.window_minutes)
+                .unwrap_or_else(|| codex_window_meta_by_slot(&slot));
+            QuotaWindow {
+                id: format!("{prefix}:{window_id}"),
+                // One window reads as the allowance itself; two need telling apart.
+                label: if single {
+                    base.clone()
+                } else {
+                    format!("{base} · {window_label}")
+                },
+                kind: slot,
+                group: group.to_string(),
+                gauge,
+                ..Default::default()
+            }
+        })
+        .collect()
+}
+
 /// Test-only: copy a fixture across, landing its hardcoded calendar dates on
 /// recent ones.
 ///
@@ -171,6 +245,52 @@ mod tests {
     fn slot_fallback_drops_the_unknown_hour_count() {
         assert_eq!(codex_window_meta_by_slot("primary").1, "Session");
         assert_eq!(codex_window_meta_by_slot("secondary").1, "Weekly");
+    }
+
+    fn gauge(minutes: i64) -> Gauge {
+        Gauge {
+            used_percent: 12.0,
+            window_minutes: minutes,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_reserve_allowance_is_its_own_group_under_its_own_name() {
+        let quotas = codex_additional_quotas(
+            "Luna Reserve",
+            "codex_reserve",
+            vec![("primary_window".into(), gauge(10_080))],
+        );
+        assert_eq!(quotas.len(), 1);
+        assert_eq!(quotas[0].label, "Luna Reserve");
+        assert_eq!(quotas[0].group, "reserve");
+        assert_eq!(quotas[0].id, "codex_reserve:weekly");
+    }
+
+    /// Two windows need telling apart, and neither may land in the main
+    /// session/weekly groups the widget and alerts look windows up by.
+    #[test]
+    fn a_two_window_allowance_labels_each_window() {
+        let quotas = codex_additional_quotas(
+            "Luna Reserve",
+            "gpt-reserve",
+            vec![
+                ("primary_window".into(), gauge(300)),
+                ("secondary_window".into(), gauge(10_080)),
+            ],
+        );
+        let labels: Vec<_> = quotas.iter().map(|q| q.label.as_str()).collect();
+        assert_eq!(labels, ["Luna Reserve · Session (5h)", "Luna Reserve · Weekly"]);
+        assert!(quotas.iter().all(|q| q.group == "reserve"));
+        assert_eq!(quotas[0].id, "gpt_reserve:session");
+    }
+
+    #[test]
+    fn an_unnamed_non_reserve_limit_is_labelled_from_its_feature() {
+        let quotas = codex_additional_quotas("", "code_review", vec![("primary".into(), gauge(0))]);
+        assert_eq!(quotas[0].label, "code review");
+        assert_eq!(quotas[0].group, "additional");
     }
 
     #[test]

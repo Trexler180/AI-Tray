@@ -9,18 +9,19 @@
 //!   (spends one credit — only ever called from an explicit user action)
 //!
 //! Both are authed with the same rotating Codex OAuth token the rest of the app
-//! manages (`auth::refresh_codex_creds`). On a 401 we refresh once and retry.
+//! manages (`auth::refresh_codex_creds_after_rejection`). On a 401 we refresh
+//! once and retry.
 //!
 //! A successful fetch is cached briefly so one dropped request doesn't blank the
 //! UI or make the alert pipeline think every credit vanished.
 
-use crate::auth;
+use crate::auth::{self, RefreshError};
+use crate::http::{agent, get_json_retrying};
 use crate::models::{CodexResets, ResetCredit};
 use crate::util::human_until;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use std::sync::Mutex;
-use std::time::Duration;
+use std::sync::{Mutex, MutexGuard};
 
 const RESETS_URL: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 const CONSUME_URL: &str =
@@ -36,70 +37,26 @@ struct Cached {
 
 static RESETS_CACHE: Mutex<Option<Cached>> = Mutex::new(None);
 
-fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(10))
-        .build()
+fn cache() -> MutexGuard<'static, Option<Cached>> {
+    RESETS_CACHE.lock().unwrap_or_else(|error| error.into_inner())
 }
 
 /// The headers the Codex desktop app attaches to wham reset-credit calls,
-/// beyond Authorization and the per-account id.
-fn reset_headers(account: &str) -> [(&'static str, String); 7] {
+/// beyond Authorization.
+fn reset_headers(account: &str) -> [(&'static str, &str); 7] {
     [
-        ("Accept", "application/json".to_string()),
-        ("Content-Type", "application/json".to_string()),
-        ("OAI-Language", "en".to_string()),
-        ("X-OpenAI-Attach-Auth", "1".to_string()),
-        ("X-OpenAI-Attach-Integrity-State", "1".to_string()),
-        ("originator", "Codex Desktop".to_string()),
-        ("chatgpt-account-id", account.to_string()),
+        ("Accept", "application/json"),
+        ("Content-Type", "application/json"),
+        ("OAI-Language", "en"),
+        ("X-OpenAI-Attach-Auth", "1"),
+        ("X-OpenAI-Attach-Integrity-State", "1"),
+        ("originator", "Codex Desktop"),
+        ("chatgpt-account-id", account),
     ]
 }
 
-/// Read the current Codex access token and account id from auth.json.
-fn codex_token() -> Option<(String, String)> {
-    let auth_json = auth::read_json(&auth::codex_auth_path()?)?;
-    let token = auth_json["tokens"]["access_token"].as_str()?.to_string();
-    let account = auth_json["tokens"]["account_id"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    Some((token, account))
-}
-
-/// GET the endpoint. Returns Ok(json), or Err(status) where 401/403 signal an
-/// expired token and 0 signals a transport error.
-fn get(token: &str, account: &str) -> Result<Value, u16> {
-    let mut req = agent()
-        .get(RESETS_URL)
-        .set("Authorization", &format!("Bearer {token}"));
-    for (k, v) in reset_headers(account) {
-        req = req.set(k, &v);
-    }
-    match req.call() {
-        Ok(resp) => {
-            let body = resp.into_string().map_err(|_| 0u16)?;
-            serde_json::from_str(&body).map_err(|_| 0u16)
-        }
-        Err(ureq::Error::Status(code, _)) => Err(code),
-        Err(_) => Err(0),
-    }
-}
-
-/// GET with one retry on transport / 5xx errors. Auth errors and 429 pass
-/// straight through so the caller can refresh the token.
 fn get_retrying(token: &str, account: &str) -> Result<Value, u16> {
-    let mut delay_ms = 500;
-    for _ in 0..2 {
-        match get(token, account) {
-            Err(0) | Err(500) | Err(502) | Err(503) | Err(504) => {
-                std::thread::sleep(Duration::from_millis(delay_ms));
-                delay_ms *= 3;
-            }
-            other => return other,
-        }
-    }
-    get(token, account)
+    get_json_retrying(RESETS_URL, token, &reset_headers(account))
 }
 
 fn rfc3339_unix(v: &Value) -> Option<i64> {
@@ -144,11 +101,11 @@ fn parse(v: &Value) -> Option<CodexResets> {
 
 /// Fetch reset credits, refreshing the token once on a 401/403.
 fn fetch() -> Option<CodexResets> {
-    let (token, account) = codex_token()?;
+    let (token, account) = auth::codex_token()?;
     match get_retrying(&token, &account) {
         Ok(v) => parse(&v),
         Err(401) | Err(403) => {
-            let (fresh, acc) = auth::refresh_codex_creds()?;
+            let (fresh, acc) = auth::refresh_codex_creds_after_rejection(&token).ok()?;
             get_retrying(&fresh, &acc).ok().and_then(|v| parse(&v))
         }
         Err(_) => None,
@@ -186,7 +143,7 @@ fn refreshed_cache(value: &CodexResets) -> CodexResets {
 pub fn codex_resets() -> Option<CodexResets> {
     let fetched = fetch();
     let now = Utc::now().timestamp();
-    let mut cache = RESETS_CACHE.lock().unwrap();
+    let mut cache = cache();
     match fetched {
         Some(value) => {
             *cache = Some(Cached {
@@ -211,7 +168,8 @@ pub fn consume_codex_reset(credit_id: &str) -> Result<(), String> {
     if credit_id.is_empty() {
         return Err("missing credit id".to_string());
     }
-    let (token, account) = codex_token().ok_or_else(|| "Codex auth unavailable".to_string())?;
+    let (token, account) =
+        auth::codex_token().ok_or_else(|| "Codex auth unavailable".to_string())?;
     let redeem_request_id = uuid::Uuid::new_v4().to_string();
     let body = serde_json::json!({
         "credit_id": credit_id,
@@ -223,7 +181,7 @@ pub fn consume_codex_reset(credit_id: &str) -> Result<(), String> {
             .post(CONSUME_URL)
             .set("Authorization", &format!("Bearer {token}"));
         for (k, v) in reset_headers(account) {
-            req = req.set(k, &v);
+            req = req.set(k, v);
         }
         match req.send_json(body.clone()) {
             Ok(_) => Ok(()),
@@ -236,14 +194,19 @@ pub fn consume_codex_reset(credit_id: &str) -> Result<(), String> {
         Ok(()) => Ok(()),
         Err(401) | Err(403) => {
             let (fresh, acc) =
-                auth::refresh_codex_creds().ok_or_else(|| "token refresh failed".to_string())?;
+                auth::refresh_codex_creds_after_rejection(&token).map_err(|error| match error {
+                    RefreshError::SaveFailed(error) => {
+                        format!("token refreshed but could not be saved: {error}")
+                    }
+                    _ => "token refresh failed".to_string(),
+                })?;
             post(&fresh, &acc).map_err(|code| format!("consume failed (HTTP {code})"))
         }
         Err(code) => Err(format!("consume failed (HTTP {code})")),
     };
     // Invalidate the cache so the next fetch reflects the spent credit.
     if result.is_ok() {
-        *RESETS_CACHE.lock().unwrap() = None;
+        *cache() = None;
     }
     result
 }

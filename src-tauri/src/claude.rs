@@ -4,8 +4,9 @@ use crate::util::today_str;
 use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use crate::history_cache::{modified_ms, Candidate, ScanRecord};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::fs::{File, Metadata};
+use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -27,23 +28,6 @@ fn projects_roots() -> Vec<PathBuf> {
         .map(|dir| dir.join("projects"))
         .filter(|path| path.is_dir())
         .collect()
-}
-
-#[derive(Clone)]
-struct Candidate {
-    path: PathBuf,
-    key: String,
-    size: u64,
-    modified_ms: u64,
-}
-
-fn modified_ms(metadata: &Metadata) -> u64 {
-    metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 fn jsonl_files(roots: &[PathBuf], min_mtime: std::time::SystemTime) -> Vec<Candidate> {
@@ -93,21 +77,26 @@ struct FileRecord {
     events: Vec<ClaudeEvent>,
 }
 
+impl ScanRecord for FileRecord {
+    fn observed_size(&self) -> u64 {
+        self.observed_size
+    }
+    fn observed_modified_ms(&self) -> u64 {
+        self.modified_ms
+    }
+    fn processed_offset(&self) -> u64 {
+        self.processed_offset
+    }
+    fn prune_before(&mut self, cutoff: i64) -> bool {
+        let before = self.events.len();
+        self.events.retain(|event| event.ts >= cutoff);
+        before != self.events.len()
+    }
+}
+
 #[derive(Default, Deserialize, Serialize)]
 struct Cache {
     files: BTreeMap<String, FileRecord>,
-}
-
-fn scan_file(candidate: &Candidate, existing: Option<FileRecord>) -> std::io::Result<FileRecord> {
-    if let Some(record) = existing {
-        if record.observed_size == candidate.size && record.modified_ms == candidate.modified_ms {
-            return Ok(record);
-        }
-        if candidate.size >= record.processed_offset && candidate.size != record.observed_size {
-            return append_file(candidate, record);
-        }
-    }
-    append_file(candidate, FileRecord::default())
 }
 
 fn append_file(candidate: &Candidate, mut record: FileRecord) -> std::io::Result<FileRecord> {
@@ -174,7 +163,11 @@ fn append_file(candidate: &Candidate, mut record: FileRecord) -> std::io::Result
 }
 
 pub fn collect() -> ClaudeUsage {
-    let _guard = COLLECT_LOCK.lock().unwrap();
+    // Poison-tolerant for the same reason as the Codex scanner: one panicked
+    // scan must not take Claude history down for the rest of the session.
+    let _guard = COLLECT_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let roots = projects_roots();
     if roots.is_empty() {
         return ClaudeUsage::default();
@@ -191,40 +184,7 @@ fn collect_from_roots(roots: &[PathBuf], persist: bool) -> ClaudeUsage {
     } else {
         Cache::default()
     };
-    let mut seen_files = HashSet::new();
-    let mut scanned = 0u64;
-    let mut cached = 0u64;
-    let mut skipped = 0u64;
-    let mut changed = false;
-
-    for candidate in &candidates {
-        seen_files.insert(candidate.key.clone());
-        let existing = cache.files.remove(&candidate.key);
-        let backup = existing.clone();
-        let was_cached = existing.as_ref().is_some_and(|record| {
-            record.observed_size == candidate.size && record.modified_ms == candidate.modified_ms
-        });
-        match scan_file(candidate, existing) {
-            Ok(record) => {
-                if was_cached {
-                    cached += 1;
-                } else {
-                    scanned += 1;
-                    changed = true;
-                }
-                cache.files.insert(candidate.key.clone(), record);
-            }
-            Err(_) => {
-                skipped += 1;
-                if let Some(record) = backup {
-                    cache.files.insert(candidate.key.clone(), record);
-                }
-            }
-        }
-    }
-    let before = cache.files.len();
-    cache.files.retain(|key, _| seen_files.contains(key));
-    changed |= before != cache.files.len();
+    let stats = crate::history_cache::rescan(&mut cache.files, &candidates, cutoff, append_file);
 
     let mut usage = ClaudeUsage {
         available: cache.files.values().any(|record| !record.events.is_empty()),
@@ -232,9 +192,9 @@ fn collect_from_roots(roots: &[PathBuf], persist: bool) -> ClaudeUsage {
             source: DataSource::LocalLogs,
             fetched_at: Some(Utc::now().timestamp()),
             attempted_at: Some(Utc::now().timestamp()),
-            files_scanned: scanned,
-            files_cached: cached,
-            files_skipped: skipped,
+            files_scanned: stats.scanned,
+            files_cached: stats.cached,
+            files_skipped: stats.skipped,
             ..Default::default()
         },
         ..Default::default()
@@ -301,7 +261,7 @@ fn collect_from_roots(roots: &[PathBuf], persist: bool) -> ClaudeUsage {
         })
         .collect();
     usage.estimate = pricing::metadata(confidence, unknown_models);
-    if persist && changed {
+    if persist && stats.changed {
         if let Err(error) = crate::history_cache::save("claude", CACHE_VERSION, &cache) {
             usage.history_health.error_kind = Some("cache_write".to_string());
             usage.history_health.error_message =

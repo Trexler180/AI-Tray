@@ -6,10 +6,11 @@ use crate::util::{codex_window_meta, codex_window_meta_by_slot, human_until, tod
 use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use crate::history_cache::{modified_ms, Candidate, ScanRecord};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::fs::{File, Metadata};
+use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 use walkdir::WalkDir;
 
@@ -23,34 +24,16 @@ pub fn clear_history_cache() -> std::io::Result<()> {
     crate::history_cache::clear("codex")
 }
 
-fn codex_root() -> Option<PathBuf> {
-    if let Some(root) = std::env::var_os("CODEX_HOME").map(PathBuf::from) {
-        if root.is_dir() {
-            return Some(root);
-        }
-    }
-    let root = dirs::home_dir()?.join(".codex");
-    root.is_dir().then_some(root)
+fn codex_root() -> Option<std::path::PathBuf> {
+    crate::util::codex_home().filter(|root| root.is_dir())
 }
 
-#[derive(Clone)]
-struct Candidate {
-    path: PathBuf,
-    key: String,
-    size: u64,
-    modified_ms: u64,
-}
+/// Session files untouched for longer than this hold nothing inside the 30-day
+/// window, so they are neither scanned nor kept in the cache. A day of slack
+/// covers an event logged just before the file's last write.
+const MAX_FILE_AGE: std::time::Duration = std::time::Duration::from_secs(31 * 86400);
 
-fn modified_ms(metadata: &Metadata) -> u64 {
-    metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
-}
-
-fn rollout_files(root: &Path) -> Vec<Candidate> {
+fn rollout_files(root: &Path, min_mtime: std::time::SystemTime) -> Vec<Candidate> {
     let mut out = Vec::new();
     for folder in ["sessions", "archived_sessions"] {
         let folder = root.join(folder);
@@ -68,6 +51,9 @@ fn rollout_files(root: &Path) -> Vec<Candidate> {
             let Ok(metadata) = entry.metadata() else {
                 continue;
             };
+            if metadata.modified().is_ok_and(|time| time < min_mtime) {
+                continue;
+            }
             out.push(Candidate {
                 path: path.to_path_buf(),
                 key: name.to_string(),
@@ -128,10 +114,38 @@ struct FileRecord {
     processed_offset: u64,
     current_model: String,
     last_total: Counts,
+    /// The main allowance's last rate-limit snapshot (`limit_id` "codex").
     rate_limits: Option<Value>,
+    /// Every other allowance's last snapshot, keyed by its `limit_id` — the
+    /// separately metered buckets such as Luna Reserve. Defaulted so caches
+    /// written before this field existed still load.
+    #[serde(default)]
+    additional_limits: BTreeMap<String, Value>,
     plan_type: Option<String>,
     last_ts: Option<i64>,
     events: Vec<TokenEvent>,
+}
+
+impl ScanRecord for FileRecord {
+    fn observed_size(&self) -> u64 {
+        self.observed_size
+    }
+    fn observed_modified_ms(&self) -> u64 {
+        self.modified_ms
+    }
+    fn processed_offset(&self) -> u64 {
+        self.processed_offset
+    }
+    fn prune_before(&mut self, cutoff: i64) -> bool {
+        let before = self.events.len();
+        self.events.retain(|event| event.ts >= cutoff);
+        before != self.events.len()
+    }
+    /// Sessions move into `archived_sessions` under the same file name, which
+    /// is the cache key, so an unchanged record can still have a new path.
+    fn relocate(&mut self, path: &Path) {
+        self.path = path.to_string_lossy().to_string();
+    }
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -156,18 +170,23 @@ fn gauge_from(window: &Value) -> Option<Gauge> {
 /// The `rate_limits` block a session log carries, turned into named windows.
 /// Same duration-first naming as the live endpoint, so an offline tab labels
 /// the bars exactly as an online one does.
-fn quotas_from_limits(limits: &Value) -> Vec<QuotaWindow> {
+/// The window gauges inside one logged rate-limit block, keyed by slot.
+fn log_windows(limits: &Value) -> Vec<(String, Gauge)> {
     let Some(entries) = limits.as_object() else {
         return Vec::new();
     };
+    entries
+        .iter()
+        .filter_map(|(slot, node)| Some((slot.clone(), gauge_from(node)?)))
+        .collect()
+}
+
+fn quotas_from_limits(limits: &Value) -> Vec<QuotaWindow> {
     let mut quotas = Vec::new();
     let mut used_ids = HashSet::new();
-    for (slot, node) in entries {
-        let Some(gauge) = gauge_from(node) else {
-            continue;
-        };
+    for (slot, gauge) in log_windows(limits) {
         let (mut id, label, group) = codex_window_meta(gauge.window_minutes)
-            .unwrap_or_else(|| codex_window_meta_by_slot(slot));
+            .unwrap_or_else(|| codex_window_meta_by_slot(&slot));
         if !used_ids.insert(id.clone()) {
             id = format!("{id}:{slot}");
             used_ids.insert(id.clone());
@@ -175,7 +194,7 @@ fn quotas_from_limits(limits: &Value) -> Vec<QuotaWindow> {
         quotas.push(QuotaWindow {
             id,
             label,
-            kind: slot.clone(),
+            kind: slot,
             group: group.to_string(),
             gauge,
             ..Default::default()
@@ -191,18 +210,9 @@ fn gauge_for_group(quotas: &[QuotaWindow], group: &str) -> Option<Gauge> {
         .map(|quota| quota.gauge.clone())
 }
 
+#[cfg(test)]
 fn scan_file(candidate: &Candidate, existing: Option<FileRecord>) -> std::io::Result<FileRecord> {
-    if let Some(mut record) = existing {
-        if record.observed_size == candidate.size && record.modified_ms == candidate.modified_ms {
-            record.path = candidate.path.to_string_lossy().to_string();
-            return Ok(record);
-        }
-        if candidate.size >= record.processed_offset && candidate.size != record.observed_size {
-            record.path = candidate.path.to_string_lossy().to_string();
-            return append_file(candidate, record);
-        }
-    }
-    append_file(candidate, FileRecord::default())
+    crate::history_cache::scan_one(candidate, existing, append_file)
 }
 
 fn append_file(candidate: &Candidate, mut record: FileRecord) -> std::io::Result<FileRecord> {
@@ -248,15 +258,30 @@ fn append_file(candidate: &Candidate, mut record: FileRecord) -> std::io::Result
             last
         };
         record.last_total = total;
-        record.rate_limits = payload
+        let limits = payload
             .get("rate_limits")
             .cloned()
             .filter(|value| !value.is_null());
-        record.plan_type = record
-            .rate_limits
+        if let Some(plan) = limits.as_ref().and_then(|l| l["plan_type"].as_str()) {
+            record.plan_type = Some(plan.to_string());
+        }
+        // Each event reports one allowance, tagged by `limit_id`: "codex" is
+        // the main limit, anything else a separate meter. Filing them apart is
+        // what stops a bucket with no windows (the "premium" one) from
+        // overwriting the main limit's gauges.
+        match limits
             .as_ref()
-            .and_then(|limits| limits["plan_type"].as_str())
-            .map(str::to_string);
+            .and_then(|l| l["limit_id"].as_str())
+            .filter(|id| *id != "codex")
+        {
+            Some(id) => {
+                let id = id.to_string();
+                if let Some(limits) = limits {
+                    record.additional_limits.insert(id, limits);
+                }
+            }
+            None => record.rate_limits = limits,
+        }
         let ts = value["timestamp"]
             .as_str()
             .and_then(|timestamp| DateTime::parse_from_rfc3339(timestamp).ok())
@@ -284,7 +309,11 @@ fn append_file(candidate: &Candidate, mut record: FileRecord) -> std::io::Result
 }
 
 pub fn collect() -> CodexUsage {
-    let _guard = COLLECT_LOCK.lock().unwrap();
+    // A panic mid-scan must not poison this for the rest of the session: every
+    // later collection would panic too, and Codex would silently vanish.
+    let _guard = COLLECT_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let Some(root) = codex_root() else {
         return CodexUsage::default();
     };
@@ -292,59 +321,29 @@ pub fn collect() -> CodexUsage {
 }
 
 fn collect_from_root(root: &Path, persist: bool) -> CodexUsage {
-    let candidates = rollout_files(root);
-    if candidates.is_empty() {
-        return CodexUsage::default();
-    }
+    let cutoff = Utc::now().timestamp() - 30 * 86400;
+    let candidates = rollout_files(root, std::time::SystemTime::now() - MAX_FILE_AGE);
     let mut cache: Cache = if persist {
         crate::history_cache::load("codex", CACHE_VERSION)
     } else {
         Cache::default()
     };
-    let mut seen = HashSet::new();
-    let mut scanned = 0u64;
-    let mut cached = 0u64;
-    let mut skipped = 0u64;
-    let mut changed = false;
-
-    for candidate in &candidates {
-        seen.insert(candidate.key.clone());
-        let existing = cache.files.remove(&candidate.key);
-        let backup = existing.clone();
-        let was_cached = existing.as_ref().is_some_and(|record| {
-            record.observed_size == candidate.size && record.modified_ms == candidate.modified_ms
-        });
-        match scan_file(candidate, existing) {
-            Ok(record) => {
-                if was_cached {
-                    cached += 1;
-                } else {
-                    scanned += 1;
-                    changed = true;
-                }
-                cache.files.insert(candidate.key.clone(), record);
-            }
-            Err(_) => {
-                skipped += 1;
-                if let Some(record) = backup {
-                    cache.files.insert(candidate.key.clone(), record);
-                }
-            }
-        }
+    if candidates.is_empty() && cache.files.is_empty() {
+        return CodexUsage::default();
     }
-    let before = cache.files.len();
-    cache.files.retain(|key, _| seen.contains(key));
-    changed |= before != cache.files.len();
+    let stats = crate::history_cache::rescan(&mut cache.files, &candidates, cutoff, append_file);
 
     let mut usage = CodexUsage {
-        available: true,
+        // Only a month of logs is kept. Beyond that the tab still appears if
+        // the live endpoint answers, which is decided in `collect_usage_sync`.
+        available: !cache.files.is_empty(),
         history_health: DataHealth {
             source: DataSource::LocalLogs,
             fetched_at: Some(Utc::now().timestamp()),
             attempted_at: Some(Utc::now().timestamp()),
-            files_scanned: scanned,
-            files_cached: cached,
-            files_skipped: skipped,
+            files_scanned: stats.scanned,
+            files_cached: stats.cached,
+            files_skipped: stats.skipped,
             ..Default::default()
         },
         ..Default::default()
@@ -358,6 +357,17 @@ fn collect_from_root(root: &Path, persist: bool) -> CodexUsage {
             usage.primary = gauge_for_group(&usage.quotas, "session");
             usage.secondary = gauge_for_group(&usage.quotas, "weekly");
             usage.credits = limits["credits"].as_f64();
+        }
+        for (limit_id, limits) in &latest.additional_limits {
+            let windows = log_windows(limits);
+            if windows.is_empty() {
+                continue;
+            }
+            usage.quotas.extend(crate::util::codex_additional_quotas(
+                limits["limit_name"].as_str().unwrap_or(""),
+                limit_id,
+                windows,
+            ));
         }
     }
 
@@ -420,7 +430,7 @@ fn collect_from_root(root: &Path, persist: bool) -> CodexUsage {
         .collect();
     usage.estimate = pricing::metadata(confidence, unknown_models);
 
-    if persist && changed {
+    if persist && stats.changed {
         if let Err(error) = crate::history_cache::save("codex", CACHE_VERSION, &cache) {
             usage.history_health.error_kind = Some("cache_write".to_string());
             usage.history_health.error_message =
@@ -496,6 +506,42 @@ mod tests {
         assert!(gauge_for_group(&quotas, "session").is_none());
     }
 
+    /// Each logged event reports one allowance, tagged by `limit_id`. The main
+    /// "codex" limit must survive a later event for another bucket — the
+    /// "premium" one arrives with no windows at all and used to blank the
+    /// offline gauges — and a reserve bucket must come out as its own window.
+    #[test]
+    fn limit_buckets_are_kept_apart_in_the_logs() {
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!("ai-usage-codex-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("sessions")).unwrap();
+        let day = crate::util::days_ago_utc(0);
+        let event = |limits: &str| {
+            format!(
+                r#"{{"timestamp":"{day}T00:00:00Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":10,"output_tokens":1}},"last_token_usage":{{"input_tokens":10,"output_tokens":1}}}},"rate_limits":{limits}}}}}"#
+            )
+        };
+        let mut file = fs::File::create(root.join("sessions/rollout-buckets.jsonl")).unwrap();
+        // Shapes as they appear in real session logs.
+        writeln!(file, "{}", event(r#"{"limit_id":"codex","limit_name":null,"primary":{"used_percent":100.0,"window_minutes":300,"resets_at":1790415395},"secondary":{"used_percent":69.0,"window_minutes":10080,"resets_at":1790454283},"credits":{"has_credits":false,"unlimited":false,"balance":"0"},"plan_type":"plus"}"#)).unwrap();
+        writeln!(file, "{}", event(r#"{"limit_id":"premium","limit_name":null,"primary":null,"secondary":null,"credits":{"has_credits":false,"unlimited":false,"balance":"0"},"plan_type":null}"#)).unwrap();
+        writeln!(file, "{}", event(r#"{"limit_id":"codex_reserve","limit_name":"Luna Reserve","primary":{"used_percent":20.0,"window_minutes":10080,"resets_at":1790454283},"secondary":null,"plan_type":"plus"}"#)).unwrap();
+        drop(file);
+
+        let usage = collect_from_root(&root, false);
+        assert_eq!(usage.plan_type.as_deref(), Some("plus"));
+        assert_eq!(usage.primary.as_ref().unwrap().used_percent, 100.0);
+        assert_eq!(usage.secondary.as_ref().unwrap().used_percent, 69.0);
+        let reserve: Vec<_> = usage.quotas.iter().filter(|q| q.group == "reserve").collect();
+        assert_eq!(reserve.len(), 1);
+        assert_eq!(reserve[0].label, "Luna Reserve");
+        assert_eq!(reserve[0].gauge.used_percent, 20.0);
+        // The window-less premium bucket adds nothing.
+        assert_eq!(usage.quotas.len(), 3);
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     fn active_and_archived_folders_are_both_discovered() {
         let root = std::env::temp_dir().join(format!("ai-usage-codex-{}", uuid::Uuid::new_v4()));
@@ -507,7 +553,7 @@ mod tests {
         ));
         fs::copy(fixture, root.join("sessions/rollout-one.jsonl")).unwrap();
         fs::copy(fixture, root.join("archived_sessions/rollout-two.jsonl")).unwrap();
-        assert_eq!(rollout_files(&root).len(), 2);
+        assert_eq!(rollout_files(&root, std::time::UNIX_EPOCH).len(), 2);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -526,7 +572,7 @@ mod tests {
             &path,
         )
         .unwrap();
-        let first_candidate = rollout_files(&root).remove(0);
+        let first_candidate = rollout_files(&root, std::time::UNIX_EPOCH).remove(0);
         let first = scan_file(&first_candidate, None).unwrap();
         let first_offset = first.processed_offset;
         let warm = scan_file(&first_candidate, Some(first)).unwrap();
@@ -537,7 +583,7 @@ mod tests {
         writeln!(file, "{{\"timestamp\":\"2026-07-15T00:00:03Z\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"total_token_usage\":{{\"input_tokens\":1600,\"cached_input_tokens\":950,\"output_tokens\":320}},\"last_token_usage\":{{\"input_tokens\":100,\"cached_input_tokens\":50,\"output_tokens\":20}}}}}}}}")
             .unwrap();
         drop(file);
-        let grown_candidate = rollout_files(&root).remove(0);
+        let grown_candidate = rollout_files(&root, std::time::UNIX_EPOCH).remove(0);
         let grown = scan_file(&grown_candidate, Some(warm)).unwrap();
         assert_eq!(grown.events.len(), 3);
         assert!(grown.processed_offset > first_offset);
