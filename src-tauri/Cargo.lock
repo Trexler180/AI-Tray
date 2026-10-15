@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "ai-usage-tray"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
