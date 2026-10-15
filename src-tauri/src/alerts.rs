@@ -11,8 +11,12 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
-/// Warn once per window cycle when usage crosses this percentage.
-const WARN_PERCENT: f64 = 90.0;
+/// Advance warnings, each sent at most once per window cycle as usage climbs
+/// past it. Two steps rather than one per percent: warning at every new whole
+/// percent from 90 could send ten notifications ahead of the "used up" one.
+const WARN_STEPS: [f64; 2] = [90.0, 95.0];
+/// Where the warn band starts.
+const WARN_PERCENT: f64 = WARN_STEPS[0];
 /// Hysteresis floor: jitter around the warn threshold can't re-arm the
 /// warning, but a real window reset (usage falling well below) does.
 const WARN_CLEAR_PERCENT: f64 = 80.0;
@@ -110,10 +114,10 @@ struct Exhaustion {
 struct WindowState {
     last_used: Option<f64>,
     exhausted: Option<Exhaustion>,
-    /// Integer percent of the last advance warning we actually sent, or None
-    /// if no warning is currently armed. We only re-warn when usage climbs to
-    /// a higher percent, so an unchanged reading — including the reset_at
-    /// drift a rolling window emits every poll — stays quiet.
+    /// The `WARN_STEPS` step the last advance warning was for, or None if no
+    /// warning is currently armed. We only re-warn when usage reaches a higher
+    /// step, so an unchanged reading — including the reset_at drift a rolling
+    /// window emits every poll — stays quiet.
     warned_at: Option<u8>,
 }
 
@@ -321,14 +325,20 @@ impl AlertState {
                         }
                     }
                 } else if current >= WARN_PERCENT {
-                    // Notify on entering the warn band and again only as usage
-                    // climbs to a higher whole percent. An unchanged reading —
-                    // or the reset_at drift a rolling window emits each poll —
-                    // leaves warned_at untouched and stays silent.
+                    // Notify on entering the warn band and again only on
+                    // reaching a higher step. An unchanged reading, a climb
+                    // within a step, or the reset_at drift a rolling window
+                    // emits each poll leaves warned_at untouched.
+                    let step = WARN_STEPS
+                        .iter()
+                        .rev()
+                        .find(|step| current >= **step)
+                        .copied()
+                        .unwrap_or(WARN_PERCENT) as u8;
                     let pct = current.round() as u8;
-                    let climbed = state.warned_at.is_none_or(|prev| pct > prev);
+                    let climbed = state.warned_at.is_none_or(|prev| step > prev);
                     if climbed {
-                        state.warned_at = Some(pct);
+                        state.warned_at = Some(step);
                         if !first {
                             to_notify.push((
                                 format!("{name} limit almost used"),
@@ -489,13 +499,9 @@ pub fn refresh_for_alerts(app: AppHandle) {
         state.refresh_inflight.store(false, Ordering::SeqCst);
         let Ok(usage) = result else { return };
         state.observe_usage(&app, &usage, generation);
-        if let Some(window) = app.get_webview_window("main") {
-            if window.is_visible().unwrap_or(false) {
-                let _ = window.emit("refresh", ());
-            }
-        }
-        // App-wide, unlike the panel's "refresh": the taskbar widget is visible
-        // whether or not the panel is, and repaints from the cached snapshot.
+        // Both windows repaint from the cached snapshot this just replaced.
+        // Not "refresh": that makes the panel collect again, asking every
+        // provider a second time for the numbers this already has.
         let _ = app.emit("usage-updated", ());
     });
 }
@@ -1015,10 +1021,19 @@ mod tests {
             );
         }
 
-        // A genuine climb to a higher percent is still surfaced.
-        let events = state.notification_events(&codex_weekly_usage(93.0, 1_160), 100);
+        // A climb within the step stays quiet too: one per percent from 90
+        // could send ten warnings on the way to "used up".
+        assert!(state
+            .notification_events(&codex_weekly_usage(93.0, 1_160), 100)
+            .is_empty());
+
+        // Reaching the next step is surfaced, once, with the real figure.
+        let events = state.notification_events(&codex_weekly_usage(96.0, 1_190), 101);
         assert_eq!(events.len(), 1);
-        assert!(events[0].1.contains("93%"));
+        assert!(events[0].1.contains("96%"));
+        assert!(state
+            .notification_events(&codex_weekly_usage(99.0, 1_220), 102)
+            .is_empty());
     }
 
     #[test]

@@ -53,7 +53,8 @@ is treated as a subset of input rather than counted twice.
 
 Each estimate includes a confidence level:
 
-- **High** — the model has an exact current catalog entry.
+- **High** — the model has an exact current catalog entry (a dated snapshot
+  such as `claude-haiku-4-5-20251001` counts as its model's entry).
 - **Medium** — a documented model-family price was used.
 - **Low** — the model was unknown and the conservative fallback was used, or
   the catalog is past its review date.
@@ -69,9 +70,13 @@ provider pricing changes.
 
 - **Live quota data** uses the same authenticated endpoints as the official
   CLIs, with credentials already stored in `~/.claude/.credentials.json` and
-  `CODEX_HOME/auth.json`. Rotated access tokens are written back atomically,
-  and parallel fetches that find the same token expired share one refresh
-  rather than each spending the single-use refresh token.
+  `CODEX_HOME/auth.json`. A login is only refreshed after the provider has
+  rejected it, never ahead of its expiry, because the CLI refreshes the same
+  file on its own schedule and refreshing early would race it for the
+  single-use refresh token. Rotated tokens are written back atomically,
+  parallel fetches that find the same token rejected share one refresh, and a
+  refresh whose new tokens can't be saved is reported as such — the CLI is
+  signed out at that point — rather than as an ordinary authorization error.
 - **Codex history** comes from both
   `CODEX_HOME/sessions/**/rollout-*.jsonl` and
   `CODEX_HOME/archived_sessions/**/rollout-*.jsonl`. If `CODEX_HOME` is unset,
@@ -249,6 +254,12 @@ stays as the reference for the geometry.
   the Windows timeline and notifications all see usage from other devices.
   Local usage-file changes also schedule a refresh; a change that arrives
   while one was just made is held back and run shortly after, not dropped.
+  Both windows repaint from what a background refresh collected rather than
+  asking the providers again.
+- Limit notifications (Settings → Notifications) warn as a window passes 90%
+  and again at 95%, say when it is used up, and say when it resets.
+- Using a Codex reset that gets no clear answer keeps its request id, so
+  trying again repeats the same redemption instead of spending another credit.
 - Claude's usage endpoint is paced per account, because an active Claude Code
   session writes logs constantly and would otherwise have it asked every 30
   seconds. A result under 45 seconds old is reused, and after a rate-limit
@@ -301,12 +312,23 @@ npm run tauri build
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml
+npm test
 ```
 
-The test suite includes sanitized provider-contract fixtures, pricing and
+The Rust suite includes sanitized provider-contract fixtures, pricing and
 cached-input accounting, dynamic scoped quotas, provenance fallback behavior,
 active and archived Codex history, event-date attribution, unchanged and
 append-only scan paths, and atomic cache replacement.
+
+`npm test` covers the helpers both windows share, and checks the command
+permissions: each window may only call the app commands its file in
+`src-tauri/capabilities/` grants, and a command left out of `src-tauri/build.rs`
+or a window's capability would otherwise only fail at runtime. Adding a
+command means adding it to `generate_handler!`, to `COMMANDS` in `build.rs`,
+and to the capability of each window that calls it.
+
+CI (`.github/workflows/ci.yml`) runs both suites, a frontend build and clippy
+on every push and pull request.
 
 ## Updates
 

@@ -14,7 +14,10 @@ use std::path::Path;
 use std::sync::Mutex;
 use walkdir::WalkDir;
 
-const CACHE_VERSION: u32 = 1;
+/// 2: repeated `token_count` events are no longer counted twice. Bumped so the
+/// indexes built before that are rebuilt rather than carrying the double count
+/// for the rest of their month.
+const CACHE_VERSION: u32 = 2;
 static COLLECT_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn clear_history_cache() -> std::io::Result<()> {
@@ -65,7 +68,7 @@ fn rollout_files(root: &Path, min_mtime: std::time::SystemTime) -> Vec<Candidate
     out
 }
 
-#[derive(Clone, Copy, Default, Deserialize, Serialize)]
+#[derive(Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, Debug)]
 struct Counts {
     input: u64,
     cached: u64,
@@ -252,7 +255,13 @@ fn append_file(candidate: &Candidate, mut record: FileRecord) -> std::io::Result
         let info = &payload["info"];
         let total = Counts::from_json(&info["total_token_usage"]);
         let last = Counts::from_json(&info["last_token_usage"]);
-        let counts = if last.is_empty() {
+        let counts = if !total.is_empty() && total == record.last_total {
+            // Codex sometimes logs the same usage twice — a second event with
+            // the running total unchanged, still carrying the previous turn's
+            // `last_token_usage`. An unchanged total means nothing new was
+            // used, so counting `last` again would double it.
+            Counts::default()
+        } else if last.is_empty() {
             total.delta_from(record.last_total)
         } else {
             last
@@ -425,7 +434,7 @@ fn collect_from_root(root: &Path, persist: bool) -> CodexUsage {
             model,
             tokens,
             value,
-            confidence,
+            confidence: pricing::reported_confidence(confidence),
         })
         .collect();
     usage.estimate = pricing::metadata(confidence, unknown_models);
@@ -539,6 +548,42 @@ mod tests {
         assert_eq!(reserve[0].gauge.used_percent, 20.0);
         // The window-less premium bucket adds nothing.
         assert_eq!(usage.quotas.len(), 3);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Codex sometimes logs a token_count a second time with the running total
+    /// unchanged, still carrying the previous turn's `last_token_usage` — 70
+    /// times in one real month of logs. Counting it would double that turn.
+    /// The repeat has to be caught whether it lands in the same read as the
+    /// original or in a later append, where only the cached record remembers
+    /// the total it repeats.
+    #[test]
+    fn a_repeated_token_count_is_not_counted_twice() {
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!("ai-usage-codex-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("sessions")).unwrap();
+        let path = root.join("sessions/rollout-repeat.jsonl");
+        let day = crate::util::days_ago_utc(0);
+        let event = |total: u64, last: u64| {
+            format!(
+                r#"{{"timestamp":"{day}T00:00:00Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{total},"output_tokens":0}},"last_token_usage":{{"input_tokens":{last},"output_tokens":0}}}}}}}}"#
+            )
+        };
+        let mut file = fs::File::create(&path).unwrap();
+        writeln!(file, "{}", event(100, 100)).unwrap();
+        writeln!(file, "{}", event(100, 100)).unwrap();
+        writeln!(file, "{}", event(150, 50)).unwrap();
+        drop(file);
+        assert_eq!(collect_from_root(&root, false).tokens_30d, 150);
+
+        let first = scan_file(&rollout_files(&root, std::time::UNIX_EPOCH).remove(0), None).unwrap();
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file, "{}", event(150, 50)).unwrap();
+        drop(file);
+        let grown = scan_file(&rollout_files(&root, std::time::UNIX_EPOCH).remove(0), Some(first)).unwrap();
+        let counted: u64 = grown.events.iter().map(|e| e.counts.input).sum();
+        assert_eq!(counted, 150, "the appended repeat added nothing");
         let _ = fs::remove_dir_all(root);
     }
 

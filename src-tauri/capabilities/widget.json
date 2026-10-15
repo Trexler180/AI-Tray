@@ -1,11 +1,19 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "widget",
-  "description": "Core permissions for the taskbar widget. Kept separate from the panel's capability so the widget only gets what it uses: the event channel it listens to for usage and settings updates. It does not need window dragging \u2014 it positions itself through its own commands so it can never leave the taskbar. Its own commands (open_panel, set_widget_*) are app commands and are not gated here.",
+  "description": "Permissions for the taskbar widget, kept separate from the panel's so the widget only gets what it uses: the event channel it listens to for usage and settings updates, and the handful of app commands it calls to read its data, move and resize itself, and open the panel. It does not need window dragging — it positions itself through its own commands so it can never leave the taskbar — and it cannot reach anything that spends resets, installs updates or changes accounts.",
   "windows": [
     "widget"
   ],
   "permissions": [
-    "core:default"
+    "core:default",
+    "allow-get-account-visibility",
+    "allow-get-cached-usage",
+    "allow-get-recent-burn",
+    "allow-get-widget-edges",
+    "allow-get-widget-settings",
+    "allow-open-panel",
+    "allow-set-widget-gap",
+    "allow-set-widget-width"
   ]
 }

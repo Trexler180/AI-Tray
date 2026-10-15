@@ -257,7 +257,7 @@ fn collect_from_roots(roots: &[PathBuf], persist: bool) -> ClaudeUsage {
             model,
             tokens,
             value,
-            confidence,
+            confidence: pricing::reported_confidence(confidence),
         })
         .collect();
     usage.estimate = pricing::metadata(confidence, unknown_models);

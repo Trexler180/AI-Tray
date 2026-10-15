@@ -44,6 +44,11 @@ jobs:
 
       - run: npm ci
 
+      # Separate steps: on Windows a multi-line `run` is PowerShell, which only
+      # fails the step on the last command's exit code.
+      - name: Verify the frontend before publishing
+        run: npm test
+
       - name: Verify before publishing
         run: cargo test --manifest-path src-tauri/Cargo.toml
 

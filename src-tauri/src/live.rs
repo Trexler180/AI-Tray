@@ -391,7 +391,7 @@ fn parse_claude(v: &Value) -> Option<ClaudeLive> {
 /// `refresh` (which returns a fresh token) if the endpoint rejects it.
 fn fetch_claude_for(
     token: Option<String>,
-    refresh: impl FnOnce(&str) -> Option<String>,
+    refresh: impl FnOnce(&str) -> Result<String, RefreshError>,
 ) -> Result<ClaudeLive, FetchFailure> {
     const URL: &str = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1";
     let hdr = [
@@ -406,7 +406,7 @@ fn fetch_claude_for(
             message: "Provider response did not contain recognized quota windows".to_string(),
         }),
         Err(401) | Err(403) => {
-            let fresh = refresh(&token).ok_or_else(|| FetchFailure::status(401))?;
+            let fresh = refresh(&token).map_err(FetchFailure::refresh)?;
             get_json_retrying(URL, &fresh, &hdr)
                 .map_err(FetchFailure::status)
                 .and_then(|v| parse_claude(&v).ok_or_else(|| FetchFailure {

@@ -6,6 +6,12 @@
 //! credential files the CLIs read (`~/.claude/.credentials.json`,
 //! `~/.codex/auth.json`) — otherwise the next CLI refresh fails and the user is
 //! forced to log in again. Writes are atomic (temp file + rename).
+//!
+//! A login is only ever refreshed after the provider has rejected it, never
+//! ahead of its expiry. The CLI refreshes these same files on its own schedule,
+//! holding its own copy of the single-use refresh token, and the locks below
+//! only coordinate threads in this process — refreshing early would race it,
+//! and whichever side spent the token second would be signed out.
 
 use chrono::Utc;
 use serde_json::Value;
@@ -17,7 +23,6 @@ const CLAUDE_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
 const CLAUDE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const CODEX_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
-const TOKEN_REFRESH_SKEW_MS: i64 = 2 * 60 * 1000;
 
 static CLAUDE_REFRESH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static CODEX_REFRESH_LOCK: Mutex<()> = Mutex::new(());
@@ -105,16 +110,6 @@ fn claude_access_from(creds: &Value) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-fn claude_token_expiring(creds: &Value) -> bool {
-    let Some(expires_at) = claude_oauth(creds)
-        .and_then(|oauth| oauth.get("expiresAt"))
-        .and_then(|v| v.as_i64())
-    else {
-        return false;
-    };
-    expires_at <= Utc::now().timestamp_millis() + TOKEN_REFRESH_SKEW_MS
-}
-
 /// Exchange the Claude refresh token for fresh tokens. Transient failures
 /// (network, 5xx, 429) get one retry; a 4xx means the refresh token itself
 /// was rejected, where retrying can't help.
@@ -143,15 +138,21 @@ fn refresh_claude(refresh_token: &str) -> Option<Value> {
     None
 }
 
-fn refresh_claude_creds_locked(path: &Path, mut creds: Value) -> Option<String> {
-    let rt = claude_oauth(&creds)?
-        .get("refreshToken")?
-        .as_str()?
+fn refresh_claude_creds_locked(path: &Path, mut creds: Value) -> Result<String, RefreshError> {
+    let rt = claude_oauth(&creds)
+        .and_then(|oauth| oauth.get("refreshToken"))
+        .and_then(Value::as_str)
+        .ok_or(RefreshError::Missing)?
         .to_string();
-    let tok = refresh_claude(&rt)?;
+    let tok = refresh_claude(&rt).ok_or(RefreshError::Rejected)?;
 
-    let access = tok["access_token"].as_str()?.to_string();
-    let oauth = creds.get_mut("claudeAiOauth")?;
+    let access = tok["access_token"]
+        .as_str()
+        .ok_or(RefreshError::Rejected)?
+        .to_string();
+    let oauth = creds
+        .get_mut("claudeAiOauth")
+        .ok_or(RefreshError::Missing)?;
     oauth["accessToken"] = Value::from(access.clone());
     if let Some(new_rt) = tok["refresh_token"].as_str() {
         oauth["refreshToken"] = Value::from(new_rt);
@@ -160,25 +161,16 @@ fn refresh_claude_creds_locked(path: &Path, mut creds: Value) -> Option<String> 
         let expires_at = Utc::now().timestamp_millis() + exp * 1000;
         oauth["expiresAt"] = Value::from(expires_at);
     }
-    write_json_atomic(path, &creds).ok()?;
-    Some(access)
+    write_json_atomic(path, &creds).map_err(RefreshError::SaveFailed)?;
+    Ok(access)
 }
 
-/// Read a Claude access token from a specific credentials file, preemptively
-/// refreshing it (in place, in that same file) when it is about to expire.
+/// The Claude access token saved in a specific credentials file, as it is —
+/// including one that is about to expire or already has. See the module notes
+/// for why this never refreshes ahead of time: an expired token is simply
+/// rejected, and `refresh_claude_creds_after_rejection_at` takes it from there.
 pub fn claude_access_token_at(path: &Path) -> Option<String> {
-    let creds = read_json(path)?;
-    if !claude_token_expiring(&creds) {
-        return claude_access_from(&creds);
-    }
-
-    let _guard = claude_refresh_lock().lock().ok()?;
-    let creds = read_json(path)?;
-    if !claude_token_expiring(&creds) {
-        return claude_access_from(&creds);
-    }
-    refresh_claude_creds_locked(path, creds)
-        .or_else(|| read_json(path).as_ref().and_then(claude_access_from))
+    claude_access_from(&read_json(path)?)
 }
 
 /// Refresh a specific credentials file after the usage endpoint rejected its
@@ -190,19 +182,26 @@ pub fn claude_access_token_at(path: &Path) -> Option<String> {
 pub fn refresh_claude_creds_after_rejection_at(
     path: &Path,
     rejected_access: &str,
-) -> Option<String> {
-    let _guard = claude_refresh_lock().lock().ok()?;
-    let creds = read_json(path)?;
-    let current_access = claude_access_from(&creds)?;
+) -> Result<String, RefreshError> {
+    let _guard = claude_refresh_lock()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let creds = read_json(path).ok_or(RefreshError::Missing)?;
+    let current_access = claude_access_from(&creds).ok_or(RefreshError::Missing)?;
     if current_access != rejected_access {
-        return Some(current_access);
+        return Ok(current_access);
     }
-    refresh_claude_creds_locked(path, creds).or_else(|| {
-        read_json(path).and_then(|creds| {
-            let current_access = claude_access_from(&creds)?;
-            (current_access != rejected_access).then_some(current_access)
-        })
-    })
+    match refresh_claude_creds_locked(path, creds) {
+        // The provider refused, but the CLI may have refreshed the file while
+        // we were asking; a newer token there is still good. A token that was
+        // issued and couldn't be saved is not retried this way — the refresh
+        // token is spent, and that has to reach the user.
+        Err(RefreshError::Rejected) => read_json(path)
+            .and_then(|creds| claude_access_from(&creds))
+            .filter(|current| current != rejected_access)
+            .ok_or(RefreshError::Rejected),
+        other => other,
+    }
 }
 
 // ---------------- Codex ----------------
@@ -255,11 +254,18 @@ fn codex_tokens_from(auth: &Value) -> Option<(String, String)> {
 pub fn refresh_codex_creds_after_rejection(
     rejected_access: &str,
 ) -> Result<(String, String), RefreshError> {
+    let path = codex_auth_path().ok_or(RefreshError::Missing)?;
+    refresh_codex_creds_after_rejection_at(&path, rejected_access)
+}
+
+fn refresh_codex_creds_after_rejection_at(
+    path: &Path,
+    rejected_access: &str,
+) -> Result<(String, String), RefreshError> {
     let _guard = CODEX_REFRESH_LOCK
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    let path = codex_auth_path().ok_or(RefreshError::Missing)?;
-    let mut auth = read_json(&path).ok_or(RefreshError::Missing)?;
+    let mut auth = read_json(path).ok_or(RefreshError::Missing)?;
     let (current_access, account) = codex_tokens_from(&auth).ok_or(RefreshError::Missing)?;
     if current_access != rejected_access {
         // Someone else — the other fetch, or the CLI itself — already
@@ -286,7 +292,7 @@ pub fn refresh_codex_creds_after_rejection(
         tokens["refresh_token"] = Value::from(new_rt);
     }
     auth["last_refresh"] = Value::from(Utc::now().to_rfc3339());
-    write_json_atomic(&path, &auth).map_err(RefreshError::SaveFailed)?;
+    write_json_atomic(path, &auth).map_err(RefreshError::SaveFailed)?;
     Ok((access, account))
 }
 
@@ -299,27 +305,78 @@ mod tests {
     /// rather than spend the refresh token a second time. Reaching the second
     /// caller's view directly — the file already holds a newer token than the
     /// one that was rejected — needs no network and must not attempt any.
+    /// A credentials file in a fresh temp folder, removed again on drop.
+    struct TempCreds {
+        dir: PathBuf,
+        file: PathBuf,
+    }
+
+    impl TempCreds {
+        fn new(name: &str, body: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("ai-usage-auth-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let file = dir.join(name);
+            std::fs::write(&file, body).unwrap();
+            Self { dir, file }
+        }
+
+        fn saved(&self) -> String {
+            std::fs::read_to_string(&self.file).unwrap()
+        }
+    }
+
+    impl Drop for TempCreds {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
     #[test]
     fn a_token_someone_else_already_refreshed_is_reused() {
-        let home = std::env::temp_dir().join(format!("ai-usage-codex-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&home).unwrap();
-        std::fs::write(
-            home.join("auth.json"),
+        let creds = TempCreds::new(
+            "auth.json",
             r#"{"tokens":{"access_token":"fresh","refresh_token":"rt-2","account_id":"acct"}}"#,
-        )
-        .unwrap();
-        // Only this test reads CODEX_HOME, so setting it here can't disturb
-        // the others running alongside it.
-        std::env::set_var("CODEX_HOME", &home);
-
-        let (access, account) = refresh_codex_creds_after_rejection("stale").unwrap();
+        );
+        let (access, account) =
+            refresh_codex_creds_after_rejection_at(&creds.file, "stale").unwrap();
         assert_eq!(access, "fresh");
         assert_eq!(account, "acct");
         // Untouched: nothing was refreshed or rewritten.
-        let saved = std::fs::read_to_string(home.join("auth.json")).unwrap();
-        assert!(saved.contains("rt-2"));
+        assert!(creds.saved().contains("rt-2"));
+    }
 
-        std::env::remove_var("CODEX_HOME");
-        let _ = std::fs::remove_dir_all(home);
+    /// The same race on the Claude side.
+    #[test]
+    fn a_claude_token_someone_else_already_refreshed_is_reused() {
+        let creds = TempCreds::new(
+            ".credentials.json",
+            r#"{"claudeAiOauth":{"accessToken":"fresh","refreshToken":"rt-2","expiresAt":1}}"#,
+        );
+        let access = refresh_claude_creds_after_rejection_at(&creds.file, "stale").unwrap();
+        assert_eq!(access, "fresh");
+        assert!(creds.saved().contains("rt-2"));
+    }
+
+    /// An expired token is handed over as it is, not refreshed on the spot:
+    /// refreshing ahead of a rejection is what raced the CLI. `expiresAt` is
+    /// long past, so the old behaviour would have gone to the network here.
+    #[test]
+    fn an_expired_claude_token_is_read_without_refreshing() {
+        let body = r#"{"claudeAiOauth":{"accessToken":"old","refreshToken":"rt-1","expiresAt":1}}"#;
+        let creds = TempCreds::new(".credentials.json", body);
+        assert_eq!(claude_access_token_at(&creds.file).as_deref(), Some("old"));
+        assert_eq!(creds.saved(), body);
+    }
+
+    #[test]
+    fn a_claude_login_without_a_refresh_token_reports_missing() {
+        let creds = TempCreds::new(
+            ".credentials.json",
+            r#"{"claudeAiOauth":{"accessToken":"old"}}"#,
+        );
+        assert!(matches!(
+            refresh_claude_creds_after_rejection_at(&creds.file, "old"),
+            Err(RefreshError::Missing)
+        ));
     }
 }

@@ -177,15 +177,88 @@ pub fn codex_resets() -> Option<CodexResets> {
     }
 }
 
+/// Why a redemption didn't go through.
+#[derive(Debug)]
+enum RedeemError {
+    AuthUnavailable,
+    RefreshFailed,
+    RefreshNotSaved(std::io::Error),
+    /// Codex answered and turned it down: nothing was spent.
+    Refused(u16),
+    /// No answer, or a server error: it may have gone through anyway.
+    Unanswered(u16),
+}
+
+impl RedeemError {
+    fn from_status(code: u16) -> Self {
+        if code == 0 || code == 408 || (500..=599).contains(&code) {
+            Self::Unanswered(code)
+        } else {
+            Self::Refused(code)
+        }
+    }
+
+    /// Only an unanswered attempt keeps its request id, so trying again is the
+    /// same redemption rather than a second one — the same rule the Claude
+    /// claim follows.
+    fn settled(&self) -> bool {
+        !matches!(self, Self::Unanswered(_))
+    }
+
+    fn message(&self) -> String {
+        match self {
+            Self::AuthUnavailable => "Codex auth unavailable".to_string(),
+            Self::RefreshFailed => "token refresh failed".to_string(),
+            Self::RefreshNotSaved(error) => {
+                format!("token refreshed but could not be saved: {error}")
+            }
+            Self::Refused(code) => format!("consume failed (HTTP {code})"),
+            Self::Unanswered(code) => {
+                let why = if *code == 0 {
+                    String::new()
+                } else {
+                    format!(" (HTTP {code})")
+                };
+                format!(
+                    "Codex could not confirm the reset{why}. If you are still limited in a moment, try again."
+                )
+            }
+        }
+    }
+}
+
 /// Consume (redeem) a reset credit. Spends the credit — only call this in
 /// response to an explicit user action. Refreshes the token once on a 401/403.
+///
+/// `redeem_request_id` is held per credit across the request, so two clicks
+/// can't race, and kept after an unanswered attempt: a request that timed out
+/// after Codex applied it would otherwise be retried under a new id, which is
+/// how one click could spend two credits.
 pub fn consume_codex_reset(credit_id: &str) -> Result<(), String> {
     if credit_id.is_empty() {
         return Err("missing credit id".to_string());
     }
-    let (token, account) =
-        auth::codex_token().ok_or_else(|| "Codex auth unavailable".to_string())?;
-    let redeem_request_id = uuid::Uuid::new_v4().to_string();
+    let slot = claim_slot(&CODEX_CLAIMS, credit_id);
+    let mut pending = slot.lock().unwrap_or_else(|error| error.into_inner());
+    let redeem_request_id = pending
+        .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
+        .clone();
+    let result = redeem_codex_credit(credit_id, &redeem_request_id);
+    let settled = result.as_ref().err().is_none_or(RedeemError::settled);
+    if settled {
+        *pending = None;
+    }
+    drop(pending);
+    // A spent credit — or one that may have been — must not keep being served
+    // from the cache as still available.
+    if result.is_ok() || !settled {
+        *cache() = None;
+    }
+    result.map_err(|error| error.message())
+}
+
+fn redeem_codex_credit(credit_id: &str, redeem_request_id: &str) -> Result<(), RedeemError> {
+    let (token, account) = auth::codex_token().ok_or(RedeemError::AuthUnavailable)?;
     let body = serde_json::json!({
         "credit_id": credit_id,
         "redeem_request_id": redeem_request_id,
@@ -205,25 +278,19 @@ pub fn consume_codex_reset(credit_id: &str) -> Result<(), String> {
         }
     };
 
-    let result = match post(&token, &account) {
+    match post(&token, &account) {
         Ok(()) => Ok(()),
         Err(401) | Err(403) => {
+            // Same body, so the retry is still the one redemption.
             let (fresh, acc) =
                 auth::refresh_codex_creds_after_rejection(&token).map_err(|error| match error {
-                    RefreshError::SaveFailed(error) => {
-                        format!("token refreshed but could not be saved: {error}")
-                    }
-                    _ => "token refresh failed".to_string(),
+                    RefreshError::SaveFailed(error) => RedeemError::RefreshNotSaved(error),
+                    _ => RedeemError::RefreshFailed,
                 })?;
-            post(&fresh, &acc).map_err(|code| format!("consume failed (HTTP {code})"))
+            post(&fresh, &acc).map_err(RedeemError::from_status)
         }
-        Err(code) => Err(format!("consume failed (HTTP {code})")),
-    };
-    // Invalidate the cache so the next fetch reflects the spent credit.
-    if result.is_ok() {
-        *cache() = None;
+        Err(code) => Err(RedeemError::from_status(code)),
     }
-    result
 }
 
 // ---------------- Claude ----------------
@@ -316,7 +383,8 @@ pub fn serve_cached_claude_resets(resets: &ClaudeResets, now: i64) -> ClaudeRese
     resets
 }
 
-/// Why a claim didn't go through. The wording is T3 Code's.
+/// Why a claim didn't go through. The wording is T3 Code's, except for
+/// `LoginNotSaved`, which it has no counterpart for.
 #[derive(Debug, PartialEq, Eq)]
 enum ClaimError {
     MalformedCredit,
@@ -324,6 +392,9 @@ enum ClaimError {
     LoginUnreadable,
     AccountUnreadable,
     SignedOut,
+    /// The login was refreshed but the new tokens couldn't be written back.
+    /// The old refresh token is spent by then, so Claude Code is signed out.
+    LoginNotSaved,
     RateLimited,
     CoolingDown,
     Unconfirmed,
@@ -338,6 +409,9 @@ impl ClaimError {
             Self::LoginUnreadable => "Claude could not read its login.",
             Self::AccountUnreadable => "Claude could not read its account.",
             Self::SignedOut => "Sign in to Claude again to redeem resets.",
+            Self::LoginNotSaved => {
+                "Claude refreshed its login but it couldn't be saved. Sign in to Claude Code again."
+            }
             Self::RateLimited => "Claude is rate limiting resets. Try again soon.",
             Self::CoolingDown => "Claude resets are cooling down. Try again later.",
             Self::Unconfirmed => {
@@ -355,17 +429,22 @@ impl ClaimError {
     }
 }
 
-/// Per-account pending request id. Held across the claim, so two clicks on the
-/// same account can't race, and kept after an unsettled failure for the retry.
+/// One pending request id. Held across the request, so two clicks can't race,
+/// and kept after an unsettled failure for the retry.
 type ClaimSlot = Arc<Mutex<Option<String>>>;
-static CLAIMS: OnceLock<Mutex<HashMap<String, ClaimSlot>>> = OnceLock::new();
+type ClaimSlots = OnceLock<Mutex<HashMap<String, ClaimSlot>>>;
 
-fn claim_slot(account_id: &str) -> ClaimSlot {
-    CLAIMS
+/// Claude claims are keyed by account: the server picks which grant is spent.
+static CLAUDE_CLAIMS: ClaimSlots = OnceLock::new();
+/// Codex redemptions are keyed by the credit being spent.
+static CODEX_CLAIMS: ClaimSlots = OnceLock::new();
+
+fn claim_slot(slots: &'static ClaimSlots, key: &str) -> ClaimSlot {
+    slots
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .entry(account_id.to_string())
+        .entry(key.to_string())
         .or_default()
         .clone()
 }
@@ -453,8 +532,12 @@ fn claim_claude_reset(
     let verdict = match post_claim(&token, &org, grant_id, request_id) {
         Err(401) | Err(403) => {
             // Same request id, so this is still the one claim.
-            let fresh = auth::refresh_claude_creds_after_rejection_at(&creds, &token)
-                .ok_or(ClaimError::SignedOut)?;
+            let fresh = auth::refresh_claude_creds_after_rejection_at(&creds, &token).map_err(
+                |error| match error {
+                    RefreshError::SaveFailed(_) => ClaimError::LoginNotSaved,
+                    _ => ClaimError::SignedOut,
+                },
+            )?;
             post_claim(&fresh, &org, grant_id, request_id)
         }
         other => other,
@@ -474,7 +557,7 @@ pub fn consume_claude_reset(account_id: &str, grant_id: &str) -> Result<&'static
     if !valid_grant_id(grant_id) {
         return Err(ClaimError::MalformedCredit.message().to_string());
     }
-    let slot = claim_slot(account_id);
+    let slot = claim_slot(&CLAUDE_CLAIMS, account_id);
     let mut pending = slot.lock().unwrap_or_else(|error| error.into_inner());
     let request_id = pending
         .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
@@ -566,6 +649,44 @@ mod tests {
         assert!(!ClaimError::Unconfirmed.settled());
         assert!(!ClaimError::RequestFailed.settled());
         assert!(ClaimError::CoolingDown.settled());
+    }
+
+    /// What decides whether a retry may mint a new request id. A timeout or a
+    /// server error may have spent the credit, so its id is kept; an answer
+    /// that turned the redemption down spent nothing.
+    #[test]
+    fn only_an_unanswered_codex_redemption_keeps_its_request_id() {
+        for code in [0, 408, 500, 502, 503, 504] {
+            let error = RedeemError::from_status(code);
+            assert!(matches!(error, RedeemError::Unanswered(_)), "HTTP {code}");
+            assert!(!error.settled(), "HTTP {code}");
+        }
+        for code in [400, 404, 409, 422, 429] {
+            let error = RedeemError::from_status(code);
+            assert!(matches!(error, RedeemError::Refused(_)), "HTTP {code}");
+            assert!(error.settled(), "HTTP {code}");
+        }
+        assert!(RedeemError::RefreshFailed.settled());
+        assert!(RedeemError::AuthUnavailable.settled());
+    }
+
+    #[test]
+    fn a_codex_redemption_without_a_credit_id_sends_nothing() {
+        assert!(consume_codex_reset("").is_err());
+    }
+
+    /// Slots are per key, and the same key always hands back the same slot —
+    /// that is what lets a retry find the request id the last attempt left.
+    #[test]
+    fn claim_slots_are_shared_per_key_and_separate_across_keys() {
+        static SLOTS: ClaimSlots = OnceLock::new();
+        let a = claim_slot(&SLOTS, "credit-a");
+        *a.lock().unwrap() = Some("req-1".to_string());
+        assert_eq!(
+            claim_slot(&SLOTS, "credit-a").lock().unwrap().as_deref(),
+            Some("req-1")
+        );
+        assert!(claim_slot(&SLOTS, "credit-b").lock().unwrap().is_none());
     }
 
     #[test]

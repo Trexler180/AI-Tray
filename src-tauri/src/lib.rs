@@ -339,16 +339,14 @@ fn set_notification_enabled(
 }
 
 /// Consume (redeem) a Codex reset credit. This spends the credit, so it is only
-/// invoked from an explicit user action in the panel. Refreshes the panel after
-/// so the now-spent credit disappears.
+/// invoked from an explicit user action in the panel. The panel refreshes
+/// itself afterwards, so the spent credit disappears without a second
+/// collection started from here.
 #[tauri::command]
-async fn consume_codex_reset(app: tauri::AppHandle, credit_id: String) -> Result<(), String> {
-    let id = credit_id.clone();
-    tauri::async_runtime::spawn_blocking(move || resets::consume_codex_reset(&id))
+async fn consume_codex_reset(credit_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || resets::consume_codex_reset(&credit_id))
         .await
-        .map_err(|e| e.to_string())??;
-    alerts::refresh_for_alerts(app);
-    Ok(())
+        .map_err(|e| e.to_string())?
 }
 
 /// Claim a banked Claude reset for one account. Like the Codex command this

@@ -2762,6 +2762,26 @@ document
   .forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
 
 listen("refresh", refresh);
+// A collection the panel didn't start — the file watcher, the background poll —
+// has finished. Paint the snapshot it left rather than collecting again, which
+// would ask every provider a second time for the numbers it already has. The
+// panel's own refresh emits this too, but by then `data` already holds that
+// snapshot, so the timestamp check turns it into a no-op.
+listen("usage-updated", async () => {
+  if (refreshing) return;
+  let cached;
+  try {
+    cached = await invoke("get_cached_usage");
+  } catch (_) {
+    return;
+  }
+  if (!cached || (data && cached.generated_at <= data.generated_at)) return;
+  data = cached;
+  // The collection fed the recorder as well, so these are a sample behind.
+  loadWindowHistory();
+  loadRecentBurn(true);
+  render();
+});
 // Rust collapses the panel whenever it hides, so the next tray click opens the
 // familiar popover rather than a full-width window.
 listen("collapse", () => {
