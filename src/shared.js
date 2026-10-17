@@ -69,6 +69,66 @@ export function elapsedPercent(g) {
   return clamp(((Date.now() - (end - span)) / span) * 100, 0, 100);
 }
 
+// ---------- forecast ----------
+// Whether a window will run out before it resets, and how worried a meter
+// should look. Mirrors forecast.rs, which drives the tray icon and the
+// notifications from the same rule — the panel calling a window "fine" while
+// the tray icon calls it critical would be worse than either alone.
+export const LOW_PERCENT = 80;
+export const CRIT_PERCENT = 95;
+// A fast first hour on an empty window is normal; "out by 2 pm" at 20% used
+// would be noise.
+export const FORECAST_FLOOR = 50;
+const MIN_ELAPSED_FRACTION = 0.1;
+const MIN_ELAPSED_SECS = 10 * 60;
+const SLACK_SECS = 120;
+
+// Unix seconds when the window reaches 100% at its average pace so far, when
+// that comes before it resets; otherwise null.
+export function runsOutAt(g, nowMs = Date.now()) {
+  const used = Number(g?.used_percent) || 0;
+  if (used < FORECAST_FLOOR || used >= 100) return null;
+  if (typeof g.resets_at !== "number") return null;
+  const now = Math.floor(nowMs / 1000);
+  const span = (Number(g.window_minutes) || 0) * 60;
+  if (span <= 0 || g.resets_at <= now) return null;
+  const elapsed = span - (g.resets_at - now);
+  if (elapsed < MIN_ELAPSED_SECS || elapsed < span * MIN_ELAPSED_FRACTION) return null;
+  const at = now + Math.round((100 - used) / (used / elapsed));
+  return at < g.resets_at - SLACK_SECS ? at : null;
+}
+
+// "ok" | "low" | "crit" | "out", calm to worst.
+export const TIERS = ["ok", "low", "crit", "out"];
+export function meterTier(g, nowMs = Date.now()) {
+  const used = Number(g?.used_percent) || 0;
+  if (used >= 100) return "out";
+  if (used >= CRIT_PERCENT || runsOutAt(g, nowMs) !== null) return "crit";
+  if (used >= LOW_PERCENT) return "low";
+  return "ok";
+}
+
+// The window to worry about first among `limits` ({ gauge, … }): the worst
+// tier, then the least left, then the soonest reset. Null for an empty list.
+export function tightestLimit(limits, nowMs = Date.now()) {
+  const rank = (limit) => [
+    TIERS.indexOf(meterTier(limit.gauge, nowMs)),
+    Number(limit.gauge.used_percent) || 0,
+    -(limit.gauge.resets_at ?? Number.MAX_SAFE_INTEGER),
+  ];
+  // Lexicographic: the first field that differs decides.
+  const worse = (a, b) => {
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] > b[i];
+    return false;
+  };
+  let best = null;
+  for (const limit of limits) {
+    if (!limit?.gauge) continue;
+    if (!best || worse(rank(limit), rank(best))) best = limit;
+  }
+  return best;
+}
+
 // ---------- account visibility ----------
 // The key an account is shown or hidden by, on both surfaces. Claude accounts
 // are identified everywhere else by their config directory, so that is what

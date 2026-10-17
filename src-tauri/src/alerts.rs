@@ -12,14 +12,17 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
 /// Advance warnings, each sent at most once per window cycle as usage climbs
-/// past it. Two steps rather than one per percent: warning at every new whole
-/// percent from 90 could send ten notifications ahead of the "used up" one.
-const WARN_STEPS: [f64; 2] = [90.0, 95.0];
-/// Where the warn band starts.
-const WARN_PERCENT: f64 = WARN_STEPS[0];
+/// past it, unless the user picks their own. A few steps rather than one per
+/// percent: warning at every new whole percent from 90 could send ten
+/// notifications ahead of the "used up" one.
+const DEFAULT_WARN_LEVELS: [u8; 2] = [90, 95];
 /// Hysteresis floor: jitter around the warn threshold can't re-arm the
-/// warning, but a real window reset (usage falling well below) does.
+/// warning, but a real window reset (usage falling well below) does. Also the
+/// level under which an exhausted window counts as reset.
 const WARN_CLEAR_PERCENT: f64 = 80.0;
+/// How far usage has to fall between two readings to count as the window
+/// rolling over, which re-arms the "will run out early" warning.
+const ROLLOVER_DROP: f64 = 5.0;
 /// Minimum spacing between alert-driven refreshes. File events arrive every
 /// second during an active CLI session; the usage APIs don't need that.
 const MIN_REFRESH_SECS: i64 = 30;
@@ -42,7 +45,7 @@ pub(crate) enum Provider {
 }
 
 impl Provider {
-    fn title(self) -> &'static str {
+    pub(crate) fn title(self) -> &'static str {
         match self {
             Provider::Codex => "Codex",
             Provider::Claude => "Claude",
@@ -87,7 +90,7 @@ pub(crate) struct WindowSnapshot<'a> {
     pub(crate) gauge: &'a Gauge,
 }
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct NotificationSettings {
     #[serde(default)]
     pub codex: bool,
@@ -100,6 +103,108 @@ pub struct NotificationSettings {
     /// The same for Claude's banked resets.
     #[serde(default)]
     pub claude_resets: bool,
+    /// Usage levels, in percent, that each send one advance warning per window.
+    #[serde(default = "default_warn_levels")]
+    pub warn_levels: Vec<u8>,
+    /// Say when a window is used up, and again when it resets.
+    #[serde(default = "enabled_by_default")]
+    pub used_up: bool,
+    /// Warn once when a window's pace says it will run out before it resets.
+    #[serde(default = "enabled_by_default")]
+    pub forecast: bool,
+    /// Hold every notification between `quiet_start` and `quiet_end`.
+    #[serde(default)]
+    pub quiet_hours: bool,
+    /// Minutes after local midnight.
+    #[serde(default = "default_quiet_start")]
+    pub quiet_start: u16,
+    #[serde(default = "default_quiet_end")]
+    pub quiet_end: u16,
+}
+
+fn default_warn_levels() -> Vec<u8> {
+    DEFAULT_WARN_LEVELS.to_vec()
+}
+fn enabled_by_default() -> bool {
+    true
+}
+fn default_quiet_start() -> u16 {
+    22 * 60
+}
+fn default_quiet_end() -> u16 {
+    8 * 60
+}
+
+impl Default for NotificationSettings {
+    fn default() -> Self {
+        Self {
+            codex: false,
+            claude: false,
+            codex_resets: false,
+            claude_resets: false,
+            warn_levels: default_warn_levels(),
+            used_up: true,
+            forecast: true,
+            quiet_hours: false,
+            quiet_start: default_quiet_start(),
+            quiet_end: default_quiet_end(),
+        }
+    }
+}
+
+impl NotificationSettings {
+    /// The warn levels as thresholds, ascending, without duplicates or values
+    /// that could never fire before "used up".
+    fn warn_steps(&self) -> Vec<f64> {
+        let mut levels: Vec<u8> = self.warn_levels.iter().copied().filter(|l| (1..100).contains(l)).collect();
+        levels.sort_unstable();
+        levels.dedup();
+        levels.into_iter().map(f64::from).collect()
+    }
+
+    /// Whether `minute` (after local midnight) falls in the quiet window. The
+    /// window may run past midnight, as the default 22:00–08:00 does.
+    fn quiet_at(&self, minute: u16) -> bool {
+        if !self.quiet_hours || self.quiet_start == self.quiet_end {
+            return false;
+        }
+        if self.quiet_start < self.quiet_end {
+            (self.quiet_start..self.quiet_end).contains(&minute)
+        } else {
+            minute >= self.quiet_start || minute < self.quiet_end
+        }
+    }
+}
+
+/// The part of the settings the Alerts section edits as one.
+#[derive(Deserialize)]
+pub struct AlertOptions {
+    pub warn_levels: Vec<u8>,
+    pub used_up: bool,
+    pub forecast: bool,
+    pub quiet_hours: bool,
+    pub quiet_start: u16,
+    pub quiet_end: u16,
+}
+
+/// "4:52 pm" in local time, matching the panel's clock times.
+pub(crate) fn clock_text(ts: i64) -> String {
+    use chrono::{Local, TimeZone};
+    Local
+        .timestamp_opt(ts, 0)
+        .single()
+        .map(|t| t.format("%-I:%M %P").to_string())
+        .unwrap_or_default()
+}
+
+/// "18 min", "1 h 20 min" — a gap for the middle of a sentence.
+pub(crate) fn gap_text(secs: i64) -> String {
+    let minutes = (secs.max(0) + 30) / 60;
+    match (minutes / 60, minutes % 60) {
+        (0, m) => format!("{m} min"),
+        (h, 0) => format!("{h} h"),
+        (h, m) => format!("{h} h {m} min"),
+    }
 }
 
 struct Exhaustion {
@@ -114,11 +219,13 @@ struct Exhaustion {
 struct WindowState {
     last_used: Option<f64>,
     exhausted: Option<Exhaustion>,
-    /// The `WARN_STEPS` step the last advance warning was for, or None if no
+    /// The warn level the last advance warning was for, or None if no
     /// warning is currently armed. We only re-warn when usage reaches a higher
     /// step, so an unchanged reading — including the reset_at drift a rolling
     /// window emits every poll — stays quiet.
     warned_at: Option<u8>,
+    /// The "will run out early" warning went out for this window cycle.
+    forecast_warned: bool,
 }
 
 /// Per-credit notification bookkeeping: whether we've announced it and which
@@ -215,6 +322,18 @@ impl AlertState {
         Ok(settings.clone())
     }
 
+    pub fn set_options(&self, options: AlertOptions) -> Result<NotificationSettings, String> {
+        let mut settings = self.settings.lock().unwrap();
+        settings.warn_levels = options.warn_levels;
+        settings.used_up = options.used_up;
+        settings.forecast = options.forecast;
+        settings.quiet_hours = options.quiet_hours;
+        settings.quiet_start = options.quiet_start.min(24 * 60 - 1);
+        settings.quiet_end = options.quiet_end.min(24 * 60 - 1);
+        persist_settings(&settings)?;
+        Ok(settings.clone())
+    }
+
     pub fn latest_usage(&self) -> Option<Usage> {
         self.runtime.lock().unwrap().latest_usage.clone()
     }
@@ -236,8 +355,23 @@ impl AlertState {
         // Independent of the notification settings: the timeline needs the
         // record whether or not this user wants to be told about limits.
         crate::windows_history::record(usage);
-        for (title, body) in self.notification_events(usage, generation) {
-            send_notification(app, &title, &body);
+        let events = self.notification_events(usage, generation);
+        // Quiet hours drop the toasts, not the bookkeeping: a limit crossed at
+        // 3 am isn't replayed as news at 8.
+        let minute = {
+            use chrono::Timelike;
+            let now = chrono::Local::now();
+            (now.hour() * 60 + now.minute()) as u16
+        };
+        if !self.settings().quiet_at(minute) {
+            for (title, body) in events {
+                send_notification(app, &title, &body);
+            }
+        }
+        // The tray reads whichever snapshot is newest, which an out-of-order
+        // collection may not be.
+        if let Some(latest) = self.latest_usage() {
+            crate::tray::update(app, &latest);
         }
     }
 
@@ -254,13 +388,22 @@ impl AlertState {
             runtime.applied_generation = generation;
             runtime.latest_usage = Some(usage.clone());
 
+            let steps = settings.warn_steps();
+            // Warnings re-arm once usage falls well under the lowest step.
+            let warn_clear = steps
+                .first()
+                .map(|lowest| (lowest - 10.0).min(WARN_CLEAR_PERCENT));
+            let now = Utc::now().timestamp();
+
             for snapshot in snapshots {
                 let provider = snapshot.key.provider;
+                let account = snapshot.key.account.clone();
                 let label = snapshot.label;
                 let name = snapshot.name;
                 let group = snapshot.group;
-                let current = snapshot.gauge.used_percent;
-                let reset_at = snapshot.gauge.resets_at.unwrap_or(0);
+                let gauge = snapshot.gauge;
+                let current = gauge.used_percent;
+                let reset_at = gauge.resets_at.unwrap_or(0);
                 let state = runtime.windows.entry(snapshot.key).or_default();
                 let previous = state.last_used.replace(current);
 
@@ -269,7 +412,12 @@ impl AlertState {
                     // present instead of replaying stale transitions.
                     state.exhausted = None;
                     state.warned_at = None;
+                    state.forecast_warned = false;
                     continue;
+                }
+                // A clear drop between readings is the window rolling over.
+                if previous.is_some_and(|p| current + ROLLOVER_DROP < p) {
+                    state.forecast_warned = false;
                 }
 
                 // Reset detection on evidence: usage fell well below the cap.
@@ -295,10 +443,13 @@ impl AlertState {
                 if clear_exhaustion {
                     state.exhausted = None;
                     state.warned_at = None;
-                    to_notify.push((
-                        format!("{name} limit reset"),
-                        format!("{name} {label} window has reset."),
-                    ));
+                    state.forecast_warned = false;
+                    if settings.used_up {
+                        to_notify.push((
+                            format!("{name} limit reset"),
+                            format!("{name} {label} window has reset."),
+                        ));
+                    }
                     continue;
                 }
 
@@ -306,13 +457,25 @@ impl AlertState {
                 // state: a limit that was already exhausted before the app
                 // started isn't news.
                 let first = previous.is_none();
+                let pct = current.round() as u8;
+                let runs_out = crate::forecast::runs_out_at(gauge, now);
+                let forecast_text = runs_out
+                    .map(|at| {
+                        format!(
+                            " At this pace it runs out at {}, {} before it resets.",
+                            clock_text(at),
+                            gap_text(reset_at - at)
+                        )
+                    })
+                    .unwrap_or_default();
+
                 if current >= 100.0 {
                     if state.exhausted.is_none() {
                         state.exhausted = Some(Exhaustion {
                             reset_at,
                             reset_check_done: false,
                         });
-                        if !first {
+                        if !first && settings.used_up {
                             let mut body = format!("{name} {label} window is at 100% used.");
                             // Draining the main limit is exactly when a reserve
                             // starts to matter, so say it's there.
@@ -321,33 +484,56 @@ impl AlertState {
                                     body.push_str(&format!(" {} takes over from here.", reserve.label));
                                 }
                             }
+                            if reset_at > now {
+                                body.push_str(&format!(
+                                    " It comes back at {}, in {}.",
+                                    clock_text(reset_at),
+                                    gap_text(reset_at - now)
+                                ));
+                            }
+                            if let Some(resets) = banked_resets_text(usage, provider, &account) {
+                                body.push_str(&format!(" {resets} Open the panel to use one."));
+                            }
                             to_notify.push((format!("{name} limit used up"), body));
                         }
                     }
-                } else if current >= WARN_PERCENT {
+                    continue;
+                }
+
+                if let Some(step) = steps.iter().rev().copied().find(|step| current >= *step) {
                     // Notify on entering the warn band and again only on
                     // reaching a higher step. An unchanged reading, a climb
                     // within a step, or the reset_at drift a rolling window
                     // emits each poll leaves warned_at untouched.
-                    let step = WARN_STEPS
-                        .iter()
-                        .rev()
-                        .find(|step| current >= **step)
-                        .copied()
-                        .unwrap_or(WARN_PERCENT) as u8;
-                    let pct = current.round() as u8;
+                    let step = step as u8;
                     let climbed = state.warned_at.is_none_or(|prev| step > prev);
                     if climbed {
                         state.warned_at = Some(step);
                         if !first {
+                            // The forecast rides along rather than following
+                            // as a second toast about the same window.
+                            if runs_out.is_some() {
+                                state.forecast_warned = true;
+                            }
                             to_notify.push((
                                 format!("{name} limit almost used"),
-                                format!("{name} {label} window is at {pct}% used."),
+                                format!("{name} {label} window is at {pct}% used.{forecast_text}"),
                             ));
+                            continue;
                         }
                     }
-                } else if current < WARN_CLEAR_PERCENT {
+                } else if warn_clear.is_none_or(|clear| current < clear) {
                     state.warned_at = None;
+                }
+
+                if settings.forecast && runs_out.is_some() && !state.forecast_warned {
+                    state.forecast_warned = true;
+                    if !first {
+                        to_notify.push((
+                            format!("{name} may run out early"),
+                            format!("{name} {label} window is at {pct}% used.{forecast_text}"),
+                        ));
+                    }
                 }
             }
 
@@ -667,6 +853,33 @@ fn codex_reserve_left(usage: &Usage) -> Option<&QuotaWindow> {
         .find(|quota| quota.group == "reserve" && quota.gauge.used_percent < 100.0)
 }
 
+/// "You have 2 banked resets." for the account a used-up window belongs to, so
+/// the toast says there is a way back before the window refills by itself.
+fn banked_resets_text(usage: &Usage, provider: Provider, account: &str) -> Option<String> {
+    let (count, noun) = match provider {
+        Provider::Codex => (
+            usage
+                .codex
+                .resets
+                .as_ref()
+                .filter(|r| r.available)
+                .map_or(0, |r| r.available_count),
+            "reset credit",
+        ),
+        Provider::Claude => (
+            usage
+                .claude
+                .accounts
+                .iter()
+                .find(|a| a.id == account)
+                .and_then(|a| a.resets.as_ref())
+                .map_or(0, |r| r.available_count),
+            "banked reset",
+        ),
+    };
+    (count > 0).then(|| format!("You have {count} {noun}{}.", if count == 1 { "" } else { "s" }))
+}
+
 fn provider_enabled(settings: &NotificationSettings, provider: Provider) -> bool {
     match provider {
         Provider::Codex => settings.codex,
@@ -907,8 +1120,7 @@ mod tests {
             settings: Mutex::new(NotificationSettings {
                 codex,
                 claude,
-                codex_resets: false,
-                claude_resets: false,
+                ..Default::default()
             }),
             runtime: Mutex::new(AlertRuntime::default()),
             watcher: Mutex::new(None),
@@ -1034,6 +1246,90 @@ mod tests {
         assert!(state
             .notification_events(&codex_weekly_usage(99.0, 1_220), 102)
             .is_empty());
+    }
+
+    /// A Codex five-hour window `elapsed` of the way through right now, so the
+    /// forecast (which reads the wall clock) has something to judge.
+    fn codex_paced(used_percent: f64, elapsed: f64) -> Usage {
+        let span = 300 * 60;
+        let resets_at = Utc::now().timestamp() + ((1.0 - elapsed) * span as f64) as i64;
+        codex_session_usage(used_percent, resets_at)
+    }
+
+    #[test]
+    fn a_window_on_pace_to_run_out_warns_once_per_cycle() {
+        let state = test_state();
+        assert!(state.notification_events(&codex_paced(40.0, 0.4), 1).is_empty());
+
+        let events = state.notification_events(&codex_paced(86.0, 0.81), 2);
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].0, "Codex may run out early");
+        assert!(events[0].1.contains("runs out at"), "{}", events[0].1);
+        assert!(state.notification_events(&codex_paced(87.0, 0.82), 3).is_empty());
+
+        // The window rolls over, then runs hot again: that's a new warning.
+        assert!(state.notification_events(&codex_paced(10.0, 0.05), 4).is_empty());
+        let events = state.notification_events(&codex_paced(86.0, 0.81), 5);
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn a_warn_level_carries_the_forecast_instead_of_a_second_toast() {
+        let state = test_state();
+        state.notification_events(&codex_paced(40.0, 0.4), 1);
+        let events = state.notification_events(&codex_paced(91.0, 0.85), 2);
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].0, "Codex limit almost used");
+        assert!(events[0].1.contains("runs out at"));
+    }
+
+    #[test]
+    fn custom_warn_levels_each_fire_once() {
+        let state = test_state();
+        state.settings.lock().unwrap().warn_levels = vec![75, 50, 50, 120];
+        state.settings.lock().unwrap().forecast = false;
+        assert!(state.notification_events(&codex_session_usage(40.0, 1_000), 1).is_empty());
+        let events = state.notification_events(&codex_session_usage(60.0, 1_000), 2);
+        assert_eq!(events.len(), 1);
+        assert!(events[0].1.contains("60%"));
+        assert!(state.notification_events(&codex_session_usage(70.0, 1_000), 3).is_empty());
+        assert_eq!(state.notification_events(&codex_session_usage(80.0, 1_000), 4).len(), 1);
+        assert!(state.notification_events(&codex_session_usage(85.0, 1_000), 5).is_empty());
+    }
+
+    #[test]
+    fn used_up_alerts_can_be_switched_off() {
+        let state = test_state();
+        state.settings.lock().unwrap().used_up = false;
+        state.notification_events(&codex_session_usage(95.0, 1_000), 1);
+        assert!(state.notification_events(&codex_session_usage(100.0, 1_000), 2).is_empty());
+        assert!(state.notification_events(&codex_session_usage(20.0, 2_000), 3).is_empty());
+    }
+
+    #[test]
+    fn quiet_hours_can_run_past_midnight() {
+        let mut settings = NotificationSettings {
+            quiet_hours: true,
+            ..Default::default()
+        };
+        assert!(settings.quiet_at(23 * 60));
+        assert!(settings.quiet_at(7 * 60 + 59));
+        assert!(!settings.quiet_at(8 * 60));
+        assert!(!settings.quiet_at(12 * 60));
+        settings.quiet_start = 13 * 60;
+        settings.quiet_end = 14 * 60;
+        assert!(settings.quiet_at(13 * 60 + 30));
+        assert!(!settings.quiet_at(23 * 60));
+        settings.quiet_hours = false;
+        assert!(!settings.quiet_at(13 * 60 + 30));
+    }
+
+    #[test]
+    fn settings_written_before_the_new_options_keep_the_old_behaviour() {
+        let settings: NotificationSettings =
+            serde_json::from_str(r#"{"codex":true,"claude":false}"#).unwrap();
+        assert_eq!(settings.warn_steps(), vec![90.0, 95.0]);
+        assert!(settings.used_up && settings.forecast && !settings.quiet_hours);
     }
 
     #[test]

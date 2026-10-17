@@ -12,7 +12,8 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use walkdir::WalkDir;
 
-const CACHE_VERSION: u32 = 1;
+/// 2: records carry the session's working directory, for value per project.
+const CACHE_VERSION: u32 = 2;
 static COLLECT_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn clear_history_cache() -> std::io::Result<()> {
@@ -74,6 +75,9 @@ struct FileRecord {
     observed_size: u64,
     modified_ms: u64,
     processed_offset: u64,
+    /// The directory the session ran in, from the first line that names it.
+    #[serde(default)]
+    cwd: Option<String>,
     events: Vec<ClaudeEvent>,
 }
 
@@ -120,6 +124,9 @@ fn append_file(candidate: &Candidate, mut record: FileRecord) -> std::io::Result
         let Ok(value) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
+        if record.cwd.is_none() {
+            record.cwd = value["cwd"].as_str().map(str::to_string);
+        }
         if value["type"] != "assistant" {
             continue;
         }
@@ -205,8 +212,13 @@ fn collect_from_roots(roots: &[PathBuf], persist: bool) -> ClaudeUsage {
     let mut per_model: BTreeMap<String, (u64, f64, EstimateConfidence)> = BTreeMap::new();
     let mut confidence = EstimateConfidence::High;
     let mut unknown_models = BTreeSet::new();
+    let mut projects = crate::util::ProjectTally::default();
 
-    for event in cache.files.values().flat_map(|record| &record.events) {
+    let events = cache
+        .files
+        .values()
+        .flat_map(|record| record.events.iter().map(move |event| (record.cwd.as_deref(), event)));
+    for (cwd, event) in events {
         if event.ts < cutoff {
             continue;
         }
@@ -244,6 +256,7 @@ fn collect_from_roots(roots: &[PathBuf], persist: bool) -> ClaudeUsage {
         model.0 += tokens;
         model.1 += priced.cost;
         model.2 = model.2.max(priced.confidence);
+        projects.add(cwd, date == today, tokens, priced.cost);
         if date == today {
             usage.tokens_today += tokens;
             usage.cost_today += priced.cost;
@@ -251,6 +264,7 @@ fn collect_from_roots(roots: &[PathBuf], persist: bool) -> ClaudeUsage {
     }
 
     usage.daily = crate::util::fill_daily(&per_day, 30);
+    usage.projects = projects.finish();
     usage.models = per_model
         .into_iter()
         .map(|(model, (tokens, value, confidence))| ModelUsage {

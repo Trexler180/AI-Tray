@@ -74,6 +74,12 @@ impl VisibilityState {
     fn get(&self) -> MutexGuard<'_, AccountVisibility> {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
+
+    /// Whether the panel draws this account. The tray icon follows the panel:
+    /// an account hidden there shouldn't be the one the icon warns about.
+    pub fn in_panel(&self, id: &str) -> bool {
+        !self.get().panel_hidden.iter().any(|hidden| hidden == id)
+    }
 }
 
 fn store_path() -> Option<PathBuf> {
@@ -128,6 +134,8 @@ pub fn set_account_hidden(
     persist(&snapshot)?;
     use tauri::Emitter;
     let _ = app.emit("account-visibility", &snapshot);
+    // The tray icon follows the panel's half of this.
+    crate::tray::refresh(&app);
     Ok(snapshot)
 }
 

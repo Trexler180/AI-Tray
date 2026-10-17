@@ -17,7 +17,8 @@ use walkdir::WalkDir;
 /// 2: repeated `token_count` events are no longer counted twice. Bumped so the
 /// indexes built before that are rebuilt rather than carrying the double count
 /// for the rest of their month.
-const CACHE_VERSION: u32 = 2;
+/// 3: records carry the session's working directory, for value per project.
+const CACHE_VERSION: u32 = 3;
 static COLLECT_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn clear_history_cache() -> std::io::Result<()> {
@@ -126,6 +127,10 @@ struct FileRecord {
     additional_limits: BTreeMap<String, Value>,
     plan_type: Option<String>,
     last_ts: Option<i64>,
+    /// The directory the session ran in, from its `session_meta` or latest
+    /// `turn_context`.
+    #[serde(default)]
+    cwd: Option<String>,
     events: Vec<TokenEvent>,
 }
 
@@ -242,6 +247,11 @@ fn append_file(candidate: &Candidate, mut record: FileRecord) -> std::io::Result
         let Ok(value) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
+        if matches!(value["type"].as_str(), Some("session_meta" | "turn_context")) {
+            if let Some(cwd) = value["payload"]["cwd"].as_str() {
+                record.cwd = Some(cwd.to_string());
+            }
+        }
         if value["type"] == "turn_context" {
             if let Some(model) = value["payload"]["model"].as_str() {
                 record.current_model = model.to_string();
@@ -386,8 +396,13 @@ fn collect_from_root(root: &Path, persist: bool) -> CodexUsage {
     let mut per_model: BTreeMap<String, (u64, f64, EstimateConfidence)> = BTreeMap::new();
     let mut confidence = EstimateConfidence::High;
     let mut unknown_models = BTreeSet::new();
+    let mut projects = crate::util::ProjectTally::default();
 
-    for event in cache.files.values().flat_map(|record| &record.events) {
+    let events = cache
+        .files
+        .values()
+        .flat_map(|record| record.events.iter().map(move |event| (record.cwd.as_deref(), event)));
+    for (cwd, event) in events {
         if event.ts < cutoff {
             continue;
         }
@@ -421,6 +436,7 @@ fn collect_from_root(root: &Path, persist: bool) -> CodexUsage {
         model.0 += tokens;
         model.1 += priced.cost;
         model.2 = model.2.max(priced.confidence);
+        projects.add(cwd, date == today, tokens, priced.cost);
         if date == today {
             usage.tokens_today += tokens;
             usage.cost_today += priced.cost;
@@ -428,6 +444,7 @@ fn collect_from_root(root: &Path, persist: bool) -> CodexUsage {
     }
 
     usage.daily = crate::util::fill_daily(&per_day, 30);
+    usage.projects = projects.finish();
     usage.models = per_model
         .into_iter()
         .map(|(model, (tokens, value, confidence))| ModelUsage {

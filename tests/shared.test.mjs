@@ -11,6 +11,9 @@ import {
   esc,
   groupKey,
   historyKey,
+  meterTier,
+  runsOutAt,
+  tightestLimit,
   widgetRows,
 } from "../src/shared.js";
 
@@ -97,4 +100,51 @@ test("groupKey matches the unscoped window in a group, as the recorder keys it",
   // No quota list: the fixed name `usage_windows` falls back to.
   assert.equal(groupKey("codex", "", [], "session", "session"), "codex||session");
   assert.equal(groupKey("codex", "", quotas, "session", "session"), null);
+});
+
+// The same cases forecast.rs is tested against: the tray icon and the panel
+// must agree on which window is about to run out.
+const NOW = 1_800_000_000_000;
+// A five-hour window `elapsed` of the way through, `used` percent spent.
+const session = (used, elapsed) => ({
+  used_percent: used,
+  window_minutes: 300,
+  resets_at: NOW / 1000 + Math.trunc((1 - elapsed) * 300 * 60),
+});
+
+test("runsOutAt flags a window spending faster than it refills", () => {
+  const g = session(86, 0.81);
+  const at = runsOutAt(g, NOW);
+  assert.ok(at !== null && at < g.resets_at);
+  assert.ok(at - NOW / 1000 > 2300 && at - NOW / 1000 < 2500);
+  assert.equal(meterTier(g, NOW), "crit");
+});
+
+test("a high window that will last is only low", () => {
+  assert.equal(runsOutAt(session(86, 0.92), NOW), null);
+  assert.equal(meterTier(session(86, 0.92), NOW), "low");
+});
+
+test("early or light windows are not forecast", () => {
+  assert.equal(runsOutAt(session(60, 0.016), NOW), null);
+  assert.equal(runsOutAt(session(40, 0.2), NOW), null);
+  assert.equal(meterTier(session(40, 0.2), NOW), "ok");
+});
+
+test("meterTier follows the thresholds", () => {
+  assert.equal(meterTier(session(96, 0.99), NOW), "crit");
+  assert.equal(meterTier(session(100, 0.5), NOW), "out");
+  assert.equal(meterTier({ used_percent: 85 }, NOW), "low");
+});
+
+test("tightestLimit picks the worst tier, then the least left", () => {
+  const limits = [
+    { id: "calm", gauge: session(30, 0.5) },
+    { id: "low", gauge: session(86, 0.92) },
+    { id: "runs-out", gauge: session(86, 0.81) },
+    { id: "low-higher", gauge: session(90, 0.95) },
+  ];
+  assert.equal(tightestLimit(limits, NOW).id, "runs-out");
+  assert.equal(tightestLimit(limits.filter((l) => l.id !== "runs-out"), NOW).id, "low-higher");
+  assert.equal(tightestLimit([], NOW), null);
 });

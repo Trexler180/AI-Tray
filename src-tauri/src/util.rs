@@ -1,4 +1,4 @@
-use crate::models::{DayBucket, Gauge, QuotaWindow};
+use crate::models::{DayBucket, Gauge, ProjectUsage, QuotaWindow};
 use chrono::{Duration, Local};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -69,6 +69,44 @@ pub fn fill_daily(per_day: &BTreeMap<String, (u64, f64)>, days: i64) -> Vec<DayB
             DayBucket { date, tokens, cost }
         })
         .collect()
+}
+
+/// Running per-directory totals while a scanner walks its events. Both CLIs log
+/// the working directory a session ran in, so this is shared rather than
+/// written twice.
+#[derive(Default)]
+pub struct ProjectTally(BTreeMap<String, ProjectUsage>);
+
+impl ProjectTally {
+    pub fn add(&mut self, cwd: Option<&str>, today: bool, tokens: u64, cost: f64) {
+        let path = cwd.unwrap_or("").trim_end_matches(['/', '\\']).to_string();
+        let entry = self.0.entry(path.clone()).or_insert_with(|| ProjectUsage {
+            name: project_name(&path),
+            path,
+            ..Default::default()
+        });
+        entry.tokens_30d += tokens;
+        entry.cost_30d += cost;
+        if today {
+            entry.tokens_today += tokens;
+            entry.cost_today += cost;
+        }
+    }
+
+    /// Most expensive first. Names are only the last path component, so two
+    /// directories that share one keep their own rows and their own paths.
+    pub fn finish(self) -> Vec<ProjectUsage> {
+        let mut out: Vec<ProjectUsage> = self.0.into_values().collect();
+        out.sort_by(|a, b| b.cost_30d.total_cmp(&a.cost_30d));
+        out
+    }
+}
+
+fn project_name(path: &str) -> String {
+    path.rsplit(['/', '\\'])
+        .find(|part| !part.is_empty())
+        .unwrap_or("Unknown folder")
+        .to_string()
 }
 
 /// Human "time remaining" until a unix timestamp, e.g. "36m", "2d 18h".
@@ -363,5 +401,28 @@ mod tests {
         assert_eq!(out[0].tokens, 0);
         // strictly ascending dates
         assert!(out.windows(2).all(|w| w[0].date < w[1].date));
+    }
+}
+
+#[cfg(test)]
+mod project_tests {
+    use super::*;
+
+    #[test]
+    fn projects_are_keyed_by_path_and_named_by_their_last_folder() {
+        let mut tally = ProjectTally::default();
+        tally.add(Some(r"E:\Coding\AI Usage Tray\"), true, 100, 1.5);
+        tally.add(Some(r"E:\Coding\AI Usage Tray"), false, 50, 0.5);
+        tally.add(Some("/home/me/web"), false, 10, 3.0);
+        tally.add(None, true, 5, 0.1);
+        let projects = tally.finish();
+        assert_eq!(projects.len(), 3);
+        // Most expensive over the month first.
+        assert_eq!(projects[0].name, "web");
+        assert_eq!(projects[1].name, "AI Usage Tray");
+        assert_eq!(projects[1].tokens_30d, 150);
+        assert_eq!(projects[1].tokens_today, 100);
+        assert!((projects[1].cost_today - 1.5).abs() < 1e-9);
+        assert_eq!(projects[2].name, "Unknown folder");
     }
 }

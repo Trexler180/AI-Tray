@@ -3,6 +3,7 @@ mod alerts;
 mod auth;
 mod claude;
 mod codex;
+mod forecast;
 mod history_cache;
 mod http;
 mod live;
@@ -10,13 +11,14 @@ mod models;
 mod pricing;
 mod resets;
 mod startup;
+mod tray;
 mod updates;
 mod util;
 mod visibility;
 mod widget;
 mod windows_history;
 
-use alerts::{AlertState, NotificationSettings};
+use alerts::{AlertOptions, AlertState, NotificationSettings};
 use updates::{UpdateSettings, UpdateSnapshot, UpdateState};
 use models::{ClaudeAccountUsage, Usage};
 use windows_history::{RecentBurn, WindowHistory};
@@ -24,7 +26,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{
-    menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, LogicalSize, Manager, PhysicalPosition, Size, WindowEvent,
 };
@@ -327,15 +328,51 @@ fn set_notification_enabled(
     enabled: bool,
 ) -> Result<NotificationSettings, String> {
     let settings = alerts.set_provider(&provider, enabled)?;
+    after_notification_change(&app, enabled);
+    Ok(settings)
+}
+
+/// Warning levels, the used-up and forecast alerts, and quiet hours.
+#[tauri::command]
+fn set_notification_options(
+    alerts: tauri::State<'_, AlertState>,
+    options: AlertOptions,
+) -> Result<NotificationSettings, String> {
+    alerts.set_options(options)
+}
+
+/// A provider's alerts were switched. Turning one on reads the newest snapshot
+/// straight away, so a limit already past a warn level isn't held until the
+/// next collection; either way the tray's check item follows.
+fn after_notification_change(app: &tauri::AppHandle, enabled: bool) {
+    let alerts = app.state::<AlertState>();
     if enabled {
         if let Some(usage) = alerts.latest_usage() {
             let generation = alerts.next_generation();
-            alerts.observe_usage(&app, &usage, generation);
+            alerts.observe_usage(app, &usage, generation);
         } else {
-            alerts::refresh_for_alerts(app);
+            alerts::refresh_for_alerts(app.clone());
         }
     }
-    Ok(settings)
+    tray::refresh(app);
+}
+
+/// The tray menu's "Limit alerts": one switch for both providers' limit
+/// warnings. Any on means it reads as on, so the click turns everything off.
+fn toggle_limit_alerts(app: &tauri::AppHandle) {
+    let alerts = app.state::<AlertState>();
+    let current = alerts.settings();
+    let enabled = !(current.codex || current.claude);
+    let mut latest = None;
+    for provider in ["codex", "claude"] {
+        if let Ok(settings) = alerts.set_provider(provider, enabled) {
+            latest = Some(settings);
+        }
+    }
+    if let Some(settings) = latest {
+        let _ = app.emit("notification-settings", settings);
+    }
+    after_notification_change(app, enabled);
 }
 
 /// Consume (redeem) a Codex reset credit. This spends the credit, so it is only
@@ -489,11 +526,33 @@ fn toggle_window(app: &tauri::AppHandle, click: Option<PhysicalPosition<f64>>) {
             return;
         }
     }
-    position_window(&window, click);
+    reveal_panel(app, &window, click);
+}
+
+/// Open the panel and leave it open, for the tray menu's items: unlike a click
+/// on the icon, picking "Settings…" while the panel is up must not close it.
+fn show_panel(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
+    let window = app.get_webview_window("main")?;
+    if !window.is_visible().unwrap_or(false) {
+        reveal_panel(app, &window, None);
+    } else {
+        let _ = window.set_focus();
+    }
+    Some(window)
+}
+
+fn reveal_panel(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    click: Option<PhysicalPosition<f64>>,
+) {
+    position_window(window, click);
     let _ = window.show();
     let _ = window.set_focus();
     // Fresh numbers every time the panel opens.
     let _ = window.emit("refresh", ());
+    // Whatever the tray badge was pointing at is on screen now.
+    tray::mark_seen(app);
 }
 
 /// Toggle the popover from the taskbar widget — the same behaviour as clicking
@@ -530,6 +589,7 @@ pub fn run() {
         .manage(Expanded(AtomicBool::new(false)))
         .manage(widget::WidgetState::load())
         .manage(visibility::VisibilityState::load())
+        .manage(tray::TrayState::load())
         .invoke_handler(tauri::generate_handler![
             get_usage,
             get_cached_usage,
@@ -537,6 +597,7 @@ pub fn run() {
             glass_enabled,
             get_notification_settings,
             set_notification_enabled,
+            set_notification_options,
             set_claude_account_label,
             add_claude_directory,
             remove_claude_directory,
@@ -554,6 +615,8 @@ pub fn run() {
             open_panel,
             startup::get_start_on_login,
             startup::set_start_on_login,
+            tray::get_tray_settings,
+            tray::set_tray_icon_mode,
             visibility::get_account_visibility,
             visibility::set_account_hidden,
             widget::get_widget_settings,
@@ -595,22 +658,11 @@ pub fn run() {
 
             updates::start_update_ticker(app.handle().clone());
 
-            // Right-click menu: manual refresh + update check + quit.
-            let refresh = MenuItem::with_id(app, "refresh", "Refresh", true, None::<&str>)?;
-            let check_updates = MenuItem::with_id(
-                app,
-                "check_updates",
-                "Check for updates…",
-                true,
-                None::<&str>,
-            )?;
-            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&refresh, &check_updates, &quit])?;
-
-            TrayIconBuilder::new()
+            // The icon, tooltip and menu start plain and are redrawn by
+            // `tray::update` from every snapshot the app collects.
+            TrayIconBuilder::with_id(tray::TRAY_ID)
                 .icon(app.default_window_icon().cloned().unwrap())
                 .tooltip("AI Usage")
-                .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
@@ -628,6 +680,27 @@ pub fn run() {
                             updates::check(&handle, true).await;
                         });
                     }
+                    "open" => {
+                        show_panel(app);
+                    }
+                    "settings" => {
+                        if let Some(w) = show_panel(app) {
+                            let _ = w.emit("goto", "settings");
+                        }
+                    }
+                    // Spending a reset stays a two-step choice made in the
+                    // panel: this only takes you to the confirm.
+                    "use_reset" => {
+                        let key = app.state::<tray::TrayState>().pending_reset();
+                        if let (Some(w), Some(key)) = (show_panel(app), key) {
+                            let _ = w.emit("use-reset", key);
+                        }
+                    }
+                    "toggle_widget" => {
+                        let on = app.state::<widget::WidgetState>().enabled();
+                        let _ = widget::set_enabled(app, !on);
+                    }
+                    "toggle_alerts" => toggle_limit_alerts(app),
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -642,6 +715,7 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+            tray::refresh(app.handle());
 
             // Hide when the popover loses focus, like a native menu-bar panel.
             if let Some(window) = app.get_webview_window("main") {

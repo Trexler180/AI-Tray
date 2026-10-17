@@ -92,6 +92,20 @@ pub struct QuotaWindow {
     pub gauge: Gauge,
 }
 
+/// API-equivalent value from one working directory, read from the `cwd` the
+/// CLIs log with every session. Sessions whose directory wasn't logged are
+/// grouped under an empty `path`.
+#[derive(Serialize, Clone, Default)]
+pub struct ProjectUsage {
+    /// The directory's last component, for display.
+    pub name: String,
+    pub path: String,
+    pub cost_today: f64,
+    pub tokens_today: u64,
+    pub cost_30d: f64,
+    pub tokens_30d: u64,
+}
+
 /// One day of aggregated usage, used for the little bar chart.
 #[derive(Serialize, Clone)]
 pub struct DayBucket {
@@ -145,6 +159,8 @@ pub struct CodexUsage {
     pub daily: Vec<DayBucket>,
     pub token_breakdown: TokenBreakdown,
     pub models: Vec<ModelUsage>,
+    /// Value per working directory, most expensive over 30 days first.
+    pub projects: Vec<ProjectUsage>,
     pub estimate: EstimateMetadata,
     pub health: DataHealth,
     pub history_health: DataHealth,
@@ -232,6 +248,8 @@ pub struct ClaudeUsage {
     pub daily: Vec<DayBucket>,
     pub token_breakdown: TokenBreakdown,
     pub models: Vec<ModelUsage>,
+    /// Value per working directory, most expensive over 30 days first.
+    pub projects: Vec<ProjectUsage>,
     pub estimate: EstimateMetadata,
     pub health: DataHealth,
     pub history_health: DataHealth,

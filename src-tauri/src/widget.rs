@@ -999,18 +999,24 @@ pub fn set_recent_minutes(
 }
 
 #[tauri::command]
-pub fn set_widget_enabled(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, WidgetState>,
-    enabled: bool,
-) -> Result<(), String> {
+pub fn set_widget_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    set_enabled(&app, enabled)
+}
+
+/// Switch the widget on or off. Shared by the Settings switch and the tray
+/// menu, so both tell the other surfaces: the panel redraws its switch from
+/// the broadcast, and the tray rebuilds its check item.
+pub fn set_enabled(app: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let state = app.state::<WidgetState>();
     let snapshot = {
         let mut settings = state.get();
         settings.enabled = enabled;
         settings.clone()
     };
     persist(&snapshot)?;
-    apply(&app);
+    apply(app);
+    broadcast(app, &snapshot);
+    crate::tray::refresh(app);
     Ok(())
 }
 
