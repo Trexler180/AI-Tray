@@ -1827,70 +1827,63 @@ body {
 }
 
 /* ---- Runs out first ----
-   The Overview's top card: the window most likely to stop you. Red when it
-   will run out or has, amber when it is only low. */
+   A two-line strip above the cards naming the window most likely to stop you:
+   red when it will run out or has, amber when it is only low. The meter below
+   carries the detail, so this stays small. */
 .tight {
-  border-radius: 10px;
-  padding: 10px 12px 11px;
-  margin-bottom: 10px;
-  background: linear-gradient(180deg, rgba(239, 107, 107, 0.11), rgba(239, 107, 107, 0.04));
-  border: 1px solid rgba(239, 107, 107, 0.3);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  margin-bottom: 9px;
+  border-radius: 9px;
+  background: rgba(239, 107, 107, 0.08);
+  border: 1px solid rgba(239, 107, 107, 0.28);
   --tight-ink: #f2b0b0;
   --tight-strong: #ffd6d6;
 }
 .tight.low {
-  background: linear-gradient(180deg, rgba(223, 160, 95, 0.11), rgba(223, 160, 95, 0.04));
-  border-color: rgba(223, 160, 95, 0.32);
+  background: rgba(223, 160, 95, 0.08);
+  border-color: rgba(223, 160, 95, 0.3);
   --tight-ink: #ecc08f;
   --tight-strong: #ffe0bd;
 }
-.tight-lab {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.09em;
+.tight-txt {
+  flex: 1;
+  min-width: 0;
+}
+.tight-line {
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tight-line b {
+  color: var(--text);
+  font-weight: 650;
+}
+.tight-state {
+  margin-left: 2px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--tight-ink);
 }
-.tight-main {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 2px 8px;
-  margin-top: 4px;
-}
-.tight-main .big {
-  font-size: 24px;
-  font-weight: 750;
-  letter-spacing: -0.3px;
-  font-variant-numeric: tabular-nums;
-}
-.tight-main .big small {
-  font-size: 13px;
-  font-weight: 500;
-  letter-spacing: 0;
-  color: var(--muted);
-}
-.tight-main .who {
-  font-size: 12.5px;
-  color: var(--muted);
-}
-.tight-main .who b {
-  color: var(--text);
-}
-.tight-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-top: 6px;
-}
 .tight-fc {
+  margin-top: 2px;
   font-size: 11.5px;
-  line-height: 1.4;
   color: var(--tight-ink);
+  font-variant-numeric: tabular-nums;
 }
 .tight-fc b {
   color: var(--tight-strong);
+}
+.btn.small {
+  padding: 5px 9px;
+  font-size: 11.5px;
+  border-radius: 7px;
 }
 
 /* Filled call-to-action, in the provider's colour. */

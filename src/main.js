@@ -982,28 +982,28 @@ function tightCard(limits) {
   const left = Math.max(0, 100 - (Number(g.used_percent) || 0));
   const runsOut = runsOutAt(g);
   const resets = typeof g.resets_at === "number" ? g.resets_at : null;
-  const heading = tier === "out" ? "Used up" : runsOut !== null ? "Runs out first" : "Running low";
-  const big =
-    tier === "out" && resets
-      ? `${esc(durText(resets * 1000 - Date.now()))}<small> until it's back</small>`
-      : `${left.toFixed(0)}%<small> left</small>`;
-  let detail = "";
-  if (tier === "out" && resets) detail = `Comes back at <b>${esc(atText(resets))}</b>.`;
+  // A strip, not a card: the meter it's about is right below with the full
+  // picture, so this only has to say which window and when.
+  const state =
+    tier === "out" ? "used up" : runsOut !== null ? "runs out" : `${left.toFixed(0)}% left`;
+  let when = "";
+  if (tier === "out" && resets)
+    when = `Back at <b>${esc(atText(resets))}</b>, in ${esc(durText(resets * 1000 - Date.now()))}`;
   else if (runsOut !== null)
-    detail = `At this pace, out by <b>${esc(atText(runsOut))}</b>,<br/>${esc(
-      gapText(resets - runsOut)
-    )} before the ${esc(atText(resets))} reset.`;
-  else if (resets) detail = esc(resetText(g).replace(/^resets/, "Resets"));
+    when = `Out by <b>${esc(atText(runsOut))}</b>, ${esc(gapText(resets - runsOut))} before reset`;
+  else if (resets) when = esc(resetText(g).replace(/^resets/, "Resets"));
   const action = top.resetKey
-    ? `<button class="btn ${top.provider === "codex" ? "teal" : ""}" data-use-reset-go="${esc(
+    ? `<button class="btn small ${top.provider === "codex" ? "teal" : ""}" data-use-reset-go="${esc(
         top.resetKey
       )}">Use a reset</button>`
     : "";
   return `<div class="tight ${tier}" role="status">
-    <div class="tight-lab">${heading}</div>
-    <div class="tight-main"><span class="big">${big}</span>
-      <span class="who"><b>${esc(top.who)}</b> · ${esc(top.label)}</span></div>
-    <div class="tight-row"><div class="tight-fc">${detail}</div>${action}</div>
+    <div class="tight-txt">
+      <div class="tight-line"><b>${esc(top.who)}</b> ${esc(top.label)} <span class="tight-state">${esc(
+        state
+      )}</span></div>
+      ${when ? `<div class="tight-fc">${when}</div>` : ""}
+    </div>${action}
   </div>`;
 }
 
