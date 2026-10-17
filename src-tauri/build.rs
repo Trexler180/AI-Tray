@@ -28,6 +28,7 @@ const COMMANDS: &[&str] = &[
     "set_panel_expanded",
     "get_update_state",
     "set_update_setting",
+    "set_update_channel",
     "check_for_updates_now",
     "install_update",
     "open_panel",

@@ -452,6 +452,22 @@ fn set_update_setting(
     state.set_flag(&key, enabled)
 }
 
+/// Switch between the stable and nightly update channels, then check the new
+/// one straight away so the About section shows its answer.
+#[tauri::command]
+fn set_update_channel(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, UpdateState>,
+    channel: updates::Channel,
+) -> Result<UpdateSnapshot, String> {
+    state.set_channel(channel)?;
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        updates::check(&handle, true).await;
+    });
+    Ok(state.snapshot(app.package_info().version.to_string()))
+}
+
 /// User-initiated check. Reports "up to date" explicitly, unlike the silent
 /// background poll.
 #[tauri::command]
@@ -628,6 +644,7 @@ pub fn run() {
             set_panel_expanded,
             get_update_state,
             set_update_setting,
+            set_update_channel,
             check_for_updates_now,
             install_update,
             open_panel,

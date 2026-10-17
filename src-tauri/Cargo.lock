@@ -19,11 +19,12 @@ dependencies = [
 
 [[package]]
 name = "ai-usage-tray"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
  "notify",
+ "semver",
  "serde",
  "serde_json",
  "tauri",

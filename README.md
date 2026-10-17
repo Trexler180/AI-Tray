@@ -384,6 +384,23 @@ not install anything on its own unless you ask it to. Both behaviors are toggles
 in **Settings → Advanced → About**, and the tray right-click menu has a **Check for
 updates…** item for an immediate check.
 
+Every release is either **Stable** or **Nightly**, and says so in its title,
+in Settings → About and in the update notification.
+
+- **Stable** is the feed every install has always read: the `latest.json` of
+  the newest published, non-prerelease release. Builds from before channels
+  existed read that same URL, so they keep updating, and only ever to stable.
+- **Nightly** builds are versioned as prereleases of the next minor
+  (`0.11.0-nightly.1`) and published as GitHub prereleases, which never become
+  "latest". A fixed release tagged `nightly` holds the nightly feed's
+  `latest.json`. An install on the nightly channel reads both feeds and takes
+  the higher version, so a stable release that overtakes the nightlies still
+  reaches it.
+
+Settings → About has the channel switch. Unset, it follows the build: a
+nightly install stays on nightly. Moving from nightly back to stable doesn't
+downgrade; it waits until a stable release is newer than the nightly you have.
+
 Updates are verified against a public key compiled into the app, so a release
 that wasn't signed with the matching private key is refused. That protects the
 integrity of the update itself; it is not a Microsoft code-signing certificate,
@@ -392,18 +409,28 @@ so Windows SmartScreen still shows its "unrecognized app" prompt during install.
 ### Cutting a release
 
 ```powershell
-npm version minor        # bumps package.json, syncs Cargo.toml, commits, tags
-git push --follow-tags   # the tag triggers .github/workflows/release.yml
+# Stable
+npm version minor                 # bumps package.json, syncs Cargo.toml, commits, tags
+git push --follow-tags            # the tag triggers .github/workflows/release.yml
+
+# Nightly: a prerelease of the next minor, counting up
+npm version 0.11.0-nightly.1
+git push --follow-tags
 ```
+
+The workflow reads the channel from the tag: anything containing `-nightly`
+is a nightly.
 
 `package.json` is the single source of truth for the version:
 `tauri.conf.json` reads it via `"version": "../package.json"`, and
 `scripts/sync-version.mjs` keeps `src-tauri/Cargo.toml` in step.
 
-CI builds and signs on `windows-latest` and creates a **draft** release.
-Installed apps only see the update once that draft is published — the manual
-publish step is deliberate, because an auto-updating app otherwise distributes a
-broken build to every install with no way to recall it.
+CI builds and signs on `windows-latest`. A stable build becomes a **draft**
+release, and installed apps only see it once that draft is published — the
+manual publish step is deliberate, because an auto-updating app otherwise
+distributes a broken build to every install with no way to recall it. A
+nightly build is published at once as a prerelease and the `nightly` feed is
+pointed at it; only installs that opted into nightly read that feed.
 
 Building signed artifacts locally needs the private key:
 
