@@ -1,0 +1,1018 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI Usage Tray — UI/UX improvement mockups</title>
+<style>
+/* ============================================================
+   Tokens, copied from src/styles.css so the mockups read like the app
+   ============================================================ */
+:root {
+  --bg-top: #161b24;
+  --bg-bot: #0c0f15;
+  --card: rgba(255, 255, 255, 0.035);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --text: #e7ebf2;
+  --muted: #8b95a6;
+  --faint: #5c6577;
+  --track: rgba(255, 255, 255, 0.08);
+  --codex: #2dd4bf;
+  --codex-2: #0ea5a3;
+  --claude: #f0a36a;
+  --claude-2: #db7f4d;
+  --credit: #b3a5f0;
+  --danger: #ef6b6b;
+  --ok: #71cdb0;
+  --warn: #dfa05f;
+  --radius: 8px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: #080b10;
+  font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+body { padding: 34px 30px 110px; }
+.sheet { max-width: 1240px; margin: 0 auto; }
+
+/* ---------- page chrome ---------- */
+h1 { font-size: 25px; font-weight: 700; letter-spacing: 0.2px; }
+h2 { font-size: 18px; font-weight: 700; margin-top: 54px; display: flex; align-items: baseline; gap: 10px; }
+h2 .num { font-size: 12px; color: var(--faint); font-weight: 700; font-variant-numeric: tabular-nums; }
+.lede { font-size: 13.5px; color: var(--muted); line-height: 1.65; margin-top: 10px; max-width: 82ch; }
+.lede b, .say b { color: var(--text); font-weight: 600; }
+.say { font-size: 13px; color: var(--muted); line-height: 1.6; margin-top: 8px; max-width: 90ch; }
+.toc { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 20px; }
+.toc a {
+  font-size: 11.5px; font-weight: 600; color: var(--muted); text-decoration: none;
+  padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px;
+}
+.toc a:hover { color: var(--text); border-color: var(--border-strong); }
+.pair { display: flex; flex-wrap: wrap; gap: 34px; margin-top: 18px; align-items: flex-start; }
+.fig { flex: 0 0 auto; }
+.cap {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--faint); margin-bottom: 9px; display: flex; align-items: center; gap: 7px;
+}
+.cap::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.cap.new { color: var(--codex); }
+.cap.new::before { background: var(--codex); box-shadow: 0 0 6px rgba(45, 212, 191, 0.6); }
+.notes { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin-top: 12px; width: 380px; }
+.notes li { margin: 0 0 5px 16px; }
+.notes b { color: var(--text); font-weight: 600; }
+.notes code, .say code, .lede code {
+  font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; color: #cdd5e1;
+  background: rgba(255, 255, 255, 0.06); padding: 1px 5px; border-radius: 4px;
+}
+.tag {
+  display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 2px 7px; border-radius: 999px; margin-left: 4px; vertical-align: 2px;
+}
+.tag.qw { color: var(--codex); border: 1px solid rgba(45, 212, 191, 0.4); }
+.tag.pj { color: var(--claude); border: 1px solid rgba(240, 163, 106, 0.4); }
+.tag.lt { color: var(--muted); border: 1px solid var(--border-strong); }
+
+/* ============================================================
+   Panel recreation (src/styles.css, trimmed to what's drawn here)
+   ============================================================ */
+.panel {
+  width: 380px;
+  display: flex; flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--bg-top), var(--bg-bot));
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  position: relative;
+}
+.panel .content { padding: 10px 14px 10px; position: relative; }
+.panel.clip .content { max-height: 560px; overflow: hidden; }
+.panel.clip .content::after {
+  content: attr(data-more); position: absolute; left: 0; right: 0; bottom: 0; height: 90px;
+  display: flex; align-items: flex-end; justify-content: center; padding-bottom: 12px;
+  font-size: 11px; color: var(--faint);
+  background: linear-gradient(180deg, transparent, var(--bg-bot) 70%);
+}
+.tabs { display: flex; gap: 4px; padding: 5px 6px 6px; border-top: 1px solid var(--border); }
+.tab {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;
+  padding: 5px 4px; font: inherit; font-size: 11.5px; font-weight: 600; color: var(--muted);
+  background: transparent; border: none; border-radius: 6px;
+}
+.tab .ico { font-size: 12.5px; opacity: 0.8; }
+.tab svg { opacity: 0.85; }
+.tab.active { color: #fff; background: rgba(255, 255, 255, 0.1); }
+.tab.active.cl { background: rgba(240, 163, 106, 0.18); }
+.tab.gear { flex: 0 0 34px; }
+
+.hd { display: flex; align-items: center; gap: 7px; margin: 0 0 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.hd-title { font-size: 15px; font-weight: 700; letter-spacing: 0.2px; }
+.hd-right { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.hd-btn { width: 26px; height: 26px; display: inline-grid; place-items: center; border-radius: 7px; color: var(--muted); }
+.hd-btn.fail { color: var(--warn); background: rgba(223, 160, 95, 0.1); }
+.pill {
+  font-size: 11px; font-weight: 600; color: var(--muted); padding: 2px 8px;
+  border: 1px solid var(--border); border-radius: 999px; flex: 0 0 auto;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.pill.warn-pill { color: var(--warn); border-color: rgba(223, 160, 95, 0.4); }
+.info-tip {
+  display: inline-grid; place-items: center; width: 14px; height: 14px; border: 1px solid var(--faint);
+  border-radius: 50%; color: var(--muted); font-size: 9px; font-weight: 700; line-height: 1;
+}
+.sec-sub { font-size: 11.5px; color: var(--faint); margin: 4px 0 2px; }
+.banner {
+  background: rgba(239, 107, 107, 0.12); border: 1px solid rgba(239, 107, 107, 0.3); color: #f2b0b0;
+  border-radius: 9px; padding: 7px 10px; font-size: 11.5px; line-height: 1.4; margin: 0 0 10px;
+}
+.banner.amber { background: rgba(223, 160, 95, 0.1); border-color: rgba(223, 160, 95, 0.32); color: #ecc08f; }
+
+/* ---- meters ---- */
+.bgauge { position: relative; height: 24px; border-radius: 6px; background: rgba(255, 255, 255, 0.055); overflow: hidden; margin: 0 0 8px; }
+.bgauge .bfill {
+  position: absolute; inset: 0 auto 0 0;
+  background: linear-gradient(90deg, rgba(14, 165, 163, 0.55), rgba(45, 226, 203, 0.7));
+  border-right: 2px solid #43f5da;
+}
+.bgauge .bfill.empty { border-right-width: 0; }
+.bgauge.claude .bfill { background: linear-gradient(90deg, rgba(219, 127, 77, 0.55), rgba(248, 168, 106, 0.7)); border-right-color: #ffb478; }
+.bgauge.credit .bfill { background: linear-gradient(90deg, rgba(122, 99, 235, 0.55), rgba(182, 162, 250, 0.7)); border-right-color: #c9b8ff; }
+.bgauge.warn .bfill, .bgauge.crit .bfill { background: linear-gradient(90deg, rgba(214, 62, 62, 0.55), rgba(244, 110, 110, 0.7)); border-right-color: #ff8a8a; }
+.bgauge .bmark { position: absolute; top: 3px; bottom: 3px; width: 1px; background: rgba(255, 255, 255, 0.5); box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.45); }
+.bgauge .btxt {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 0 9px; font-size: 11.5px; font-weight: 600; color: var(--text); white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+.bgauge .btxt .bl { min-width: 0; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 4px; }
+.bgauge .btxt b { color: #fff; font-variant-numeric: tabular-nums; }
+.bgauge .btxt .sub { color: #cdd5e1; font-weight: 400; }
+.bgauge .btxt .rr { flex: 0 1 auto; font-size: 10.5px; font-weight: 500; color: #cdd5e1; overflow: hidden; text-overflow: ellipsis; }
+/* proposed: amber "low" tier, red "critical" tier, striped "used up" state */
+.bgauge.low .bfill { background: linear-gradient(90deg, rgba(190, 120, 50, 0.55), rgba(236, 176, 110, 0.72)); border-right-color: #ffcf96; }
+.bgauge.out {
+  background: repeating-linear-gradient(135deg, rgba(239, 107, 107, 0.13) 0 6px, rgba(239, 107, 107, 0.05) 6px 12px);
+  box-shadow: inset 0 0 0 1px rgba(239, 107, 107, 0.35);
+}
+.state {
+  font-size: 9px; font-weight: 800; letter-spacing: 0.07em; text-transform: uppercase;
+  padding: 1px 5px; border-radius: 4px; background: rgba(0, 0, 0, 0.38); text-shadow: none;
+}
+.state.low { color: #ffcf96; }
+.state.crit, .state.out { color: #ffa0a0; }
+.fc { display: flex; align-items: center; gap: 6px; margin: -3px 0 9px 2px; font-size: 11px; color: var(--muted); }
+.fc.hot { color: #f2b0b0; }
+.fc svg { flex: 0 0 auto; }
+.fc b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.fc.hot b { color: #ffd0d0; }
+
+/* ---- overview cards ---- */
+.ov-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 9px; }
+.ov-card.focus { outline: 2px solid var(--codex); outline-offset: 2px; }
+.ov-card > .bgauge:last-child { margin-bottom: 0; }
+.ov-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.ov-name { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 7px; }
+.ov-cost { font-size: 12.5px; color: var(--muted); }
+.ov-reset { margin-top: 7px; font-size: 11.5px; font-weight: 600; color: var(--codex); }
+.ov-reset.claude { color: var(--claude); }
+.ov-acct { display: flex; align-items: center; gap: 6px; margin: 7px 0 5px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.ov-acct .pill { font-size: 10px; padding: 1px 6px; }
+
+/* proposed: "runs out first" hero */
+.tight {
+  border-radius: 10px; padding: 10px 12px 11px; margin-bottom: 10px;
+  background: linear-gradient(180deg, rgba(239, 107, 107, 0.11), rgba(239, 107, 107, 0.04));
+  border: 1px solid rgba(239, 107, 107, 0.3);
+}
+.tight-lab { font-size: 10px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; color: #f2b0b0; }
+.tight-main { display: flex; align-items: baseline; gap: 8px; margin-top: 4px; }
+.tight-main .big { font-size: 24px; font-weight: 750; font-variant-numeric: tabular-nums; letter-spacing: -0.3px; }
+.tight-main .big small { font-size: 13px; font-weight: 500; color: var(--muted); }
+.tight-main .who { font-size: 12.5px; color: var(--muted); }
+.tight-main .who b { color: var(--text); }
+.tight-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; }
+.tight-fc { font-size: 11.5px; color: #f2b0b0; line-height: 1.4; }
+.tight-fc b { color: #ffd6d6; }
+.btn {
+  flex: 0 0 auto; padding: 6px 11px; font: inherit; font-size: 11.5px; font-weight: 650; border: none; border-radius: 8px;
+  color: #2a1406; background: linear-gradient(90deg, var(--claude-2), var(--claude)); white-space: nowrap;
+}
+.btn.ghost { color: var(--text); background: rgba(255, 255, 255, 0.07); border: 1px solid var(--border-strong); }
+.btn.teal { color: #03201d; background: linear-gradient(90deg, var(--codex-2), var(--codex)); }
+
+/* ---- value card ---- */
+.stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px 8px; margin-top: 12px; }
+.stat-card-head { display: flex; align-items: center; gap: 5px; font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); font-weight: 600; margin-bottom: 7px; }
+.stat-pair { display: flex; gap: 14px; }
+.stat { flex: 1; }
+.stat-lab { font-size: 11px; color: var(--muted); }
+.val { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.25; }
+.val small { font-size: 11px; font-weight: 400; color: var(--faint); }
+.chart { display: flex; align-items: flex-end; gap: 3px; height: 32px; margin: 9px 0 0; position: relative; }
+.chart .bar { flex: 1; min-width: 4px; background: var(--claude); border-radius: 2px 2px 0 0; }
+.chart .bar.empty { background: var(--track); }
+.chart.big { height: 46px; margin-top: 14px; }
+.chart .bar.today { background: #ffc08f; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35); }
+.chart .maxline { position: absolute; left: 0; right: 0; top: 0; border-top: 1px dashed rgba(255, 255, 255, 0.14); }
+.chart .maxlab { position: absolute; right: 0; top: -13px; font-size: 9.5px; color: var(--faint); }
+.chart-x { display: flex; justify-content: space-between; font-size: 10px; color: var(--faint); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.chart-x .t { color: var(--text); font-weight: 600; }
+.proj { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+.proj-lab { font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); font-weight: 600; margin-bottom: 6px; display: flex; }
+.proj-lab span:last-child { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 500; }
+.proj-row { display: grid; grid-template-columns: 112px 1fr 50px; align-items: center; gap: 8px; font-size: 11.5px; margin: 4px 0; }
+.proj-row .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+.proj-row .tr { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
+.proj-row .tr i { display: block; height: 100%; background: var(--claude); border-radius: 3px; opacity: 0.85; }
+.proj-row .v { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* ---- settings ---- */
+.grp-label { font-size: 10.5px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--faint); margin: 14px 0 6px; }
+.grp { border: 1px solid var(--border); border-radius: 10px; background: rgba(255, 255, 255, 0.018); overflow: hidden; }
+.grp-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 11px; font-size: 12.5px; }
+.grp-row + .grp-row, .acct-row + .acct-row, .grp-row + .acct-row { border-top: 1px solid var(--border); }
+.grp-row.col { flex-direction: column; align-items: stretch; gap: 8px; }
+.rsub { display: block; font-size: 10.5px; color: var(--faint); margin-top: 1px; }
+.sw { position: relative; width: 32px; height: 18px; flex: 0 0 auto; border: 1px solid var(--border-strong); border-radius: 999px; background: rgba(255, 255, 255, 0.075); }
+.sw::before { content: ""; position: absolute; top: 2.5px; left: 2.5px; width: 11px; height: 11px; border-radius: 50%; background: #c8ced8; }
+.sw.on { border-color: rgba(45, 212, 191, 0.65); background: linear-gradient(90deg, var(--codex-2), var(--codex)); }
+.sw.on.cl { border-color: rgba(240, 163, 106, 0.66); background: linear-gradient(90deg, var(--claude-2), var(--claude)); }
+.sw.on::before { transform: translateX(14px); background: #eefdfb; }
+.choices { display: flex; flex-wrap: wrap; gap: 5px; }
+.choice { font: inherit; font-size: 11px; font-weight: 600; color: var(--muted); padding: 5px 10px; border: 1px solid var(--border); border-radius: 7px; background: transparent; }
+.choice.on { color: #fff; border-color: rgba(45, 212, 191, 0.4); background: rgba(45, 212, 191, 0.16); }
+.acct-row { display: flex; flex-direction: column; gap: 7px; padding: 8px 11px; font-size: 12.5px; }
+.acct-line { display: flex; align-items: center; gap: 8px; }
+.acct-line .nm { font-weight: 600; }
+.acct-line .pill { font-size: 10px; padding: 1px 6px; }
+.pth { display: block; font-size: 10px; color: var(--faint); margin-top: 1px; font-family: ui-monospace, Consolas, monospace; }
+.acts { margin-left: auto; display: flex; gap: 4px; align-items: center; }
+.acct-btn { width: 25px; height: 25px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 7px; color: var(--muted); font-size: 12px; }
+.acct-btn.danger { color: #ff9a9a; border-color: rgba(239, 107, 107, 0.45); background: rgba(239, 107, 107, 0.1); }
+.acct-vis { display: flex; align-items: center; gap: 8px; }
+.vis-lab { font-size: 10.5px; color: var(--faint); }
+.confirm-q { font-size: 11.5px; font-weight: 600; color: #f2b0b0; margin-right: 2px; }
+.secnav {
+  display: flex; gap: 4px; padding: 3px; margin: -2px 0 4px; border-radius: 999px; background: rgba(255, 255, 255, 0.05);
+  position: sticky; top: 0;
+}
+.secnav span { flex: 1; text-align: center; padding: 4px 0; font-size: 10.5px; font-weight: 600; color: var(--muted); border-radius: 999px; }
+.secnav span.on { color: #fff; background: rgba(255, 255, 255, 0.1); }
+
+/* ---- first-run card ---- */
+.welcome {
+  border-radius: 10px; padding: 11px 12px; margin-bottom: 10px; border: 1px solid rgba(45, 212, 191, 0.3);
+  background: linear-gradient(180deg, rgba(45, 212, 191, 0.09), rgba(45, 212, 191, 0.03));
+}
+.welcome-h { display: flex; align-items: center; font-size: 13px; font-weight: 700; }
+.welcome-h .x { margin-left: auto; color: var(--faint); font-weight: 400; font-size: 13px; }
+.welcome p { font-size: 11.5px; color: var(--muted); margin: 3px 0 9px; line-height: 1.45; }
+.setup-row { display: flex; align-items: center; gap: 9px; padding: 6px 0; border-top: 1px solid var(--border); font-size: 12px; }
+.setup-row .ic { width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; background: rgba(255, 255, 255, 0.06); color: var(--codex); flex: 0 0 auto; }
+.setup-row .tx { flex: 1; }
+.setup-row .tx span { display: block; font-size: 10.5px; color: var(--faint); }
+
+/* ---- compact mode ---- */
+.cmp-row { display: grid; grid-template-columns: 10px 1fr 104px; gap: 8px; align-items: center; padding: 7px 2px; border-top: 1px solid var(--border); font-size: 12px; }
+.cmp-row:first-of-type { border-top: none; }
+.cmp-row .d { width: 7px; height: 7px; border-radius: 50%; background: var(--codex); }
+.cmp-row .d.cl { background: var(--claude); }
+.cmp-row .nm { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cmp-row .nm span { font-weight: 400; color: var(--faint); font-size: 11px; margin-left: 4px; }
+.cmp-row .mb { height: 5px; border-radius: 3px; background: var(--track); overflow: hidden; margin-top: 5px; }
+.cmp-row .mb i { display: block; height: 100%; border-radius: 3px; }
+.cmp-row .r { text-align: right; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; line-height: 1.35; }
+.cmp-row .r b { color: var(--text); font-size: 12.5px; }
+.cmp-row .r b.hot { color: #ff9a9a; }
+.cmp-row .r b.amb { color: #ffcf96; }
+
+/* ---- light theme (proposed) ---- */
+.light {
+  --bg-top: #fbfcfd; --bg-bot: #f1f3f6; --card: rgba(0, 0, 0, 0.025);
+  --border: rgba(0, 0, 0, 0.08); --border-strong: rgba(0, 0, 0, 0.14);
+  --text: #171b22; --muted: #5b6474; --faint: #8a93a3; --track: rgba(0, 0, 0, 0.07);
+  --codex: #0f9e8e; --claude: #d4733a;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+}
+.light .bgauge { background: rgba(0, 0, 0, 0.06); }
+.light .bgauge .btxt { color: #171b22; text-shadow: 0 1px 1px rgba(255, 255, 255, 0.6); }
+.light .bgauge .btxt b { color: #000; }
+.light .bgauge .btxt .sub, .light .bgauge .btxt .rr { color: #3d4553; }
+.light .bgauge .bfill { background: linear-gradient(90deg, rgba(45, 212, 191, 0.35), rgba(45, 212, 191, 0.55)); border-right-color: #0f9e8e; }
+.light .bgauge.claude .bfill { background: linear-gradient(90deg, rgba(240, 163, 106, 0.38), rgba(240, 163, 106, 0.6)); border-right-color: #c9622a; }
+.light .bgauge.crit .bfill { background: linear-gradient(90deg, rgba(239, 107, 107, 0.35), rgba(239, 107, 107, 0.55)); border-right-color: #c93a3a; }
+.light .bgauge.low .bfill { background: linear-gradient(90deg, rgba(223, 160, 95, 0.38), rgba(223, 160, 95, 0.6)); border-right-color: #b06d22; }
+.light .bgauge .bmark { background: rgba(0, 0, 0, 0.55); box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.6); }
+.light .state { background: rgba(255, 255, 255, 0.7); }
+.light .state.crit { color: #c42f2f; }
+.light .state.low { color: #a2611c; }
+.light .tight { background: linear-gradient(180deg, rgba(239, 107, 107, 0.12), rgba(239, 107, 107, 0.04)); border-color: rgba(214, 62, 62, 0.3); }
+.light .tight-lab, .light .tight-fc, .light .fc.hot { color: #b83232; }
+.light .tight-fc b, .light .fc.hot b { color: #8f1f1f; }
+.light .tab.active { color: #000; background: rgba(0, 0, 0, 0.07); }
+.light .btn.ghost { color: var(--text); background: rgba(0, 0, 0, 0.04); }
+
+/* ============================================================
+   Taskbar recreation (Windows 11, dark) + widget (src/widget.css)
+   ============================================================ */
+.stage { position: relative; width: 560px; padding-top: 196px; }
+.stage.short { padding-top: 120px; }
+.taskbar {
+  height: 48px; border-radius: 0 0 8px 8px; background: #1c1f26; border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex; align-items: center; padding: 0 10px; gap: 4px; position: relative;
+}
+.taskbar .apps { display: flex; gap: 4px; margin-left: 130px; }
+.taskbar .app { width: 36px; height: 36px; border-radius: 5px; display: grid; place-items: center; }
+.taskbar .app i { width: 22px; height: 22px; border-radius: 5px; display: block; }
+.tray { margin-left: auto; display: flex; align-items: center; gap: 2px; height: 40px; }
+.tray .ti { width: 30px; height: 40px; display: grid; place-items: center; border-radius: 5px; color: #d7dbe2; position: relative; }
+.tray .ti.hov { background: rgba(255, 255, 255, 0.08); }
+.tray .sys { display: flex; align-items: center; gap: 9px; padding: 0 8px; height: 40px; color: #e6e9ee; }
+.tray .clock { text-align: right; font-size: 11.5px; line-height: 1.35; color: #e6e9ee; padding: 0 6px; }
+.badge { position: absolute; top: 9px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--claude); box-shadow: 0 0 0 1.5px #1c1f26; }
+.tip {
+  position: absolute; bottom: 56px; background: #2b2f37; border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px; padding: 6px 9px; font-size: 12px; color: #eceff3; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); white-space: nowrap;
+}
+.tip.rich { padding: 9px 11px; }
+.tip .t-h { font-weight: 650; margin-bottom: 5px; }
+.tip .t-r { display: grid; grid-template-columns: 9px 120px 1fr; gap: 6px; align-items: center; font-size: 11.5px; color: #c7ccd5; margin: 3px 0; }
+.tip .t-r b { color: #fff; font-variant-numeric: tabular-nums; }
+.tip .t-r b.hot { color: #ff9a9a; }
+.tip .t-r b.amb { color: #ffcf96; }
+.tip .t-r i { width: 7px; height: 7px; border-radius: 50%; background: var(--codex); }
+.tip .t-r i.cl { background: var(--claude); }
+.menu {
+  position: absolute; bottom: 56px; width: 250px; background: #2b2f37; border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px; padding: 4px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55); font-size: 12.5px; color: #eceff3;
+}
+.menu .mi { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 5px; }
+.menu .mi .ck { width: 14px; color: var(--codex); }
+.menu .mi .kb { margin-left: auto; font-size: 11px; color: #8f96a3; }
+.menu .mi.hov { background: rgba(255, 255, 255, 0.07); }
+.menu .mi.info { font-size: 11.5px; color: #c7ccd5; flex-direction: column; align-items: flex-start; gap: 1px; }
+.menu .mi.info b { color: #ffa0a0; }
+.menu .sep { height: 1px; background: rgba(255, 255, 255, 0.08); margin: 4px 6px; }
+.icons-row { display: flex; gap: 22px; margin-top: 14px; flex-wrap: wrap; }
+.icons-row .ic { display: flex; flex-direction: column; align-items: center; gap: 7px; font-size: 10.5px; color: var(--muted); width: 76px; text-align: center; line-height: 1.3; }
+.icons-row .ic .sq { width: 40px; height: 40px; border-radius: 8px; background: #1c1f26; display: grid; place-items: center; position: relative; }
+.icons-row .ic .sq .badge { top: 7px; right: 7px; }
+
+/* widget */
+.wdg {
+  width: 132px; height: 40px; padding: 4px 9px; border-radius: 6px; display: flex; align-items: stretch;
+  --w-track: rgba(255, 255, 255, 0.17); --w-on: #f2f5f9; --w-halo: rgba(0, 0, 0, 0.55);
+  font-variant-numeric: tabular-nums; position: relative;
+}
+.wdg.hov { background: rgba(255, 255, 255, 0.08); }
+.wdg .grid { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.wdg .wrow { flex: 1 1 0; display: flex; gap: 2px; min-height: 0; }
+.wdg .wcol { flex: 1 1 0; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.wdg .cell { position: relative; flex: 1 1 auto; border-radius: 2px; background: var(--w-track); overflow: hidden; }
+.wdg .cell > u { position: absolute; inset: 0 auto 0 0; width: calc(var(--p) * 1%); background: var(--c); }
+.wdg .cell.hot > u { background: var(--danger); }
+.wdg .cell.out { background: repeating-linear-gradient(135deg, rgba(239, 107, 107, 0.45) 0 3px, rgba(239, 107, 107, 0.2) 3px 6px); }
+.wdg .cell > i { position: absolute; top: 0; bottom: 0; left: calc(var(--t) * 1%); width: 1px; background: var(--w-on); opacity: 0.62; }
+.wdg .cell > b {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 8px; font-weight: 800;
+  letter-spacing: 0.2px; line-height: 1; color: var(--w-on); z-index: 2; text-shadow: 0 0 2px var(--w-halo), 0 0 1px var(--w-halo); white-space: nowrap;
+}
+.wdg .wk { flex: 0 0 3px; border-radius: 1.5px; opacity: 0.6; }
+.flyout {
+  position: absolute; bottom: 56px; width: 268px; background: #23272f; border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px; padding: 10px 12px; box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);
+}
+.flyout .fh { font-size: 10px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); margin-bottom: 6px; }
+.flyout .fr { margin: 7px 0; }
+.flyout .fr-top { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 650; }
+.flyout .fr-top .d { width: 7px; height: 7px; border-radius: 50%; background: var(--codex); }
+.flyout .fr-top .d.cl { background: var(--claude); }
+.flyout .fr-top span:last-child { margin-left: auto; font-weight: 500; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.flyout .fr-top span:last-child b { color: var(--text); }
+.flyout .fr-top span:last-child b.hot { color: #ff9a9a; }
+.flyout .mb { height: 5px; border-radius: 3px; background: rgba(255, 255, 255, 0.09); overflow: hidden; margin-top: 5px; }
+.flyout .mb i { display: block; height: 100%; border-radius: 3px; }
+.flyout .ff { font-size: 10.5px; color: var(--faint); margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--border); }
+
+/* ---- toast ---- */
+.toast {
+  width: 364px; background: #272a31; border: 1px solid rgba(255, 255, 255, 0.09); border-radius: 9px;
+  padding: 12px 14px 13px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55); font-size: 12.5px;
+}
+.toast .src { display: flex; align-items: center; gap: 7px; font-size: 11px; color: #a8afbb; margin-bottom: 9px; }
+.toast .src .x { margin-left: auto; }
+.toast .tt { font-weight: 650; color: #f1f3f6; font-size: 13px; }
+.toast .tb { color: #c7ccd5; margin-top: 3px; line-height: 1.45; }
+.toast .tb b { color: #fff; }
+.toast .ta { display: flex; gap: 6px; margin-top: 11px; }
+.toast .ta span { flex: 1; text-align: center; padding: 6px 0; border-radius: 5px; background: rgba(255, 255, 255, 0.08); font-size: 12px; color: #e6e9ee; }
+.toast .ta span.pri { background: #d4733a; color: #fff; font-weight: 600; }
+
+/* ---- priority map ---- */
+.matrix { display: grid; grid-template-columns: 24px 1fr 1fr; grid-template-rows: 1fr 1fr 24px; gap: 8px; margin-top: 18px; max-width: 1000px; }
+.matrix .q { border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; background: rgba(255, 255, 255, 0.015); }
+.matrix .q.do { border-color: rgba(45, 212, 191, 0.4); background: rgba(45, 212, 191, 0.06); }
+.matrix .qh { font-size: 10.5px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.matrix .q.do .qh { color: var(--codex); }
+.matrix .q a { display: block; font-size: 12.5px; color: var(--text); text-decoration: none; padding: 3px 0; }
+.matrix .q a:hover { color: var(--codex); }
+.matrix .q a span { color: var(--faint); font-size: 11px; margin-left: 6px; }
+.matrix .ax { font-size: 10.5px; color: var(--faint); display: flex; align-items: center; justify-content: space-between; }
+.matrix .ay { writing-mode: vertical-rl; transform: rotate(180deg); grid-row: 1 / 3; justify-content: space-between; }
+.matrix .axx { grid-column: 2 / 4; }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<h1>AI Usage Tray — UI/UX improvement mockups</h1>
+<p class="lede">
+  Each section puts a recreation of <b>today's UI</b> (built from <code>src/styles.css</code> and
+  <code>src/widget.css</code>, v0.9.1) next to a <b>proposed</b> version. Sample data throughout: Codex on Plus, and
+  two Claude accounts, <b>Personal</b> and <b>Work</b>, with Personal's 5-hour session about to run out.
+  Tags mark the rough cost: <span class="tag qw">quick win</span> <span class="tag pj">project</span>
+  <span class="tag lt">later</span>.
+</p>
+<nav class="toc">
+  <a href="#overview">1 · Overview</a>
+  <a href="#meters">2 · Meter states</a>
+  <a href="#tray">3 · Tray icon</a>
+  <a href="#widget">4 · Taskbar widget</a>
+  <a href="#toasts">5 · Notifications</a>
+  <a href="#settings">6 · Settings</a>
+  <a href="#firstrun">7 · First run</a>
+  <a href="#history">8 · Value chart and projects</a>
+  <a href="#compact">9 · Compact mode</a>
+  <a href="#light">10 · Light theme</a>
+  <a href="#priority">11 · Priorities</a>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="overview"><span class="num">01</span>Overview: lead with what runs out first <span class="tag pj">project</span></h2>
+<p class="say">
+  Today the Overview lists every window in a fixed order. You have to scan six bars and compare each fill edge to its
+  pace line to find the one that matters. The proposal adds a <b>"Runs out first"</b> card with a forecast and the
+  action that fixes it, gives each meter a word for its state, and labels the total as API value rather than spend.
+</p>
+<div class="pair">
+  <div class="fig">
+    <div class="cap">Today</div>
+    <div class="panel" id="ov-now"></div>
+  </div>
+  <div class="fig">
+    <div class="cap new">Proposed</div>
+    <div class="panel" id="ov-new"></div>
+    <ul class="notes">
+      <li><b>Runs out first</b>: the tightest window across all accounts, its forecast, and the matching action (a banked reset here).</li>
+      <li><b>Forecast line</b> only under meters that will run out before they reset. Calm meters stay one line.</li>
+      <li><b>State words</b> (<code>LOW</code>, <code>RUNS OUT</code>) so colour isn't the only signal.</li>
+      <li><b>"$14.60 API value"</b> with the same ⓘ as the value card, so it doesn't read as a bill.</li>
+      <li>Cards are real buttons with a <b>focus ring</b> (shown on Codex), and all five tab icons are SVGs.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="meters"><span class="num">02</span>Meter states: three tiers and a "used up" state <span class="tag qw">quick win</span></h2>
+<p class="say">
+  <code>gauge()</code> has one threshold: at 80% used the bar turns red and stays red to 100%. A window at 81% that will
+  comfortably last looks the same as one about to run dry, and a used-up window is just an empty red track. The proposal
+  splits that into amber (low), red (runs out before reset, or past 95%), and a striped "used up" state whose headline is
+  when it comes back.
+</p>
+<div class="pair">
+  <div class="fig">
+    <div class="cap">Today</div>
+    <div class="panel"><div class="content" id="states-now"></div></div>
+  </div>
+  <div class="fig">
+    <div class="cap new">Proposed</div>
+    <div class="panel"><div class="content" id="states-new"></div></div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="tray"><span class="num">03</span>Tray icon: show the number, not just the logo <span class="tag qw">tooltip + menu</span> <span class="tag pj">live icon</span></h2>
+<p class="say">
+  The widget is off by default, so for most people the tray icon is the whole app until they click it. Today the icon
+  never changes, its tooltip is the fixed string <code>AI Usage</code> (<code>lib.rs:612</code>), and the right-click
+  menu has Refresh, Check for updates and Quit.
+</p>
+<div class="pair">
+  <div class="fig">
+    <div class="cap">Today · hover and right-click</div>
+    <div class="stage short" id="tray-now"></div>
+  </div>
+  <div class="fig">
+    <div class="cap new">Proposed · hover</div>
+    <div class="stage" id="tray-new-tip"></div>
+  </div>
+</div>
+<div class="pair">
+  <div class="fig">
+    <div class="cap new">Proposed · right-click</div>
+    <div class="stage" style="padding-top:324px" id="tray-new-menu"></div>
+  </div>
+  <div class="fig">
+    <div class="cap new">Proposed · icon states (drawn at runtime with <code>TrayIcon::set_icon</code>)</div>
+    <div class="icons-row" id="icon-states"></div>
+    <ul class="notes" style="width:460px">
+      <li>The ring is the <b>tightest window's remaining share</b>, in that provider's colour, using the same thresholds as the meters.</li>
+      <li>A <b>dot</b> means something needs you: a reset is available or about to expire, or a data source failed. Opening the panel clears it.</li>
+      <li>A setting picks what the ring follows: tightest limit (default), one chosen account, or the plain logo.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="widget"><span class="num">04</span>Taskbar widget: hover for numbers, countdown when used up <span class="tag qw">quick win</span></h2>
+<p class="say">
+  The widget shows shape but no numbers, and it has no tooltip, so the exact figure is always a click away. When a
+  window is used up the cell becomes a full red bar, which says "stop" but not "until when".
+</p>
+<div class="pair">
+  <div class="fig">
+    <div class="cap">Today</div>
+    <div class="stage short" id="wdg-now"></div>
+  </div>
+  <div class="fig">
+    <div class="cap new">Proposed · hovering the widget</div>
+    <div class="stage" style="padding-top:224px" id="wdg-new"></div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="toasts"><span class="num">05</span>Notifications you can act on <span class="tag pj">project</span></h2>
+<p class="say">
+  Alerts today state a percentage. Adding the forecast tells you how urgent it is, and a button lets you act from the toast.
+  Thresholds become a setting instead of the fixed 90% / 95%.
+</p>
+<div class="pair">
+  <div class="fig">
+    <div class="cap">Today</div>
+    <div class="toast">
+      <div class="src">${appIcon(14)} AI Usage <span class="x">✕</span></div>
+      <div class="tt">Claude · Personal limit almost used</div>
+      <div class="tb">Claude · Personal session window is at 90% used.</div>
+    </div>
+    <div class="toast" style="margin-top:12px">
+      <div class="src">${appIcon(14)} AI Usage <span class="x">✕</span></div>
+      <div class="tt">Claude · Personal limit used up</div>
+      <div class="tb">Claude · Personal session window is at 100% used.</div>
+    </div>
+  </div>
+  <div class="fig">
+    <div class="cap new">Proposed</div>
+    <div class="toast">
+      <div class="src">${appIcon(14)} AI Usage <span class="x">✕</span></div>
+      <div class="tt">Claude · Personal session at 90%</div>
+      <div class="tb">At this pace it runs out at <b>4:52 pm</b>, 18 min before it resets.</div>
+      <div class="ta"><span>Open panel</span><span>Snooze 1 h</span></div>
+    </div>
+    <div class="toast" style="margin-top:12px">
+      <div class="src">${appIcon(14)} AI Usage <span class="x">✕</span></div>
+      <div class="tt">Claude · Personal session used up</div>
+      <div class="tb">Back at <b>5:10 pm</b> (in 58 min). You have 2 banked resets.</div>
+      <div class="ta"><span class="pri">Use a reset</span><span>Dismiss</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="settings"><span class="num">06</span>Settings: sections, thresholds, and a safe remove <span class="tag pj">project</span> <span class="tag qw">confirm</span></h2>
+<p class="say">
+  Settings is one page of seven groups that runs well past the 640 px panel limit. The <code>✕</code> on a Claude folder
+  removes it in one click, and <code>removeDirectory</code> ignores errors. The proposal adds a section switcher, moves
+  diagnostics under Advanced, adds alert thresholds, and reuses the reset cards' inline confirm for removal.
+</p>
+<div class="pair">
+  <div class="fig">
+    <div class="cap">Today</div>
+    <div class="panel clip" id="set-now"></div>
+  </div>
+  <div class="fig">
+    <div class="cap new">Proposed</div>
+    <div class="panel" id="set-new"></div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="firstrun"><span class="num">07</span>First run: surface the three things everyone wants <span class="tag qw">quick win</span></h2>
+<p class="say">
+  The taskbar widget and limit alerts are off by default, and "Start with Windows" is at the bottom of Settings → About.
+  A dismissible card on first launch offers all three in place.
+</p>
+<div class="pair">
+  <div class="fig">
+    <div class="cap new">Proposed · first launch</div>
+    <div class="panel" id="first-new"></div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="history"><span class="num">08</span>Value chart: readable axes, and cost by project <span class="tag qw">labels</span> <span class="tag pj">by project</span></h2>
+<p class="say">
+  The 14-day chart has no labels, no scale and no "today", so it only shows a vague shape. Claude Code already stores its
+  logs per project folder under <code>~/.claude/projects</code>, so the same card can say which repo the value came from.
+</p>
+<div class="pair">
+  <div class="fig">
+    <div class="cap">Today · Claude tab, value card</div>
+    <div class="panel"><div class="content" id="val-now"></div></div>
+  </div>
+  <div class="fig">
+    <div class="cap new">Proposed</div>
+    <div class="panel"><div class="content" id="val-new"></div></div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="compact"><span class="num">09</span>Compact mode for many accounts <span class="tag lt">later</span></h2>
+<p class="say">
+  With three or more accounts the Overview scrolls. A compact mode shows one row per account (name, tightest window,
+  reset time) so five accounts fit with room to spare. Clicking a row opens its tab.
+</p>
+<div class="pair">
+  <div class="fig">
+    <div class="cap new">Proposed · compact Overview</div>
+    <div class="panel" id="compact-new"></div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="light"><span class="num">10</span>Light theme <span class="tag pj">project</span></h2>
+<p class="say">
+  The widget already follows the Windows light/dark setting through <code>prefers-color-scheme</code>, but the panel is
+  dark only. On a light desktop it's the one dark window. This is the proposed Overview with the same layout and lighter
+  tokens.
+</p>
+<div class="pair">
+  <div class="fig">
+    <div class="cap new">Proposed · light</div>
+    <div class="panel light" id="ov-light"></div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="priority"><span class="num">11</span>Where to start</h2>
+<p class="say">Rough impact against effort, judged from reading the code. Click an item to jump to its mockup.</p>
+<div class="matrix">
+  <div class="ax ay"><span>less impact</span><span>more impact</span></div>
+  <div class="q do">
+    <div class="qh">Do first</div>
+    <a href="#tray">Live tray tooltip <span>tray</span></a>
+    <a href="#meters">Three meter tiers + used-up state <span>meters</span></a>
+    <a href="#widget">Widget hover readout <span>widget</span></a>
+    <a href="#settings">Confirm before removing a folder <span>settings</span></a>
+    <a href="#firstrun">First-run card <span>overview</span></a>
+    <a href="#tray">Richer tray menu <span>tray</span></a>
+  </div>
+  <div class="q">
+    <div class="qh">Plan as projects</div>
+    <a href="#overview">"Runs out first" card + forecasts <span>overview</span></a>
+    <a href="#tray">Live tray icon with badge <span>tray</span></a>
+    <a href="#settings">Settings sections + alert thresholds <span>settings</span></a>
+    <a href="#toasts">Actionable notifications <span>toasts</span></a>
+    <a href="#light">Light theme <span>panel</span></a>
+    <a href="#history">Cost by project <span>value card</span></a>
+  </div>
+  <div class="q">
+    <div class="qh">Fill in</div>
+    <a href="#overview">"API value" label on the total <span>overview</span></a>
+    <a href="#overview">SVG tab icons, focus rings <span>panel</span></a>
+    <a href="#history">Chart labels and today marker <span>value card</span></a>
+    <a href="#overview">11 px minimum text size <span>panel</span></a>
+  </div>
+  <div class="q">
+    <div class="qh">Later</div>
+    <a href="#compact">Compact mode <span>overview</span></a>
+    <a href="#tray">Global shortcut (Win+Shift+U) <span>tray</span></a>
+    <a href="#light">Mica backdrop, open animation <span>panel</span></a>
+  </div>
+  <div></div>
+  <div class="ax axx"><span>less effort</span><span>more effort</span></div>
+</div>
+
+</div>
+
+<script>
+/* ============================================================
+   Builders — the markup mirrors what src/main.js emits
+   ============================================================ */
+const $ = (id) => document.getElementById(id);
+
+function appIcon(px = 16, pct = 0.72, color = "#2dd4bf", bg = "#141821") {
+  // The current icon: a dark rounded square with a teal ring.
+  const r = 5.2, c = 2 * Math.PI * r;
+  return `<svg width="${px}" height="${px}" viewBox="0 0 16 16" aria-hidden="true">
+    <rect x="0.5" y="0.5" width="15" height="15" rx="3.5" fill="${bg}"/>
+    <circle cx="8" cy="8" r="${r}" fill="none" stroke="rgba(255,255,255,0.14)" stroke-width="2.4"/>
+    <circle cx="8" cy="8" r="${r}" fill="none" stroke="${color}" stroke-width="2.4" stroke-linecap="round"
+      stroke-dasharray="${(c * pct).toFixed(2)} ${c.toFixed(2)}" transform="rotate(-90 8 8)"/>
+  </svg>`;
+}
+function liveIcon(px, pct, color, glyph = "") {
+  const r = 5.6, c = 2 * Math.PI * r;
+  return `<svg width="${px}" height="${px}" viewBox="0 0 16 16" aria-hidden="true">
+    <circle cx="8" cy="8" r="${r}" fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="2.8"/>
+    ${pct > 0 ? `<circle cx="8" cy="8" r="${r}" fill="none" stroke="${color}" stroke-width="2.8"
+      stroke-dasharray="${(c * pct).toFixed(2)} ${c.toFixed(2)}" transform="rotate(-90 8 8)"/>` : ""}
+    ${glyph}
+  </svg>`;
+}
+
+const svg = {
+  refresh: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/><polyline points="23 4 23 10 17 10"/></svg>`,
+  clock: `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>`,
+  gear: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
+  grid: `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></svg>`,
+  codex: `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M8.5 10l2.5 2-2.5 2M13 14.5h3"/></svg>`,
+  claude: `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>`,
+  trend: `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 17 9 11 13 15 21 7"/><polyline points="15 7 21 7 21 13"/></svg>`,
+};
+
+// meter(label, usedPct, right, opts)
+//   opts.claude, opts.elapsed (pace %), opts.mode "now" | "new", opts.hot (forecast says it runs out first)
+function meter(label, used, right, o = {}) {
+  const left = Math.max(0, 100 - used);
+  const fill = left; // default: meters drain
+  let cls = o.claude ? "claude" : "";
+  let tag = "";
+  if (o.mode === "new") {
+    if (used >= 100) { cls += " out"; tag = `<span class="state out">used up</span>`; }
+    else if (used >= 95 || o.hot) { cls += " crit"; tag = `<span class="state crit">runs out</span>`; }
+    else if (used >= 80) { cls += " low"; tag = `<span class="state low">low</span>`; }
+  } else if (used >= 80) cls += " warn";
+  const mark = o.elapsed == null ? "" : `<div class="bmark" style="left:${100 - o.elapsed}%"></div>`;
+  const head = o.mode === "new" && used >= 100
+    ? `${label} ${tag}`
+    : `${label} <b>${left.toFixed(0)}%</b><span class="sub"> left</span>${tag}`;
+  return `<div class="bgauge ${cls}">
+    <div class="bfill${fill < 0.5 ? " empty" : ""}" style="width:${fill < 0.5 ? 0 : fill}%"></div>${mark}
+    <div class="btxt"><span class="bl">${head}</span><span class="rr">${right}</span></div></div>`;
+}
+const forecast = (html, hot = true) => `<div class="fc${hot ? " hot" : ""}">${svg.trend}<span>${html}</span></div>`;
+const credits = (link = true) => `<div class="bgauge credit">
+  <div class="bfill" style="width:34%"></div>
+  <div class="btxt"><span class="bl">Credits <b>$6.80</b><span class="sub"> of $20.00</span></span><span class="rr">66% used${link ? ` <span style="opacity:.7">›</span>` : ""}</span></div></div>`;
+
+function header(title, extras = "", o = {}) {
+  return `<div class="hd"><span class="hd-title">${title}</span>${extras}
+    <span class="hd-right"><span>${o.stamp || "4:12 pm"}</span>${o.noRefresh ? "" : `<span class="hd-btn${o.fail ? " fail" : ""}">${svg.refresh}</span>`}</span></div>`;
+}
+function tabs(active, style) {
+  const t = style === "new"
+    ? [["overview", svg.grid, "Overview"], ["codex", svg.codex, "Codex"], ["claude", svg.claude, "Claude"], ["windows", svg.clock, "Windows"]]
+    : [["overview", `<span class="ico">▦</span>`, "Overview"], ["codex", `<span class="ico">◍</span>`, "Codex"], ["claude", `<span class="ico">✳</span>`, "Claude"], ["windows", svg.clock, "Windows"]];
+  return `<nav class="tabs">${t.map(([k, i, n]) =>
+      `<button class="tab${k === active ? " active" : ""}">${i}${n}</button>`).join("")}
+    <button class="tab gear${active === "settings" ? " active" : ""}">${svg.gear}</button></nav>`;
+}
+
+/* ---------- 01 Overview ---------- */
+function overviewNow() {
+  let h = header("Overview", `<span class="pill">$14.60 today</span>`);
+  h += `<div class="ov-card"><div class="ov-head"><div class="ov-name">Codex <span class="pill">plus</span></div><span class="ov-cost">$3.12 today</span></div>
+    ${meter("Session", 38, "resets 2h 10m · 4:10 pm", { elapsed: 57 })}
+    ${meter("Weekly", 54, "resets Thu 9:00 am", { elapsed: 60 })}
+    <div class="ov-reset">1 reset credit available</div></div>`;
+  h += `<div class="ov-card"><div class="ov-head"><div class="ov-name">Claude</div><span class="ov-cost">$11.48 today</span></div>
+    <div class="ov-acct">Personal <span class="pill">active</span></div>
+    ${meter("Session", 86, "resets 58m · 5:10 pm", { claude: true, elapsed: 81 })}
+    ${meter("Weekly", 71, "resets Sat 2:00 pm", { claude: true, elapsed: 64 })}
+    ${credits()}
+    <div class="ov-acct">Work</div>
+    ${meter("Session", 22, "resets 3h 40m · 7:52 pm", { claude: true, elapsed: 26 })}
+    ${meter("Weekly", 91, "resets Thu 9:00 am", { claude: true, elapsed: 88 })}
+    <div class="ov-reset claude">2 resets banked</div></div>`;
+  return `<main class="content">${h}</main>${tabs("overview", "now")}`;
+}
+function overviewNew() {
+  let h = header("Overview", `<span class="pill">$14.60 API value <span class="info-tip">i</span></span>`);
+  h += `<div class="tight">
+    <div class="tight-lab">Runs out first</div>
+    <div class="tight-main"><span class="big">14%<small> left</small></span><span class="who"><b>Claude · Personal</b> · 5h session</span></div>
+    <div class="tight-row">
+      <div class="tight-fc">At this pace, out by <b>4:52 pm</b>,<br/>18 min before it resets at 5:10 pm.</div>
+      <button class="btn">Use a reset</button>
+    </div></div>`;
+  h += `<div class="ov-card focus"><div class="ov-head"><div class="ov-name">Codex <span class="pill">plus</span></div><span class="ov-cost">$3.12</span></div>
+    ${meter("Session", 38, "resets 2h 10m · 4:10 pm", { elapsed: 57, mode: "new" })}
+    ${meter("Weekly", 54, "resets Thu 9:00 am", { elapsed: 60, mode: "new" })}
+    <div class="ov-reset">1 reset credit available</div></div>`;
+  h += `<div class="ov-card"><div class="ov-head"><div class="ov-name">Claude</div><span class="ov-cost">$11.48</span></div>
+    <div class="ov-acct">Personal <span class="pill">default</span></div>
+    ${meter("Session", 86, "resets 58m · 5:10 pm", { claude: true, elapsed: 81, mode: "new", hot: true })}
+    ${forecast("Out by <b>4:52 pm</b>, 18 min before reset")}
+    ${meter("Weekly", 71, "resets Sat 2:00 pm", { claude: true, elapsed: 64, mode: "new" })}
+    ${credits()}
+    <div class="ov-acct">Work</div>
+    ${meter("Session", 22, "resets 3h 40m · 7:52 pm", { claude: true, elapsed: 26, mode: "new" })}
+    ${meter("Weekly", 91, "resets Thu 9:00 am", { claude: true, elapsed: 88, mode: "new" })}
+    <div class="ov-reset claude">2 resets banked</div></div>`;
+  return `<main class="content">${h}</main>${tabs("overview", "new")}`;
+}
+$("ov-now").innerHTML = overviewNow();
+$("ov-new").innerHTML = overviewNew();
+$("ov-light").innerHTML = overviewNew();
+
+/* ---------- 02 Meter states ---------- */
+const cases = [
+  ["40% used, on pace", 40, 45, false, "resets 2h 10m · 4:10 pm"],
+  ["86% used, will last until reset", 86, 92, false, "resets 25m · 4:37 pm"],
+  ["86% used, runs out before reset", 86, 81, true, "resets 58m · 5:10 pm"],
+  ["100% used", 100, 81, false, "resets 58m · 5:10 pm"],
+];
+$("states-now").innerHTML = cases.map(([t, u, e, , r]) =>
+  `<div class="sec-sub" style="margin:${t === cases[0][0] ? 0 : 10}px 0 5px">${t}</div>${meter("Session", u, r, { claude: true, elapsed: e })}`).join("");
+$("states-new").innerHTML = cases.map(([t, u, e, hot, r]) => {
+  let m = meter("Session", u, u >= 100 ? "back in <b style='color:#fff'>58m</b> · 5:10 pm" : r, { claude: true, elapsed: e, mode: "new", hot });
+  if (hot) m += forecast("Out by <b>4:52 pm</b>, 18 min before reset");
+  if (u >= 100) m += `<div class="fc">2 banked resets · <span style="color:var(--claude);font-weight:600">Use one</span></div>`;
+  return `<div class="sec-sub" style="margin:${t === cases[0][0] ? 0 : 10}px 0 5px">${t}</div>${m}`;
+}).join("");
+
+/* ---------- 03 Tray ---------- */
+function taskbar(trayInner, extras = "", sysHov = false) {
+  const apps = ["#3b82f6", "#f59e0b", "#a78bfa", "#22c55e"].map((c) => `<div class="app"><i style="background:${c};opacity:.85"></i></div>`).join("");
+  const sys = `<span class="sys${sysHov ? " hov" : ""}">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1" fill="currentColor"/></svg>
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 9.5h4l5-4v13l-5-4H4z"/><path d="M16.5 9a4 4 0 0 1 0 6"/></svg>
+    <svg width="17" height="15" viewBox="0 0 26 16" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="1" y="2" width="21" height="12" rx="3"/><rect x="4" y="5" width="12" height="6" rx="1" fill="currentColor"/><path d="M24 6.5v3"/></svg></span>`;
+  return `${extras}<div class="taskbar"><div class="apps">${apps}</div>
+    <div class="tray"><span class="ti"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 15l6-6 6 6"/></svg></span>${trayInner}${sys}
+    <span class="clock">4:12 PM<br/>10/16/2026</span></div></div>`;
+}
+$("tray-now").innerHTML = taskbar(`<span class="ti hov">${appIcon(16)}</span>`,
+  `<div class="tip" style="right:150px">AI Usage</div>
+   <div class="menu" style="right:24px;width:180px;bottom:auto;top:0">
+     <div class="mi">Refresh</div><div class="mi">Check for updates…</div><div class="sep"></div><div class="mi">Quit</div></div>`);
+
+const hotIcon = liveIcon(16, 0.14, "#ef6b6b");
+$("tray-new-tip").innerHTML = taskbar(`<span class="ti hov">${hotIcon}<span class="badge"></span></span>`,
+  `<div class="tip rich" style="right:96px">
+     <div class="t-h">AI Usage · updated 4:12 pm</div>
+     <div class="t-r"><i class="cl"></i>Claude · Personal<span><b class="hot">14% left</b> · out by 4:52 pm</span></div>
+     <div class="t-r"><i class="cl"></i>Claude · Work<span><b class="amb">9% weekly</b> · resets Thu</span></div>
+     <div class="t-r"><i></i>Codex<span><b>62% left</b> · resets 4:10 pm</span></div>
+     <div class="t-r" style="color:#e9b98f"><i class="cl" style="opacity:0"></i>2 resets banked<span></span></div>
+   </div>`);
+$("tray-new-menu").innerHTML = taskbar(`<span class="ti hov">${hotIcon}<span class="badge"></span></span>`,
+  `<div class="menu" style="right:60px;width:268px">
+     <div class="mi info"><span><b>Claude · Personal 14% left</b></span><span>Out by 4:52 pm · resets 5:10 pm</span></div>
+     <div class="mi hov" style="color:#f0a36a">Use a banked reset (2 left)…</div>
+     <div class="sep"></div>
+     <div class="mi"><span class="ck"></span>Open panel<span class="kb">Win+Shift+U</span></div>
+     <div class="mi"><span class="ck"></span>Settings…</div>
+     <div class="mi"><span class="ck">✓</span>Taskbar widget</div>
+     <div class="mi"><span class="ck">✓</span>Limit alerts</div>
+     <div class="sep"></div>
+     <div class="mi"><span class="ck"></span>Refresh<span class="kb">updated 4:12 pm</span></div>
+     <div class="mi"><span class="ck"></span>Check for updates…</div>
+     <div class="mi"><span class="ck"></span>Quit</div>
+   </div>`);
+$("icon-states").innerHTML = [
+  ["Today, always", appIcon(22)],
+  ["Plenty left<br/>(Codex 62%)", liveIcon(22, 0.62, "#2dd4bf")],
+  ["Low<br/>(9% weekly)", liveIcon(22, 0.09, "#dfa05f")],
+  ["Runs out<br/>before reset", liveIcon(22, 0.14, "#ef6b6b"), true],
+  ["Used up", liveIcon(22, 0, "#ef6b6b", `<path d="M5.6 10.4l4.8-4.8" stroke="#ef6b6b" stroke-width="2" stroke-linecap="round"/>`)],
+  ["Data source failed", liveIcon(22, 0.5, "#6b7383", `<text x="8" y="10.6" font-size="7" font-weight="800" text-anchor="middle" fill="#dfa05f">!</text>`)],
+].map(([t, i, b]) => `<div class="ic"><span class="sq">${i}${b ? `<span class="badge" style="box-shadow:0 0 0 1.5px #1c1f26"></span>` : ""}</span>${t}</div>`).join("");
+
+/* ---------- 04 Widget ---------- */
+function widget(o = {}) {
+  const cell = (p, c, name, t, hot, out) => `<div class="cell${hot ? " hot" : ""}${out ? " out" : ""}" style="--p:${out ? 0 : p};--c:${c};--t:${t}">
+      <u></u><i></i><b>${name}</b></div>`;
+  const wk = (p, c, t) => `<div class="cell wk" style="--p:${p};--c:${c};--t:${t}"><u></u><i></i></div>`;
+  const codex = "var(--codex)", claude = "var(--claude)";
+  // The widget's bars fill with the share used (widget.js `pct`), red from 90%.
+  const personal = o.out
+    ? cell(0, claude, "↻ 58m", 81, false, true)
+    : cell(100, claude, "Personal", 81, true);
+  return `<div class="wdg${o.hov ? " hov" : ""}"><div class="grid">
+    <div class="wrow">
+      <div class="wcol">${cell(38, codex, "Codex", 57)}${wk(54, codex, 60)}</div>
+      <div class="wcol">${personal}${wk(71, claude, 64)}</div>
+    </div>
+    <div class="wrow"><div class="wcol">${cell(22, claude, "Work", 26)}${wk(91, claude, 88)}</div></div>
+  </div></div>`;
+}
+$("wdg-now").innerHTML = taskbar(`${widget()}<span class="ti">${appIcon(16)}</span>`);
+$("wdg-new").innerHTML = taskbar(`${widget({ hov: true, out: true })}<span class="ti">${liveIcon(16, 0, "#ef6b6b")}</span>`,
+  `<div class="flyout" style="right:150px">
+     <div class="fh">Taskbar widget · 4:12 pm</div>
+     <div class="fr"><div class="fr-top"><span class="d"></span>Codex<span><b>62%</b> left · resets 4:10 pm</span></div>
+       <div class="mb"><i style="width:62%;background:var(--codex)"></i></div></div>
+     <div class="fr"><div class="fr-top"><span class="d cl"></span>Personal<span><b class="hot">used up</b> · back 5:10 pm</span></div>
+       <div class="mb"><i style="width:0"></i></div></div>
+     <div class="fr"><div class="fr-top"><span class="d cl"></span>Work<span><b>78%</b> left · weekly <b style="color:#ffcf96">9%</b></span></div>
+       <div class="mb"><i style="width:78%;background:var(--claude)"></i></div></div>
+     <div class="ff">Click to open the panel · drag to move</div>
+   </div>`);
+
+/* ---------- 05 Toasts: fill the icon placeholders ---------- */
+document.querySelectorAll(".toast .src").forEach((el) => { el.innerHTML = el.innerHTML.replace("${appIcon(14)}", appIcon(14)); });
+/* ---------- 06 Settings ---------- */
+const row = (label, sub, on, cl) => `<div class="grp-row"><span>${label}<span class="rsub">${sub}</span></span><span class="sw${on ? " on" : ""}${cl ? " cl" : ""}"></span></div>`;
+function settingsNow() {
+  let h = header("Settings", "", { noRefresh: true, stamp: "" });
+  h += `<div class="grp-label">Notifications</div><div class="grp">
+    ${row("Codex limits", "Near, hit, and reset", false)}${row("Codex reset credits", "When a free reset is granted", false)}
+    ${row("Claude limits", "Near, hit, and reset", true, true)}${row("Claude resets", "When a reset is banked or about to expire", false, true)}</div>`;
+  h += `<div class="grp-label">Usage credits</div><div class="grp"><div class="grp-row"><span>Manage credits<span class="rsub">Monthly caps and the past-limits switch</span></span><span style="opacity:.7">›</span></div></div>`;
+  h += `<div class="grp-label">Display</div><div class="grp">
+    ${row("Meters fill as you use", "Bars start full and drain as you use", false, true)}${row("Pace line", "Mark how far through each window the clock is", true, true)}
+    ${row("Recent usage", "Highlight what each window burned lately", false, true)}</div>`;
+  h += `<div class="grp-label">Taskbar widget</div><div class="grp">${row("Show on the taskbar", "An always-on-top strip of per-account meters", false, true)}</div>`;
+  h += `<div class="sec-sub">Windows has no way to put a real button inside the taskbar, so this floats on top of it.</div>`;
+  h += `<div class="grp-label">Accounts</div><div class="grp">
+    <div class="acct-row"><div class="acct-line"><span><span class="nm">Work</span> <span class="pill">default</span><span class="pth">C:\\Users\\me\\.claude-work</span></span>
+      <span class="acts"><span class="acct-btn">✎</span><span class="acct-btn" style="border-color:rgba(255,255,255,.3);color:#fff">✕</span></span></div></div></div>`;
+  return `<main class="content" data-more="… Data sources and About continue below the fold">${h}</main>${tabs("settings", "now")}`;
+}
+function settingsNew() {
+  let h = header("Settings", "", { noRefresh: true, stamp: "" });
+  h += `<div class="secnav"><span>Alerts</span><span>Display</span><span>Widget</span><span class="on">Accounts</span><span>Advanced</span></div>`;
+  h += `<div class="grp-label">Accounts</div><div class="grp">
+    <div class="acct-row"><div class="acct-line"><span><span class="nm">Codex</span> <span class="pill">plus</span><span class="pth">~/.codex</span></span></div>
+      <div class="acct-vis"><span class="vis-lab">Show in</span><div class="choices"><span class="choice on">App</span><span class="choice on">Widget</span></div></div></div>
+    <div class="acct-row"><div class="acct-line"><span><span class="nm">Personal</span><span class="pth">~/.claude</span></span></div>
+      <div class="acct-vis"><span class="vis-lab">Show in</span><div class="choices"><span class="choice on">App</span><span class="choice on">Widget</span></div></div></div>
+    <div class="acct-row" style="background:rgba(239,107,107,.05)"><div class="acct-line"><span><span class="nm">Work</span> <span class="pill">default</span><span class="pth">C:\\Users\\me\\.claude-work</span></span>
+      <span class="acts"><span class="confirm-q">Remove folder?</span><span class="acct-btn danger">✓</span><span class="acct-btn">✕</span></span></div>
+      <div class="sec-sub" style="margin:0">Stops tracking it here. Its credentials and logs stay on disk.</div></div></div>`;
+  h += `<div class="grp-label">Alerts</div><div class="grp">
+    ${row("Claude limits", "Personal, Work", true, true)}
+    <div class="grp-row col"><span>Warn at<span class="rsub">Each level fires once per window</span></span>
+      <div class="choices"><span class="choice">50%</span><span class="choice on">75%</span><span class="choice on">90%</span><span class="choice">95%</span><span class="choice on">Used up</span><span class="choice on">Will run out early</span></div></div>
+    <div class="grp-row"><span>Quiet hours<span class="rsub">No alerts 10:00 pm – 8:00 am</span></span><span class="sw on cl"></span></div></div>`;
+  return `<main class="content">${h}</main>${tabs("settings", "new")}`;
+}
+$("set-now").innerHTML = settingsNow();
+$("set-new").innerHTML = settingsNew();
+
+/* ---------- 07 First run ---------- */
+function firstRun() {
+  let h = header("Overview", `<span class="pill">$0.00 API value <span class="info-tip">i</span></span>`);
+  h += `<div class="welcome">
+    <div class="welcome-h">Set up AI Usage <span class="x">✕</span></div>
+    <p>Found Codex and one Claude account. Three things most people turn on:</p>
+    <div class="setup-row"><span class="ic">${svg.grid}</span><span class="tx">Show meters on the taskbar<span>Always-visible, next to the clock</span></span><span class="btn teal">Turn on</span></div>
+    <div class="setup-row"><span class="ic">${svg.trend}</span><span class="tx">Alert me before a limit runs out<span>Codex and Claude, at 90% and used up</span></span><span class="btn teal">Turn on</span></div>
+    <div class="setup-row"><span class="ic">${svg.refresh}</span><span class="tx">Start with Windows<span>Opens quietly in the tray</span></span><span class="sw on"></span></div>
+  </div>`;
+  h += `<div class="ov-card"><div class="ov-head"><div class="ov-name">Codex <span class="pill">plus</span></div><span class="ov-cost">$0.00</span></div>
+    ${meter("Session", 4, "resets 4h 52m · 9:04 pm", { elapsed: 3, mode: "new" })}${meter("Weekly", 12, "resets Thu 9:00 am", { elapsed: 60, mode: "new" })}</div>`;
+  return `<main class="content">${h}</main>${tabs("overview", "new")}`;
+}
+$("first-new").innerHTML = firstRun();
+
+/* ---------- 08 Value card ---------- */
+const daily = [2.1, 4.8, 0, 6.2, 9.4, 3.3, 0, 1.2, 7.7, 12.9, 8.1, 5.6, 10.2, 11.48];
+const maxD = Math.max(...daily);
+const bars = (o = {}) => daily.map((v, i) =>
+  `<div class="bar${v === 0 ? " empty" : ""}${o.today && i === daily.length - 1 ? " today" : ""}" style="height:${Math.max(4, Math.round((v / maxD) * 100))}%"></div>`).join("");
+$("val-now").innerHTML = `<div class="stat-card" style="margin-top:0">
+  <div class="stat-card-head"><span>API-equivalent value</span><span class="info-tip">i</span></div>
+  <div class="stat-pair"><div class="stat"><div class="stat-lab">Today</div><div class="val">$11.48 <small>8.2M</small></div></div>
+  <div class="stat"><div class="stat-lab">Last 30 days</div><div class="val">$162.30 <small>119.4M</small></div></div></div>
+  <div class="chart claude">${bars()}</div></div>
+  <div class="sec-sub">Combined across all accounts — local logs aren't per-account.</div>`;
+const projects = [["ai-usage-tray", 5.92], ["web-dashboard", 3.1], ["infra-scripts", 1.64], ["3 others", 0.82]];
+$("val-new").innerHTML = `<div class="stat-card" style="margin-top:0">
+  <div class="stat-card-head"><span>API-equivalent value</span><span class="info-tip">i</span></div>
+  <div class="stat-pair"><div class="stat"><div class="stat-lab">Today</div><div class="val">$11.48 <small>8.2M tok</small></div></div>
+  <div class="stat"><div class="stat-lab">Last 30 days</div><div class="val">$162.30 <small>119.4M tok</small></div></div></div>
+  <div class="chart claude big"><div class="maxline"></div><span class="maxlab">$12.90</span>${bars({ today: true })}</div>
+  <div class="chart-x"><span>Oct 3</span><span>value per day, last 14 days</span><span class="t">Today</span></div>
+  <div class="proj"><div class="proj-lab"><span>Today by project</span><span>from ~/.claude/projects</span></div>
+    ${projects.map(([n, v]) => `<div class="proj-row"><span class="nm">${n}</span><span class="tr"><i style="width:${(v / 5.92) * 100}%"></i></span><span class="v">$${v.toFixed(2)}</span></div>`).join("")}
+  </div></div>
+  <div class="sec-sub">Combined across all accounts — local logs aren't per-account.</div>`;
+
+/* ---------- 09 Compact ---------- */
+function compact() {
+  let h = header("Overview", `<span class="pill">$21.95 API value <span class="info-tip">i</span></span>`);
+  const rows = [
+    ["cl", "Personal", "Claude · 5h", 14, "out 4:52 pm", "hot", "var(--danger)"],
+    ["cl", "Work", "Claude · weekly", 9, "resets Thu", "amb", "#dfa05f"],
+    ["", "Codex", "plus · 5h", 62, "resets 4:10 pm", "", "var(--codex)"],
+    ["cl", "Side project", "Claude · 5h", 71, "resets 6:30 pm", "", "var(--claude)"],
+    ["cl", "Client A", "Claude · weekly", 88, "resets Mon", "", "var(--claude)"],
+  ];
+  h += `<div class="ov-card" style="padding:4px 12px">${rows.map(([p, n, s, left, when, cls, col]) =>
+    `<div class="cmp-row"><span class="d ${p}"></span>
+      <div><div class="nm">${n}<span>${s}</span></div><div class="mb"><i style="width:${left}%;background:${col}"></i></div></div>
+      <div class="r"><b class="${cls}">${left}% left</b><br/>${when}</div></div>`).join("")}</div>`;
+  h += `<div class="sec-sub">Sorted by what runs out first · each row opens its tab</div>`;
+  h += `<div class="grp" style="margin-top:10px"><div class="grp-row"><span>Compact Overview<span class="rsub">Turns on by itself from 4 accounts</span></span><span class="sw on"></span></div></div>`;
+  return `<main class="content">${h}</main>${tabs("overview", "new")}`;
+}
+$("compact-new").innerHTML = compact();
+</script>
+</body>
+</html>
