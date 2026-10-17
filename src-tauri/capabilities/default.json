@@ -41,6 +41,7 @@
     "allow-set-panel-expanded",
     "allow-set-recent-minutes",
     "allow-set-start-on-login",
+    "allow-set-update-channel",
     "allow-set-update-setting",
     "allow-set-widget-account-row",
     "allow-set-widget-enabled",

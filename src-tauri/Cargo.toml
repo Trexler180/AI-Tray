@@ -26,6 +26,7 @@ walkdir = "2"
 ureq = { version = "2", features = ["json"] }
 notify = "6"
 uuid = { version = "1", features = ["v4"] }
+semver = "1"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-updater = "2"

@@ -1,11 +1,21 @@
 name: Release
 
-# Cutting a release is two steps on purpose:
-#   npm version minor && git push --follow-tags
-# builds and uploads a DRAFT release here, and the update only reaches installed
-# apps once you press Publish on it. That gap is the safety net: an auto-updating
-# app will happily distribute a broken build to every install, and a draft is the
-# last point at which that is cheap to stop.
+# Two channels, picked by the tag:
+#
+#   Stable   v0.10.0           npm version minor && git push --follow-tags
+#   Nightly  v0.11.0-nightly.1 npm version 0.11.0-nightly.1 && git push --follow-tags
+#
+# A stable build lands as a DRAFT, and only reaches installed apps once you
+# press Publish on it. That gap is the safety net: an auto-updating app will
+# happily distribute a broken build to every install, and a draft is the last
+# point at which that is cheap to stop. Publishing it makes it GitHub's
+# "latest" release, whose latest.json is the feed every install reads —
+# including builds from before channels existed.
+#
+# A nightly build is published straight away as a PRERELEASE. GitHub never
+# counts a prerelease as "latest", so stable installs can't see it; only
+# installs set to the nightly channel read the fixed `nightly` release, whose
+# latest.json this workflow repoints at each new nightly.
 on:
   push:
     tags:
@@ -28,6 +38,22 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Work out the channel from the tag
+        id: channel
+        shell: bash
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [[ "$tag" == *-nightly* ]]; then
+            echo "label=Nightly" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "draft=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "label=Stable" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "draft=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/setup-node@v4
         with:
@@ -60,13 +86,32 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.event.inputs.tag || github.ref_name }}
-          releaseName: AI Usage Tray __VERSION__
+          tagName: ${{ steps.channel.outputs.tag }}
+          releaseName: AI Usage Tray __VERSION__ (${{ steps.channel.outputs.label }})
           releaseBody: |
-            Installed copies with automatic updates enabled will offer this
-            version. To install fresh, download the `.exe` setup file below.
-          releaseDraft: true
-          prerelease: false
-          # Generates latest.json and attaches it to the release. This is the
-          # file the app's configured endpoint resolves to.
+            **${{ steps.channel.outputs.label }}** release.
+
+            Installed copies on the ${{ steps.channel.outputs.label }} channel with automatic
+            update checks on will offer this version. To install fresh, download the
+            `.exe` setup file below.
+          releaseDraft: ${{ steps.channel.outputs.draft }}
+          prerelease: ${{ steps.channel.outputs.prerelease }}
+          # Generates latest.json and attaches it to the release. For a stable
+          # release this is the file the stable feed resolves to once published.
           uploadUpdaterJson: true
+
+      - name: Point the nightly feed at this build
+        if: steps.channel.outputs.label == 'Nightly'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.channel.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --pattern latest.json --dir feed
+          if ! gh release view nightly > /dev/null 2>&1; then
+            gh release create nightly --prerelease --target "$GITHUB_SHA" \
+              --title "Nightly channel (update feed)" \
+              --notes "Holds the update feed for the nightly channel. Each nightly build replaces latest.json here; the builds themselves are the Nightly prereleases."
+          fi
+          gh release upload nightly feed/latest.json --clobber

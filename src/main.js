@@ -1983,7 +1983,10 @@ function renderSettings() {
   return html;
 }
 
-// Settings → About: version, updater status, and the two update toggles.
+const channelLabel = (channel) => (channel === "nightly" ? "Nightly" : "Stable");
+
+// Settings → About: version, updater status, the channel, and the two update
+// toggles.
 function renderAbout() {
   if (!updateState) return "";
   const status = updateState.status || { kind: "idle" };
@@ -2000,7 +2003,7 @@ function renderAbout() {
       action = checkBtn;
       break;
     case "available":
-      detail = `Version ${esc(status.version)} available`;
+      detail = `${channelLabel(status.channel)} ${esc(status.version)} available`;
       action = `<button class="row-btn" data-update-install>Install and restart</button>`;
       break;
     case "downloading":
@@ -2022,10 +2025,28 @@ function renderAbout() {
 
   let html = `<div class="grp-label">About</div><div class="grp">`;
   html += `<div class="grp-row static-row">
-      <span class="rlab">Version ${esc(updateState.current_version)}<span class="rsub">${esc(
-        detail
-      )}</span></span>
+      <span class="rlab">${channelLabel(updateState.current_channel)} ${esc(
+        updateState.current_version
+      )}<span class="rsub">${esc(detail)}</span></span>
       ${action}
+    </div>`;
+  // Nightly reads the stable feed too, so switching to it never strands you
+  // behind a stable release; switching back waits for stable to overtake.
+  const channel = updateState.channel || "stable";
+  html += `<div class="grp-row col">
+      <span class="rlab">Update channel<span class="rsub">${
+        channel === "nightly"
+          ? "Nightly builds as they're made, and stable when it's newer"
+          : "Tested releases only"
+      }</span></span>
+      <div class="choices">${["stable", "nightly"]
+        .map(
+          (c) =>
+            `<button class="choice${c === channel ? " on" : ""}" data-update-channel="${c}">${channelLabel(
+              c
+            )}</button>`
+        )
+        .join("")}</div>
     </div>`;
   html += settingRow(
     "Check for updates",
@@ -2290,6 +2311,16 @@ function render() {
   );
   content.querySelectorAll("[data-start-on-login]").forEach((input) =>
     input.addEventListener("change", () => setStartOnLogin(input.checked))
+  );
+  content.querySelectorAll("[data-update-channel]").forEach((button) =>
+    button.addEventListener("click", async () => {
+      try {
+        updateState = await invoke("set_update_channel", { channel: button.dataset.updateChannel });
+      } catch (_) {
+        updateError = "channel";
+      }
+      render();
+    })
   );
   content.querySelectorAll("[data-update-check]").forEach((button) =>
     button.addEventListener("click", () => {

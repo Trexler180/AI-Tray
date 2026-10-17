@@ -1,5 +1,16 @@
-//! Automatic update checks against the GitHub Releases endpoint configured in
-//! `tauri.conf.json`.
+//! Automatic update checks against GitHub Releases, on one of two channels.
+//!
+//! **Stable** is the feed every install has always read: the `latest.json` of
+//! the newest published, non-prerelease release. Builds from before channels
+//! existed keep reading exactly that URL, so they only ever see stable.
+//!
+//! **Nightly** builds are published as prereleases, which GitHub never counts
+//! as "latest", and the release workflow points a fixed `nightly` release's
+//! `latest.json` at the newest one. A nightly install checks both feeds and
+//! takes whichever version is higher, so a stable release that overtakes the
+//! nightlies still reaches it. Nightly versions are semver prereleases of the
+//! next minor (`0.11.0-nightly.3`), which sort above the current stable and
+//! below the stable they lead up to.
 //!
 //! The default posture is deliberately conservative: check in the background,
 //! tell the user, and let them press Install. A tray app that restarts itself
@@ -32,6 +43,49 @@ const CHECK_INTERVAL_SECS: i64 = 6 * 60 * 60;
 /// Event emitted whenever the status changes, so an open panel repaints without
 /// polling.
 const STATE_EVENT: &str = "update-state";
+/// The stable feed. Unchanged from before channels, which is what keeps older
+/// installs updating.
+const STABLE_ENDPOINT: &str =
+    "https://github.com/Trexler180/AI-Tray/releases/latest/download/latest.json";
+/// The nightly feed: a fixed prerelease whose `latest.json` the release
+/// workflow replaces on every nightly build.
+const NIGHTLY_ENDPOINT: &str =
+    "https://github.com/Trexler180/AI-Tray/releases/download/nightly/latest.json";
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Channel {
+    Stable,
+    Nightly,
+}
+
+impl Channel {
+    /// Which channel a version belongs to: nightlies carry a `-nightly`
+    /// prerelease tag, everything else is stable.
+    pub fn of(version: &str) -> Self {
+        if version.contains("-nightly") {
+            Channel::Nightly
+        } else {
+            Channel::Stable
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Channel::Stable => "Stable",
+            Channel::Nightly => "Nightly",
+        }
+    }
+
+    /// The feeds this channel reads. Every one is checked and the highest
+    /// version wins, so order doesn't matter.
+    fn endpoints(self) -> &'static [&'static str] {
+        match self {
+            Channel::Stable => &[STABLE_ENDPOINT],
+            Channel::Nightly => &[NIGHTLY_ENDPOINT, STABLE_ENDPOINT],
+        }
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct UpdateSettings {
@@ -41,6 +95,10 @@ pub struct UpdateSettings {
     /// Download, install, and relaunch without asking. Off by default.
     #[serde(default)]
     pub install_automatically: bool,
+    /// The channel picked in Settings. Unset means "whatever this build is",
+    /// so a nightly install keeps getting nightlies without being told to.
+    #[serde(default)]
+    pub channel: Option<Channel>,
 }
 
 fn enabled_by_default() -> bool {
@@ -52,6 +110,7 @@ impl Default for UpdateSettings {
         Self {
             check_automatically: true,
             install_automatically: false,
+            channel: None,
         }
     }
 }
@@ -68,6 +127,8 @@ pub enum UpdateStatus {
     UpToDate,
     Available {
         version: String,
+        /// "stable" or "nightly", from the version itself.
+        channel: Channel,
         notes: String,
     },
     Downloading {
@@ -87,6 +148,10 @@ pub enum UpdateStatus {
 pub struct UpdateSnapshot {
     pub status: UpdateStatus,
     pub current_version: String,
+    /// The channel this build came from.
+    pub current_channel: Channel,
+    /// The channel checks read: the one picked in Settings, else the build's.
+    pub channel: Channel,
     pub last_checked_at: Option<i64>,
     pub settings: UpdateSettings,
 }
@@ -122,9 +187,28 @@ impl UpdateState {
         *self.status.lock().unwrap() = status;
     }
 
+    /// The channel to check, given the running version.
+    fn channel(&self, current_version: &str) -> Channel {
+        self.settings().channel.unwrap_or_else(|| Channel::of(current_version))
+    }
+
+    pub fn set_channel(&self, channel: Channel) -> Result<UpdateSettings, String> {
+        let updated = {
+            let mut settings = self.settings.lock().unwrap();
+            settings.channel = Some(channel);
+            settings.clone()
+        };
+        persist_settings(&updated)?;
+        // A pending "available" was the old channel's answer.
+        self.set_status(UpdateStatus::Idle);
+        Ok(updated)
+    }
+
     pub fn snapshot(&self, current_version: String) -> UpdateSnapshot {
         UpdateSnapshot {
             status: self.status.lock().unwrap().clone(),
+            current_channel: Channel::of(&current_version),
+            channel: self.channel(&current_version),
             current_version,
             last_checked_at: *self.last_checked_at.lock().unwrap(),
             settings: self.settings(),
@@ -195,6 +279,7 @@ pub async fn check(app: &AppHandle, manual: bool) {
         match outcome {
             Ok(Some((version, notes))) => {
                 let auto_install = state.settings().install_automatically;
+                let channel = Channel::of(&version);
                 let mut notified = state.notified_version.lock().unwrap();
                 if !auto_install && should_notify(&notified, &version) {
                     *notified = Some(version.clone());
@@ -202,10 +287,14 @@ pub async fn check(app: &AppHandle, manual: bool) {
                     send_notification(
                         app,
                         "AI Usage Tray update available",
-                        &format!("Version {version} is ready to install."),
+                        &format!("{} {version} is ready to install.", channel.label()),
                     );
                 }
-                state.set_status(UpdateStatus::Available { version, notes });
+                state.set_status(UpdateStatus::Available {
+                    version,
+                    channel,
+                    notes,
+                });
             }
             Ok(None) => {
                 state.set_status(if manual {
@@ -232,16 +321,53 @@ pub async fn check(app: &AppHandle, manual: bool) {
     }
 }
 
-/// Ask the endpoint whether a newer build exists. `Ok(None)` means current.
+/// Ask the channel's feeds whether a newer build exists. `Ok(None)` means
+/// current.
 async fn run_check(app: &AppHandle) -> Result<Option<(String, String)>, String> {
-    let updater = app.updater().map_err(|e| e.to_string())?;
-    match updater.check().await {
-        Ok(Some(update)) => {
-            let notes = update.body.clone().unwrap_or_default();
-            Ok(Some((update.version.clone(), notes)))
+    Ok(find_update(app).await?.map(|update| {
+        let notes = update.body.clone().unwrap_or_default();
+        (update.version.clone(), notes)
+    }))
+}
+
+/// The highest version newer than this build across the channel's feeds.
+/// A feed that can't be read only fails the check when every feed failed: the
+/// nightly feed being briefly missing mustn't hide a stable release.
+async fn find_update(app: &AppHandle) -> Result<Option<tauri_plugin_updater::Update>, String> {
+    let current = app.package_info().version.to_string();
+    let channel = app.state::<UpdateState>().channel(&current);
+    let mut best: Option<tauri_plugin_updater::Update> = None;
+    let mut errors = Vec::new();
+    for endpoint in channel.endpoints() {
+        let url = tauri::Url::parse(endpoint).map_err(|e| e.to_string())?;
+        let updater = app
+            .updater_builder()
+            .endpoints(vec![url])
+            .and_then(|builder| builder.build())
+            .map_err(|e| e.to_string())?;
+        match updater.check().await {
+            Ok(Some(update)) => {
+                if best.as_ref().is_none_or(|b| is_newer(&update.version, &b.version)) {
+                    best = Some(update);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => errors.push(e.to_string()),
         }
-        Ok(None) => Ok(None),
-        Err(e) => Err(e.to_string()),
+    }
+    if best.is_none() && errors.len() == channel.endpoints().len() {
+        return Err(errors.join("; "));
+    }
+    Ok(best)
+}
+
+/// Semver order, so `0.11.0-nightly.2` > `0.11.0-nightly.1` > `0.10.0` and
+/// `0.11.0` > `0.11.0-nightly.9`. Anything unparsable loses.
+fn is_newer(candidate: &str, than: &str) -> bool {
+    match (semver::Version::parse(candidate), semver::Version::parse(than)) {
+        (Ok(a), Ok(b)) => a > b,
+        (Ok(_), Err(_)) => true,
+        _ => false,
     }
 }
 
@@ -280,11 +406,8 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
 }
 
 async fn run_install(app: &AppHandle) -> Result<(), String> {
-    let updater = app.updater().map_err(|e| e.to_string())?;
-    let update = updater
-        .check()
-        .await
-        .map_err(|e| e.to_string())?
+    let update = find_update(app)
+        .await?
         .ok_or_else(|| "no update is available".to_string())?;
 
     let version = update.version.clone();
@@ -418,11 +541,40 @@ mod tests {
         let settings = UpdateSettings {
             check_automatically: false,
             install_automatically: true,
+            channel: Some(Channel::Nightly),
         };
         let body = serde_json::to_string(&settings).unwrap();
         let back: UpdateSettings = serde_json::from_str(&body).unwrap();
         assert!(!back.check_automatically);
         assert!(back.install_automatically);
+        assert_eq!(back.channel, Some(Channel::Nightly));
+    }
+
+    #[test]
+    fn versions_name_their_channel() {
+        assert_eq!(Channel::of("0.10.0"), Channel::Stable);
+        assert_eq!(Channel::of("0.11.0-nightly.3"), Channel::Nightly);
+        // Settings written before channels existed pick nothing, which means
+        // "follow the build".
+        let old: UpdateSettings = serde_json::from_str(r#"{"check_automatically":true}"#).unwrap();
+        assert_eq!(old.channel, None);
+    }
+
+    #[test]
+    fn nightlies_sit_between_the_stables_either_side() {
+        assert!(is_newer("0.11.0-nightly.1", "0.10.0"));
+        assert!(is_newer("0.11.0-nightly.2", "0.11.0-nightly.1"));
+        assert!(is_newer("0.11.0-nightly.10", "0.11.0-nightly.9"));
+        assert!(is_newer("0.11.0", "0.11.0-nightly.9"));
+        assert!(!is_newer("0.10.0", "0.11.0-nightly.1"));
+        assert!(!is_newer("garbage", "0.10.0"));
+    }
+
+    #[test]
+    fn the_nightly_channel_also_reads_the_stable_feed() {
+        assert_eq!(Channel::Stable.endpoints(), &[STABLE_ENDPOINT]);
+        assert!(Channel::Nightly.endpoints().contains(&STABLE_ENDPOINT));
+        assert!(Channel::Nightly.endpoints().contains(&NIGHTLY_ENDPOINT));
     }
 
     #[test]
@@ -441,6 +593,7 @@ mod tests {
     fn status_serializes_with_a_kind_tag_the_panel_can_switch_on() {
         let body = serde_json::to_string(&UpdateStatus::Available {
             version: "0.2.0".to_string(),
+            channel: Channel::Stable,
             notes: "Fixes".to_string(),
         })
         .unwrap();
