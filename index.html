@@ -8,15 +8,40 @@
   </head>
   <body>
     <div id="app" class="panel">
-      <main id="content" class="content">
+      <main id="content" class="content" role="tabpanel">
         <div class="loading">Loading usage…</div>
       </main>
 
-      <nav class="tabs" id="tabs">
-        <button class="tab active" data-tab="overview"><span class="ico">▦</span>Overview</button>
-        <button class="tab" data-tab="codex"><span class="ico">◍</span>Codex</button>
-        <button class="tab" data-tab="claude"><span class="ico">✳</span>Claude</button>
-        <button class="tab" data-tab="windows" title="Quota windows">
+      <!-- Drawn icons throughout: text glyphs render at a different weight and
+           baseline in every font, so they never lined up with the SVG ones. -->
+      <nav class="tabs" id="tabs" role="tablist" aria-label="Panel">
+        <button class="tab active" role="tab" aria-selected="true" data-tab="overview">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="3" width="7.5" height="7.5" rx="1.5" />
+            <rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5" />
+            <rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5" />
+            <rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5" />
+          </svg>
+          Overview
+        </button>
+        <button class="tab" role="tab" aria-selected="false" tabindex="-1" data-tab="codex">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="8.5" />
+            <path d="M8.5 10l2.5 2-2.5 2M13 14.5h3" />
+          </svg>
+          Codex
+        </button>
+        <button class="tab" role="tab" aria-selected="false" tabindex="-1" data-tab="claude">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4" />
+          </svg>
+          Claude
+        </button>
+        <button class="tab" role="tab" aria-selected="false" tabindex="-1" data-tab="windows"
+                title="Quota windows">
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="12" cy="12" r="9" />
@@ -24,7 +49,8 @@
           </svg>
           Windows
         </button>
-        <button class="tab gear" data-tab="settings" title="Settings" aria-label="Settings">
+        <button class="tab gear" role="tab" aria-selected="false" tabindex="-1" data-tab="settings"
+                title="Settings" aria-label="Settings">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="12" cy="12" r="3" />

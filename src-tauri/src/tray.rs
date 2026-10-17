@@ -126,10 +126,17 @@ impl Limit<'_> {
         }
     }
 
-    /// The order to worry in: worst tier, then least left, then soonest reset.
-    fn rank(&self) -> (Tier, i64, i64) {
+    /// The order to worry in: worst tier; among windows heading for empty,
+    /// the one that gets there soonest; then least left, then soonest reset.
+    /// Same as `tightestLimit` in shared.js.
+    fn rank(&self, now: i64) -> (Tier, i64, i64, i64) {
+        let runs_out = match self.tier {
+            Tier::Crit => -self.runs_out_at.unwrap_or(now),
+            _ => 0,
+        };
         (
             self.tier,
+            runs_out,
             (self.gauge.used_percent * 100.0) as i64,
             -self.gauge.resets_at.unwrap_or(i64::MAX),
         )
@@ -165,11 +172,14 @@ fn limits<'a>(app: &AppHandle, usage: &'a Usage, now: i64) -> Vec<Limit<'a>> {
         .collect()
 }
 
-fn tightest<'a, 'b>(limits: impl IntoIterator<Item = &'b Limit<'a>>) -> Option<&'b Limit<'a>>
+fn tightest<'a, 'b>(
+    limits: impl IntoIterator<Item = &'b Limit<'a>>,
+    now: i64,
+) -> Option<&'b Limit<'a>>
 where
     'a: 'b,
 {
-    limits.into_iter().max_by_key(|limit| limit.rank())
+    limits.into_iter().max_by_key(|limit| limit.rank(now))
 }
 
 /// One line per account, its tightest window: "Personal 14% 5h · out 4:52 pm".
@@ -183,9 +193,9 @@ fn tooltip(limits: &[Limit], now: i64) -> String {
     }
     let mut ordered: Vec<&Limit> = accounts
         .iter()
-        .filter_map(|id| tightest(limits.iter().filter(|l| l.account_id == *id)))
+        .filter_map(|id| tightest(limits.iter().filter(|l| l.account_id == *id), now))
         .collect();
-    ordered.sort_by_key(|limit| std::cmp::Reverse(limit.rank()));
+    ordered.sort_by_key(|limit| std::cmp::Reverse(limit.rank(now)));
     for limit in ordered {
         let resets = limit.gauge.resets_at.filter(|at| *at > now);
         let line = if limit.tier == Tier::Out {
@@ -299,9 +309,9 @@ pub fn update(app: &AppHandle, usage: &Usage) {
     let mode = state.settings().icon.clone();
     let followed = match mode.as_str() {
         MODE_LOGO => None,
-        MODE_TIGHTEST => tightest(&limits),
-        account => tightest(limits.iter().filter(|l| l.account_id == account))
-            .or_else(|| tightest(&limits)),
+        MODE_TIGHTEST => tightest(&limits, now),
+        account => tightest(limits.iter().filter(|l| l.account_id == account), now)
+            .or_else(|| tightest(&limits, now)),
     };
     let icon = match (mode.as_str(), followed) {
         (MODE_LOGO, _) | (_, None) => app.default_window_icon().cloned(),
@@ -312,7 +322,7 @@ pub fn update(app: &AppHandle, usage: &Usage) {
     }
     let _ = tray.set_tooltip(Some(tooltip(&limits, now)));
 
-    let top = tightest(&limits);
+    let top = tightest(&limits, now);
     let reset = top
         .filter(|limit| limit.tier >= Tier::Low)
         .and_then(|limit| reset_for(usage, limit));
@@ -589,8 +599,18 @@ mod tests {
             limit(&low, Provider::Claude, "Work", now),
             limit(&out, Provider::Claude, "Personal", now),
         ];
-        assert_eq!(tightest(&limits).unwrap().account_label, "Personal");
-        assert_eq!(tightest(&limits[..2]).unwrap().account_label, "Work");
+        assert_eq!(tightest(&limits, now).unwrap().account_label, "Personal");
+        assert_eq!(tightest(&limits[..2], now).unwrap().account_label, "Work");
+
+        // Heading for empty: the sooner run-out wins over the fuller window.
+        let weekly = gauge(91.0, 10_080, 4 * 86_400, now);
+        let session = gauge(86.0, 300, 3_420, now);
+        let racing = [
+            limit(&weekly, Provider::Claude, "Work", now),
+            limit(&session, Provider::Claude, "Personal", now),
+        ];
+        assert_eq!(racing[0].tier, Tier::Crit);
+        assert_eq!(tightest(&racing, now).unwrap().account_label, "Personal");
     }
 
     #[test]

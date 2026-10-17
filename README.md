@@ -3,7 +3,11 @@
 A Windows system-tray app that shows Claude and Codex quota usage, reset times,
 and an API-equivalent value estimate in a compact popover.
 
-- **Overview** — both providers at a glance and today's combined estimated value.
+- **Overview** — both providers at a glance and today's combined API value.
+  When something is low, a **Runs out first** card at the top names the window
+  most likely to stop you, says when its pace runs it out, and offers a banked
+  reset when there is one. From four accounts up (or always, or never — Settings
+  → Display) the cards give way to one row per account, worst first.
 - **Codex** — live quota windows, plan and credit details, reset credits, and
   model-aware local token history. Accounts with **Luna Reserve** — the
   separately metered GPT-5.6 Luna allowance Codex opens once the regular limit
@@ -15,7 +19,7 @@ and an API-equivalent value estimate in a compact popover.
   Accounts with **banked resets** (the ones Claude Code offers at a usage
   limit) show how many are left and when the next one expires, with a
   **Use reset** button that claims one the same way Claude Code and T3 Code
-  do. Settings → Notifications can announce new resets and expiring ones.
+  do. Settings → Alerts can announce new resets and expiring ones.
 - **Windows** — a timeline of every quota window: bar length is the window's
   span, the fill is what was spent inside it, and a notch marks now, so a fill
   running ahead of the notch means the allowance is going faster than the
@@ -27,8 +31,8 @@ and an API-equivalent value estimate in a compact popover.
   in rather than to a literal seven days, which could not hold a seven-day
   window and its start at once. `⤢` widens the panel to a full-width version
   that stays open until you close it.
-- **Settings** — notifications, meter display options, the taskbar widget, and
-  per-account **Show in App / Widget** switches.
+- **Settings** — split into Alerts, Display, Widget, Accounts and Advanced
+  (data sources and About), one section at a time.
 - **Credits** — a dedicated screen (opened from the violet meter on any tab)
   with each account's usage-credit spend, monthly cap, and whether "use
   credits past plan limits" is switched on, plus the Codex credit balance.
@@ -38,6 +42,32 @@ through its window the clock is, drawn in the same direction the bar runs. Fill
 short of the line means the allowance is going faster than the window refills
 it. Usage credits have a cap but no clock, so they never show one. Turn it off
 in Settings → Display.
+
+## Meter states and the tray icon
+
+Meters read in tiers, each with a word as well as a colour: **low** (amber)
+from 80% used, **runs out** (red) once the window's average pace so far would
+empty it before it resets, **almost out** (red) past 95%, and **used up** — a
+striped track whose headline is when it comes back. A meter that will run out
+early also gets an *Out by 4:52 pm, 18 min before reset* line under it. The
+forecast waits until a tenth of the window (and at least ten minutes) has gone
+by and the window is half spent, so an energetic first hour isn't flagged.
+
+The rule lives in `src-tauri/src/forecast.rs` and `src/shared.js`, tested
+against the same cases, because the tray icon and the panel have to agree:
+
+- **Tray icon** — a ring showing how much of the tightest window is left, in
+  the provider's colour, amber or red at the same tiers. "Tightest" is the
+  worst tier, and among windows heading for empty the one that gets there
+  first. Settings → Display can pin it to one account or to the plain logo.
+  A dot in its corner means something new needs you — a reset to spend or
+  about to expire, or a login that stopped working — and opening the panel
+  clears it.
+- **Tooltip** — one line per account with its tightest window.
+- **Right-click menu** — the tightest window and its forecast, a shortcut to
+  the confirm for a banked reset when that window has one, Open panel,
+  Settings, switches for the taskbar widget and limit alerts, Refresh, Check
+  for updates and Quit.
 
 ## What the numbers mean
 
@@ -84,7 +114,10 @@ provider pricing changes.
   directory date.
 - **Claude history** comes from `~/.claude/projects/**/*.jsonl` (and the
   equivalent directory for each configured Claude account).
-- **Data health** is an expandable row in the existing popover. It identifies
+- **Value by project** comes from the working directory both CLIs log with
+  each session (`cwd`). The value card on each provider tab lists today's most
+  expensive folders, or the month's before anything has been used today.
+- **Data health** is an expandable row in Settings → Advanced. It identifies
   live API, in-memory cache, local-log, and unavailable results; shows
   freshness, scan counts, errors, and pricing review metadata; and can copy a
   sanitized diagnostic summary.
@@ -110,7 +143,9 @@ than 30 days are dropped from the index, so it doesn't grow with every session
 ever recorded. Cache writes
 use atomic replacement, and an unreadable or older cache version is ignored and
 rebuilt. The cache stores token facts rather than currency totals, so a pricing
-catalog update reprices history without forcing a log rescan.
+catalog update reprices history without forcing a log rescan. Each file's
+record also keeps the session's working directory; adding that bumped both
+cache versions, so the first launch after updating rescans the last month once.
 
 To rebuild the indexes, expand either local-history Data health row and choose
 **Clear scan cache**. This removes only the two derived cache files; source
@@ -136,7 +171,7 @@ Nothing is back-filled. A window that closed before the app was watching stays
 absent rather than being drawn as idle: the day view draws those stretches
 hollow and says how far back the record goes. Unlike the log indexes this
 cannot be rebuilt, which is why
-**Settings → Data sources → Quota window history** reports how much exists
+**Settings → Advanced → Data sources → Quota window history** reports how much exists
 before offering to clear it.
 
 ## Showing and hiding accounts
@@ -172,7 +207,7 @@ that file was written shows up by default instead of arriving invisible.
 ## Taskbar widget
 
 An optional always-visible strip of per-account meters, off by default and
-switched on in Settings → Taskbar widget.
+switched on in Settings → Widget, or from the tray menu.
 
 - One cell per account — Codex first, then Claude — with the account name set
   inside its own bar, the pace mark from the panel's meters, and a dimmer weekly
@@ -182,7 +217,7 @@ switched on in Settings → Taskbar widget.
   spans the row below, so every cell keeps a roughly equal share of the width.
   Account count never changes the widget's width — more accounts narrow the
   cells instead.
-- **Settings → Taskbar widget → Layout** overrides that flow. Each account can
+- **Settings → Widget → Layout** overrides that flow. Each account can
   be pinned to the **Top** or **Bottom** row, or left on **Auto**. Since a row
   shares its width equally, an account alone on a row spans the whole widget —
   so pinning one account to one row and the rest to the other is how you give
@@ -247,7 +282,14 @@ stays as the reference for the geometry.
   clamped to the monitor work area. The expanded timeline is the exception —
   it stays open until you collapse it (`⤢`, Esc, or the tray icon), so it can be
   read alongside other windows.
-- Right-click the tray icon for Refresh or Quit.
+- Right-click the tray icon for the menu described under
+  [Meter states and the tray icon](#meter-states-and-the-tray-icon).
+- Esc backs out one step: an open confirm, the Credits screen, the expanded
+  timeline, then the panel itself. The tabs take arrow keys, and every card
+  and meter that opens something can be reached with Tab.
+- The panel follows the Windows light or dark app setting, as the widget does.
+- On first launch a card on the Overview offers the three things that are off
+  by default: the taskbar widget, limit alerts and starting with Windows.
 - The panel refreshes when opened and every 60 seconds while visible.
 - A lightweight background refresh runs every five minutes even while the
   panel is hidden — every two while the taskbar widget is on — so the widget,
@@ -256,8 +298,12 @@ stays as the reference for the geometry.
   while one was just made is held back and run shortly after, not dropped.
   Both windows repaint from what a background refresh collected rather than
   asking the providers again.
-- Limit notifications (Settings → Notifications) warn as a window passes 90%
-  and again at 95%, say when it is used up, and say when it resets.
+- Limit notifications (Settings → Alerts) warn as a window passes each chosen
+  level (90% and 95% unless you pick others), once per window when its pace
+  will run it out before it resets, and when it is used up — with when it comes
+  back and any banked resets — and resets. Quiet hours hold them overnight.
+  Windows toasts from this app can't carry buttons, so a used-up toast points at
+  the panel rather than offering the reset itself.
 - Using a Codex reset that gets no clear answer keeps its request id, so
   trying again repeats the same redemption instead of spending another credit.
 - Claude's usage endpoint is paced per account, because an active Claude Code
@@ -269,7 +315,7 @@ stays as the reference for the geometry.
   cost nothing extra; claiming one skips the 45-second reuse for that account
   so the cleared limits show straight away.
 - The app starts on login by registering itself under
-  `HKCU\...\CurrentVersion\Run`. Switch it off in **Settings → About →
+  `HKCU\...\CurrentVersion\Run`. Switch it off in **Settings → Advanced → About →
   Start with Windows**; the choice is kept in
   `%APPDATA%\AI Usage Tray\startup.json`.
 - A second launch opens the existing single instance.
@@ -335,7 +381,7 @@ on every push and pull request.
 The app checks GitHub Releases for a newer signed build about a minute after
 launch and every six hours after that, and tells you when one is found. It does
 not install anything on its own unless you ask it to. Both behaviors are toggles
-in **Settings → About**, and the tray right-click menu has a **Check for
+in **Settings → Advanced → About**, and the tray right-click menu has a **Check for
 updates…** item for an immediate check.
 
 Updates are verified against a public key compiled into the app, so a release

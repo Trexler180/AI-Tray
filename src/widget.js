@@ -179,9 +179,18 @@ function cell(g, colour, draw = {}) {
   if (!g) return `<span class="cell ${draw.cls || ""}" style="--p:0;--c:${colour}"></span>`;
   const p = pct(g);
   const hot = p >= 90;
+  // A used-up window trades its full red bar for a countdown: the bar only
+  // says "stop", where the time says when you can start again.
+  const out = p >= 100 && draw.name && typeof g.resets_at === "number";
   const pace = draw.pace ? elapsedPercent(g) : null;
   const mark = pace === null ? "" : `<i style="--t:${pace.toFixed(1)}"></i>`;
-  const label = draw.name ? `<b>${esc(draw.name)}</b>` : "";
+  const label = out
+    ? `<b>↻ ${esc(untilText(g.resets_at))}</b>`
+    : draw.name
+      ? `<b>${esc(draw.name)}</b>`
+      : "";
+  if (out)
+    return `<span class="cell out ${draw.cls || ""}" style="--p:0;--c:${colour}">${mark}${label}</span>`;
   // The band can't be wider than the fill it sits in: a rolling window that dipped
   // and climbed again can total more rises than it currently reads.
   const recent = Math.min(draw.recent || 0, p);
@@ -190,6 +199,43 @@ function cell(g, colour, draw = {}) {
     style="--p:${p.toFixed(1)};--c:${colour};--r:${recent.toFixed(
     1
   )}"><u></u>${band}${mark}${label}</span>`;
+}
+
+/** "58m", "3h", "2d" until a unix time — short enough for a cell. */
+function untilText(unix) {
+  const minutes = Math.max(0, Math.round((unix * 1000 - Date.now()) / 60000));
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 48 * 60) return `${Math.round(minutes / 60)}h`;
+  return `${Math.round(minutes / 1440)}d`;
+}
+
+/** "4:10 pm", as the panel prints clock times. */
+const clock = (unix) =>
+  new Date(unix * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
+
+/** One window, for the hover readout: "62% left · resets 4:10 pm". */
+function windowLine(g) {
+  if (!g) return "";
+  const p = pct(g);
+  const resets = typeof g.resets_at === "number" ? g.resets_at : null;
+  if (p >= 100) return resets ? `used up · back ${clock(resets)}` : "used up";
+  const when = resets
+    ? resets * 1000 - Date.now() < 20 * 3600 * 1000
+      ? ` · resets ${clock(resets)}`
+      : ` · resets ${new Date(resets * 1000).toLocaleDateString([], { weekday: "short" })}`
+    : "";
+  return `${(100 - p).toFixed(0)}% left${when}`;
+}
+
+/** The exact numbers behind the bars, shown on hover. The bars give the shape
+ *  at a glance; this is for when the number itself matters. */
+function hoverText(list) {
+  const lines = list.map((a) => {
+    const five = windowLine(a.five);
+    const week = a.five && a.week ? `, weekly ${windowLine(a.week)}` : "";
+    return `${a.label}: ${five || windowLine(a.week)}${week}`;
+  });
+  return [...lines, "Click to open the panel · drag to move"].join("\n");
 }
 
 /** Below this the band is a sub-pixel sliver on a taskbar-width bar, which
@@ -238,6 +284,7 @@ function column(acct, cols) {
 function render() {
   document.documentElement.style.setProperty("--label-px", `${labelPx().toFixed(2)}px`);
   const list = accounts(data);
+  host.title = list.length ? hoverText(list) : "AI Usage · click to open the panel";
   if (!list.length) {
     content.innerHTML = `<div class="idle"></div>`;
     return;

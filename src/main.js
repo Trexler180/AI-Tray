@@ -7,6 +7,9 @@ import {
   elapsedPercent,
   esc,
   historyKey,
+  meterTier,
+  runsOutAt,
+  tightestLimit,
   widgetRows,
 } from "./shared.js";
 
@@ -21,7 +24,36 @@ let notificationSettings = {
   claude: false,
   codex_resets: false,
   claude_resets: false,
+  warn_levels: [90, 95],
+  used_up: true,
+  forecast: true,
+  quiet_hours: false,
+  quiet_start: 22 * 60,
+  quiet_end: 8 * 60,
 };
+let notifyOptionsError = false; // the last alert-options change failed to save
+// What the tray icon follows: "tightest", "logo", or an account id.
+let trayIconMode = "tightest";
+// Settings shows one section at a time; the page outgrew a single scroll.
+const SETTINGS_SECTIONS = [
+  ["alerts", "Alerts"],
+  ["display", "Display"],
+  ["widget", "Widget"],
+  ["accounts", "Accounts"],
+  ["advanced", "Advanced"],
+];
+let settingsSection = localStorage.getItem("settingsSection") || "alerts";
+// One row per account on the Overview: "auto" switches it on from
+// COMPACT_FROM accounts, where the full cards stop fitting without a scroll.
+let compactMode = localStorage.getItem("compactOverview") || "auto";
+const COMPACT_FROM = 4;
+// The first-launch setup card, until it is dismissed or everything in it is on.
+let welcomeDismissed = localStorage.getItem("welcomeDismissed") === "1";
+let confirmingRemove = null; // Claude folder awaiting the inline "Remove?" confirm
+let removeError = null; // why the last folder removal failed, if it did
+// When the last refresh failed with numbers already on screen: what is shown is
+// older than the header suggests, so the header says so.
+let refreshFailedAt = null;
 let widgetSettings = { enabled: false, tray_gap: 10, width: 114 };
 // "ok" | "vertical_taskbar" | "no_taskbar" — why the widget is or is not placeable.
 let widgetPlacement = "ok";
@@ -286,32 +318,99 @@ function meterBar(
 // is what the recent-usage band is looked up by. A gauge without one — usage
 // credits, or a window the provider reports no length for — simply goes
 // without the band.
+//
+// Three tiers on top of the provider colour: amber from 80% used, red once the
+// window will run out before it resets (or past 95%), and a striped "used up"
+// state whose headline is when it comes back — a full red bar only says
+// "stop", not "until when". Each tier also carries a word, so colour is never
+// the only signal. `opts.forecast: false` leaves out the "out by" line, for
+// places that already say it.
 function gauge(label, g, opts = {}) {
   if (!g) return "";
   const usedPercent = Math.min(100, Math.max(0, Number(g.used_percent) || 0));
   const left = (100 - usedPercent).toFixed(0);
-  const warn = usedPercent >= 80;
-  const cls = [opts.claude ? "claude" : "", warn ? "warn" : ""].join(" ").trim();
+  const tier = meterTier(g);
+  const runsOut = runsOutAt(g);
+  const cls = [opts.claude ? "claude" : "", tier === "ok" ? "" : tier].join(" ").trim();
   const elapsed = meterPaceLine ? elapsedPercent(g) : null;
   const recent = recentBurn(opts.key);
   const tip = `${usedPercent.toFixed(0)}% used · ${left}% left${
     g.resets_in ? ` · resets in ${esc(g.resets_in)}` : ""
   }${elapsed === null ? "" : ` · ${elapsed.toFixed(0)}% of the window gone`}${
-    recent === null ? "" : ` · ${recentText(recent)}`
-  }`;
-  const headline = meterFillsUp
-    ? `<b>${usedPercent.toFixed(0)}%</b><span class="sub"> used</span>`
-    : `<b>${left}%</b><span class="sub"> left</span>`;
-  return meterBar(
+    runsOut === null ? "" : ` · runs out about ${atText(runsOut)} at this pace`
+  }${recent === null ? "" : ` · ${recentText(recent)}`}`;
+  const tag = {
+    low: `<span class="state low">low</span>`,
+    crit: `<span class="state crit">${runsOut === null ? "almost out" : "runs out"}</span>`,
+  }[tier] || "";
+  const headline =
+    tier === "out"
+      ? `<span class="state out">used up</span>`
+      : (meterFillsUp
+          ? `<b>${usedPercent.toFixed(0)}%</b><span class="sub"> used</span>`
+          : `<b>${left}%</b><span class="sub"> left</span>`) + tag;
+  const bar = meterBar(
     cls,
     usedPercent,
     `${esc(label)} ${headline}`,
-    resetText(g),
+    tier === "out" ? backText(g) : resetText(g),
     tip,
-    "",
+    meterAria(label, usedPercent, tip),
     elapsed,
     recent?.matched ? recent.spent : null
   );
+  return opts.forecast === false || runsOut === null ? bar : bar + forecastLine(runsOut, g);
+}
+
+// What a screen reader announces for one meter: its name, the number the bar
+// shows, and the same detail the tooltip gives a mouse.
+function meterAria(label, usedPercent, tip) {
+  const value = meterFillsUp ? usedPercent : 100 - usedPercent;
+  return `role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${value.toFixed(
+    0
+  )}" aria-label="${esc(label)}: ${tip}"`;
+}
+
+// "back in 58m · 5:10 pm" — a used-up window's headline is its return.
+function backText(g) {
+  if (typeof g.resets_at !== "number") return "used up";
+  return esc(`back in ${g.resets_in || durText(g.resets_at * 1000 - Date.now())} · ${atText(g.resets_at)}`);
+}
+
+// "18 min", "1 h 20 min", "3 d 4 h" — a gap for the middle of a sentence.
+function gapText(seconds) {
+  const minutes = Math.max(0, Math.round(seconds / 60));
+  const d = Math.floor(minutes / 1440);
+  const h = Math.floor((minutes % 1440) / 60);
+  const m = minutes % 60;
+  if (d) return h ? `${d} d ${h} h` : `${d} d`;
+  if (!h) return `${m} min`;
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
+
+// "4:52 pm" today, "Thu 9:00 am" within the week, "Oct 21 9:00 am" beyond. A
+// bare clock time days away reads as today.
+function atText(unix) {
+  const when = new Date(unix * 1000);
+  const days = Math.round((new Date(when).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86400000);
+  if (days === 0) return clockTime(unix);
+  const day =
+    days > 0 && days < 7
+      ? when.toLocaleDateString([], { weekday: "short" })
+      : when.toLocaleDateString([], { month: "short", day: "numeric" });
+  return `${day} ${clockTime(unix)}`;
+}
+
+const trendIcon = `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor"
+  stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <polyline points="3 17 9 11 13 15 21 7" /><polyline points="15 7 21 7 21 13" /></svg>`;
+
+// The line under a meter whose pace runs it out early. Only drawn then: a
+// forecast under every calm meter would be noise.
+function forecastLine(at, g) {
+  return `<div class="fc">${trendIcon}<span>Out by <b>${esc(atText(at))}</b>, ${esc(
+    gapText(g.resets_at - at)
+  )} before reset</span></div>`;
 }
 
 // ---------- usage credits ----------
@@ -341,8 +440,9 @@ function creditsBar(a, opts = {}) {
   const cap = extra.monthly_limit;
   const used = Math.min(cap, extra.used_credits || 0);
   const usedPct = creditsUsedPercent(extra);
-  const cls = ["credit", usedPct >= 80 ? "warn" : "", opts.link ? "link" : ""]
-    .join(" ").trim();
+  // Money has no clock to forecast against, so only the plain thresholds apply.
+  const tier = usedPct >= 95 ? "crit" : usedPct >= 80 ? "low" : "";
+  const cls = ["credit", tier, opts.link ? "link" : ""].join(" ").trim();
   const tip = `${usd(used)} of the ${usd(cap)} monthly cap spent`;
   const right = `${usedPct.toFixed(0)}% used${opts.link ? ` <span class="go">›</span>` : ""}`;
   const amount = meterFillsUp ? used : Math.max(0, cap - used);
@@ -352,24 +452,68 @@ function creditsBar(a, opts = {}) {
     `${esc(opts.label || "Credits")} <b>${usd(amount)}</b><span class="sub"> of ${usd(cap)}</span>`,
     right,
     tip,
-    opts.link ? "data-credits" : ""
+    // A meter that opens the Credits screen is a button to a screen reader.
+    opts.link
+      ? `data-credits tabindex="0" role="button" aria-label="${esc(`Credits: ${tip}. Open the Credits screen`)}"`
+      : meterAria(opts.label || "Credits", usedPct, tip)
   );
 }
 
 // ---------- bar chart ----------
+// Value per day for the last two weeks, in the same unit as the figures above
+// it. A dashed line marks the peak with its amount, today's bar is picked out,
+// and the ends of the axis are dated — without those the bars are a shape with
+// no scale.
 function chart(daily, claude) {
   const days = (daily || []).slice(-14);
   if (!days.length) return "";
-  const max = Math.max(...days.map((d) => d.tokens), 1);
+  const max = Math.max(...days.map((d) => d.cost), 0.01);
   const bars = days
-    .map((d) => {
-      const h = Math.round((d.tokens / max) * 100);
-      const cls = d.tokens === 0 ? "bar empty" : "bar";
-      const title = `${esc(d.date)}: ${tokens(d.tokens)} tok · ${usd(d.cost)}`;
+    .map((d, i) => {
+      const h = Math.round((d.cost / max) * 100);
+      const today = i === days.length - 1;
+      const cls = ["bar", d.cost <= 0 ? "empty" : "", today ? "today" : ""].join(" ").trim();
+      const title = `${esc(d.date)}: ${usd(d.cost)} · ${tokens(d.tokens)} tok`;
       return `<div class="${cls}" style="height:${Math.max(4, h)}%" title="${title}"></div>`;
     })
     .join("");
-  return `<div class="chart ${claude ? "claude" : ""}" title="Last ${days.length} days">${bars}</div>`;
+  const first = new Date(`${days[0].date}T00:00`).toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+  });
+  return `<div class="chart ${claude ? "claude" : ""}" role="img"
+      aria-label="${esc(`Value per day, last ${days.length} days. Peak ${usd(max)}.`)}">
+      <div class="maxline"></div><span class="maxlab">${esc(usd(max))} peak</span>${bars}</div>
+    <div class="chart-x"><span>${esc(first)}</span><span>value per day</span><span class="t">Today</span></div>`;
+}
+
+// The working directories the value came from, most expensive first: today's
+// when there is any yet, otherwise the month's. The top few by name, the rest
+// folded into one row.
+function projectList(projects) {
+  const list = projects || [];
+  if (!list.length) return "";
+  const today = list.some((p) => p.cost_today > 0);
+  const cost = (p) => (today ? p.cost_today : p.cost_30d);
+  const rows = [...list].filter((p) => cost(p) > 0).sort((a, b) => cost(b) - cost(a));
+  if (!rows.length) return "";
+  const shown = rows.slice(0, 3);
+  const rest = rows.slice(3);
+  const top = cost(shown[0]);
+  const row = (name, title, value) => `<div class="proj-row" title="${esc(title)}">
+      <span class="nm">${esc(name)}</span>
+      <span class="tr"><i style="width:${Math.max(2, (value / top) * 100)}%"></i></span>
+      <span class="v">${usd(value)}</span></div>`;
+  let html = shown.map((p) => row(p.name, p.path || "Folder not recorded", cost(p))).join("");
+  if (rest.length)
+    html += row(
+      `${rest.length} other${rest.length === 1 ? "" : "s"}`,
+      rest.map((p) => p.name).join(", "),
+      rest.reduce((sum, p) => sum + cost(p), 0)
+    );
+  return `<div class="proj">
+    <div class="proj-lab"><span>${today ? "Today" : "Last 30 days"} by project</span></div>
+    ${html}</div>`;
 }
 
 // ---------- data-source status ----------
@@ -427,19 +571,29 @@ function headerControls(opts = {}) {
   const extra = opts.rightExtra || "";
   if (opts.hideRefresh)
     return `<span class="hd-right"><span>${esc(opts.rightText || "")}</span>${extra}</span>`;
+  const failed = refreshFailedAt && !busy ? " fail" : "";
+  const label = failed ? "Refresh failed — try again" : "Refresh";
   return `<span class="hd-right"><span title="Last updated">${esc(stamp)}</span>${extra}
-    <button class="hd-refresh${busy}" id="refreshBtn" title="Refresh"
-      aria-label="Refresh">${refreshIcon()}</button></span>`;
+    <button class="hd-refresh${busy}${failed}" id="refreshBtn" title="${label}"
+      aria-label="${label}">${refreshIcon()}</button></span>`;
 }
 
 function header(title, extras = "", opts = {}) {
+  // A failed refresh leaves the last numbers up, which is right, but the
+  // header's timestamp alone reads like they are current.
+  const failed =
+    refreshFailedAt && !opts.hideRefresh && data?.generated_at
+      ? `<div class="banner amber small" role="status">Couldn't refresh — showing numbers from ${esc(
+          clockTime(data.generated_at)
+        )}.</div>`
+      : "";
   return `<div class="hd"><span class="hd-title">${esc(title)}</span>${extras}${headerControls(
     opts
-  )}</div>`;
+  )}</div>${failed}`;
 }
 
 // ---------- merged value + history card ----------
-function valueCard(estimate, health, today, todayTok, m30, tok30, daily, claude) {
+function valueCard(estimate, health, today, todayTok, m30, tok30, daily, claude, projects) {
   const confidence = estimate?.confidence || "low";
   const shaky = confidence !== "high" || !!estimate?.pricing_stale;
   const reviewed = estimate?.pricing_reviewed_at
@@ -474,6 +628,7 @@ function valueCard(estimate, health, today, todayTok, m30, tok30, daily, claude)
       </div>
     </div>
     ${chart(daily, claude)}
+    ${projectList(projects)}
   </div>`;
 }
 
@@ -649,7 +804,8 @@ function renderCodex() {
     c.cost_30d,
     c.tokens_30d,
     c.daily,
-    false
+    false,
+    c.projects
   );
   return html;
 }
@@ -737,18 +893,219 @@ function renderClaude() {
     c.cost_30d,
     c.tokens_30d,
     c.daily,
-    true
+    true,
+    c.projects
   );
   if (multi)
     html += `<div class="sec-sub">Combined across all accounts — local logs aren't per-account.</div>`;
   return html;
 }
 
+// ---------- the limit to worry about ----------
+// The reset that would get a used-up Codex window back, in the reset key form
+// the panel's confirm uses.
+function codexResetKey(cx) {
+  const credit = availableResets(cx)[0];
+  return credit ? `codex:${credit.id}` : null;
+}
+
+// Every live window the panel is showing, flattened so they can be compared:
+// which one runs out first, and what each account's tightest is. The tray icon
+// makes the same choice in tray.rs, through the same rule in shared.js.
+function panelLimits() {
+  const out = [];
+  const cx = data?.codex;
+  if (cx?.live && codexInPanel()) {
+    const reserve = codexReserve(cx);
+    const quotas = (cx.quotas || []).length
+      ? cx.quotas
+      : [
+          cx.primary && { label: "Session", group: "session", gauge: cx.primary },
+          cx.secondary && { label: "Weekly", group: "weekly", gauge: cx.secondary },
+        ].filter(Boolean);
+    for (const q of quotas) {
+      if (q.group === "additional") continue;
+      // A reserve only matters while the main limit is drained.
+      if (q.group === "reserve" && !reserve?.drained) continue;
+      out.push({
+        account: CODEX_ACCOUNT,
+        tab: "codex",
+        who: "Codex",
+        name: "Codex",
+        sub: cx.plan_type || "",
+        provider: "codex",
+        label: q.label,
+        gauge: q.gauge,
+        resetKey: codexResetKey(cx),
+      });
+    }
+  }
+  const accounts = shownClaudeAccounts().filter((a) => a.live);
+  const multi = shownClaudeAccounts().length > 1;
+  for (const a of accounts) {
+    const quotas = (a.quotas || []).length
+      ? a.quotas.filter((q) => showModelWeekly || !(q.scope_model || q.scope_surface))
+      : [
+          a.five_hour && { label: "Session", gauge: a.five_hour },
+          a.seven_day && { label: "Weekly", gauge: a.seven_day },
+          a.seven_day_model && showModelWeekly && {
+            label: `Weekly (${a.seven_day_model.model})`,
+            gauge: a.seven_day_model.gauge,
+          },
+        ].filter(Boolean);
+    for (const q of quotas) {
+      out.push({
+        account: claudeAccount(a.id),
+        tab: "claude",
+        who: multi ? `Claude · ${a.label}` : "Claude",
+        name: a.label || "Claude",
+        sub: "Claude",
+        provider: "claude",
+        label: q.label,
+        gauge: q.gauge,
+        resetKey: claudeResetCount(a) && a.resets?.next_credit_id ? `claude:${a.id}` : null,
+      });
+    }
+  }
+  return out;
+}
+
+// Top of the Overview: the one window most likely to stop you, what its pace
+// says, and the way out when there is one. Absent while everything is calm —
+// the meters below say that on their own.
+function tightCard(limits) {
+  const top = tightestLimit(limits);
+  if (!top) return "";
+  const tier = meterTier(top.gauge);
+  if (tier === "ok") return "";
+  const g = top.gauge;
+  const left = Math.max(0, 100 - (Number(g.used_percent) || 0));
+  const runsOut = runsOutAt(g);
+  const resets = typeof g.resets_at === "number" ? g.resets_at : null;
+  const heading = tier === "out" ? "Used up" : runsOut !== null ? "Runs out first" : "Running low";
+  const big =
+    tier === "out" && resets
+      ? `${esc(durText(resets * 1000 - Date.now()))}<small> until it's back</small>`
+      : `${left.toFixed(0)}%<small> left</small>`;
+  let detail = "";
+  if (tier === "out" && resets) detail = `Comes back at <b>${esc(atText(resets))}</b>.`;
+  else if (runsOut !== null)
+    detail = `At this pace, out by <b>${esc(atText(runsOut))}</b>,<br/>${esc(
+      gapText(resets - runsOut)
+    )} before the ${esc(atText(resets))} reset.`;
+  else if (resets) detail = esc(resetText(g).replace(/^resets/, "Resets"));
+  const action = top.resetKey
+    ? `<button class="btn ${top.provider === "codex" ? "teal" : ""}" data-use-reset-go="${esc(
+        top.resetKey
+      )}">Use a reset</button>`
+    : "";
+  return `<div class="tight ${tier}" role="status">
+    <div class="tight-lab">${heading}</div>
+    <div class="tight-main"><span class="big">${big}</span>
+      <span class="who"><b>${esc(top.who)}</b> · ${esc(top.label)}</span></div>
+    <div class="tight-row"><div class="tight-fc">${detail}</div>${action}</div>
+  </div>`;
+}
+
+// Compact Overview: one row per account, its tightest window, worst first.
+function compactOverview(limits) {
+  const byAccount = new Map();
+  for (const limit of limits) {
+    if (!byAccount.has(limit.account)) byAccount.set(limit.account, []);
+    byAccount.get(limit.account).push(limit);
+  }
+  const rows = [...byAccount.values()].map((list) => tightestLimit(list));
+  const order = (l) => [
+    ["ok", "low", "crit", "out"].indexOf(meterTier(l.gauge)),
+    Number(l.gauge.used_percent) || 0,
+  ];
+  rows.sort((a, b) => {
+    const [ta, ua] = order(a);
+    const [tb, ub] = order(b);
+    return tb - ta || ub - ua;
+  });
+  const html = rows
+    .map((l) => {
+      const g = l.gauge;
+      const tier = meterTier(g);
+      const left = Math.max(0, 100 - (Number(g.used_percent) || 0));
+      const runsOut = runsOutAt(g);
+      const span = g.window_minutes ? spanShort(g.window_minutes * MINUTE) : "";
+      const when =
+        tier === "out" && typeof g.resets_at === "number"
+          ? `back ${whenShort(g.resets_at)}`
+          : runsOut !== null
+            ? `out ${whenShort(runsOut)}`
+            : typeof g.resets_at === "number"
+              ? `resets ${whenShort(g.resets_at)}`
+              : "";
+      return `<button class="cmp-row" data-goto="${l.tab}">
+        <span class="d ${l.provider}"></span>
+        <span class="cmp-mid"><span class="nm">${esc(l.name)}<span>${esc(
+          [l.sub, span].filter(Boolean).join(" · ")
+        )}</span></span>
+          <span class="mb"><i class="${l.provider} ${tier}" style="width:${left}%"></i></span></span>
+        <span class="r"><b class="${tier}">${tier === "out" ? "used up" : `${left.toFixed(0)}% left`}</b><br/>${esc(
+          when
+        )}</span>
+      </button>`;
+    })
+    .join("");
+  return `<div class="ov-card cmp">${html}</div>
+    <div class="sec-sub">Worst first. Each row opens its tab.</div>`;
+}
+
+// "4:10 pm" today, "Thu" within a week, else a date.
+function whenShort(unix) {
+  const away = unix * 1000 - Date.now();
+  if (away < 20 * HOUR) return clockTime(unix);
+  if (away < 6.5 * DAY) return new Date(unix * 1000).toLocaleDateString([], { weekday: "short" });
+  return new Date(unix * 1000).toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function shownAccountCount() {
+  return (codexInPanel() && data?.codex?.available ? 1 : 0) + shownClaudeAccounts().length;
+}
+
+const useCompact = () =>
+  compactMode === "on" || (compactMode === "auto" && shownAccountCount() >= COMPACT_FROM);
+
+// First launch: the widget, alerts and start-on-login are all off or out of
+// sight by default, and most people never open Settings to find them.
+function welcomeCard() {
+  if (welcomeDismissed || !data) return "";
+  const alertsOn = notificationSettings.codex || notificationSettings.claude;
+  const rows = [
+    ["widget", "▤", "Show meters on the taskbar", "Always visible, next to the clock", widgetSettings.enabled],
+    ["alerts", "!", "Alert me before a limit runs out", "When a window is low, runs hot, or is used up", alertsOn],
+  ];
+  if (startOnLogin !== null)
+    rows.push(["start", "↻", "Start with Windows", "Opens quietly in the tray", startOnLogin]);
+  if (rows.every((r) => r[4])) return "";
+  return `<div class="welcome">
+    <div class="welcome-h">Set up AI Usage
+      <button class="welcome-x" data-welcome-dismiss title="Dismiss" aria-label="Dismiss">✕</button></div>
+    <p>Three things most people turn on:</p>
+    ${rows
+      .map(
+        ([key, icon, title, sub, on]) => `<div class="setup-row">
+          <span class="ic" aria-hidden="true">${icon}</span>
+          <span class="tx">${esc(title)}<span>${esc(sub)}</span></span>
+          ${
+            on
+              ? `<span class="setup-done">On</span>`
+              : `<button class="btn teal" data-welcome="${key}">Turn on</button>`
+          }</div>`
+      )
+      .join("")}
+  </div>`;
+}
+
 // One provider card on the Overview. Split out of `renderOverview` because
 // either can now be absent — a provider whose accounts are all hidden here
 // draws nothing at all rather than an empty card.
 function overviewCodexCard(cx) {
-  let html = `<div class="ov-card" data-goto="codex">
+  let html = `<div class="ov-card" data-goto="codex" role="button" tabindex="0">
     <div class="ov-head">
       <div class="ov-name">Codex ${healthBadge(cx.health)}
         ${cx.plan_type ? `<span class="pill">${esc(cx.plan_type)}</span>` : ""}</div>
@@ -785,7 +1142,7 @@ function overviewCodexCard(cx) {
 
 function overviewClaudeCard(cl, accounts) {
   const multi = accounts.length > 1;
-  let html = `<div class="ov-card" data-goto="claude">
+  let html = `<div class="ov-card" data-goto="claude" role="button" tabindex="0">
     <div class="ov-head">
       <div class="ov-name">Claude
         ${multi ? "" : healthBadge(accounts.length ? accounts[0].health : null)}</div>
@@ -795,7 +1152,7 @@ function overviewClaudeCard(cl, accounts) {
     for (const a of accounts) {
       if (multi)
         html += `<div class="ov-acct">${esc(a.label)}
-          ${healthBadge(a.health)}${a.active ? ` <span class="pill">active</span>` : ""}</div>`;
+          ${healthBadge(a.health)}${a.active ? ` <span class="pill">default</span>` : ""}</div>`;
       // Credits stay inside the account's own block: a combined bar appended
       // after the loop reads as belonging to the last account listed.
       if (a.live) html += claudeGauges(a, "Session") + creditsBar(a, { link: true });
@@ -823,7 +1180,15 @@ function renderOverview() {
   // provider, not by account — the local logs the cost comes from carry no
   // account id — so hiding one of several Claude accounts leaves it whole.
   const today = (codex ? cx.cost_today : 0) + (claude ? cl.cost_today : 0);
-  let html = header("Overview", `<span class="pill">${usd(today)} today</span>`);
+  // "API value", not "today" alone: a bare dollar figure in the header reads as
+  // a bill, which is the one thing it isn't.
+  const valueTip =
+    "API-equivalent value of today's usage: local token logs priced at API list prices. Not your subscription bill.";
+  let html = header(
+    "Overview",
+    `<span class="pill" title="${esc(valueTip)}">${usd(today)} API value
+      <span class="info-tip" tabindex="0" role="img" aria-label="${esc(valueTip)}">i</span></span>`
+  );
 
   if (!codex && !claude) {
     return (
@@ -831,12 +1196,17 @@ function renderOverview() {
       `<div class="empty-state">Every account is hidden here.<br/>Turn one back on in Settings → Accounts.</div>`
     );
   }
+  html += welcomeCard();
+  const limits = panelLimits();
+  html += tightCard(limits);
+  if (useCompact() && limits.length) return html + compactOverview(limits);
   if (codex) html += overviewCodexCard(cx);
   if (claude) html += overviewClaudeCard(cl, accounts);
   return html;
 }
 
 // ---------- Credits screen ----------
+const BILLING_URL = "https://claude.ai/settings/billing";
 // All credit detail and config state lives here, opened from the one-line
 // meters on the tabs, so the tabs themselves stay lean. The past-limits
 // switch is read-only: it can only be changed in claude.ai billing settings.
@@ -880,7 +1250,10 @@ function renderCredits() {
         }</span></div>`;
       html += `</div>`;
     }
-    html += `<div class="sec-sub">Caps and the past-limits switch are managed at claude.ai → Settings → Billing.</div>`;
+    html += `<div class="row-action">
+      <span class="sec-sub">Caps and the past-limits switch live in Claude's billing settings.</span>
+      <button class="row-btn" data-open-url="${BILLING_URL}">Open billing</button>
+    </div>`;
   } else {
     html += `<div class="empty-state">No usage-credit info from Claude yet.<br/>It appears after a live refresh on plans with credits.</div>`;
   }
@@ -1703,27 +2076,38 @@ function codexAccountRow() {
 }
 
 function claudeAccountRow(a) {
-  return `<div class="acct-row col">
+  // Removing forgets the folder, so it takes the same inline two-step confirm
+  // as spending a reset rather than going on a single click.
+  const confirming = confirmingRemove === a.id;
+  const actions = confirming
+    ? `<span class="acts">
+        <span class="confirm-q">Remove folder?</span>
+        <button class="acct-btn danger" data-remove-confirm="${esc(a.id)}" title="Remove"
+          aria-label="Remove ${esc(a.label)}">✓</button>
+        <button class="acct-btn" data-remove-cancel title="Keep it" aria-label="Keep it">✕</button>
+      </span>`
+    : `<span class="acts">
+        <button class="acct-btn" data-rename="${esc(a.id)}" title="Rename"
+          aria-label="Rename ${esc(a.label)}">✎</button>
+        ${
+          a.removable
+            ? `<button class="acct-btn" data-remove="${esc(a.id)}" title="Remove this folder"
+                aria-label="Remove ${esc(a.label)}">✕</button>`
+            : ""
+        }
+      </span>`;
+  return `<div class="acct-row col${confirming ? " confirming" : ""}">
     <div class="acct-line">
       <span class="rlab"><span class="nm">${esc(a.label)}</span>${
         a.active ? ` <span class="pill">default</span>` : ""
       }${a.id ? `<span class="pth">${esc(a.id)}</span>` : ""}</span>
-      ${
-        a.id
-          ? `<span class="acts">
-        <button class="acct-btn" data-rename="${esc(a.id)}" title="Rename">✎</button>
-        ${
-          a.removable
-            ? `<button class="acct-btn" data-remove="${esc(
-                a.id
-              )}" title="Remove this folder">✕</button>`
-            : ""
-        }
-      </span>`
-          : ""
-      }
+      ${a.id ? actions : ""}
     </div>
-    ${visibilityChips(claudeAccount(a.id))}
+    ${
+      confirming
+        ? `<div class="sec-sub">Stops tracking it here. Its credentials and logs stay on disk.</div>`
+        : visibilityChips(claudeAccount(a.id))
+    }
   </div>`;
 }
 
@@ -1784,32 +2168,137 @@ function widgetLayoutPreview(list) {
     .join("")}</div>`;
 }
 
-function renderSettings() {
-  const cx = data.codex,
-    cl = data.claude;
-  let html = header("Settings", "", { hideRefresh: true, rightText: "" });
+// Settings → Alerts: which levels warn, whether "used up" and "will run out
+// early" are said at all, and when to keep quiet. Each change saves the whole
+// set, so the backend never holds half of an edit.
+const WARN_CHOICES = [50, 75, 90, 95];
 
-  html += `<div class="grp-label">Notifications</div><div class="grp">`;
+function minutesToTime(minutes) {
+  return `${pad2(Math.floor(minutes / 60))}:${pad2(minutes % 60)}`;
+}
+
+function alertOptionsRows() {
+  const n = notificationSettings;
+  const levels = new Set(n.warn_levels || []);
+  const chip = (attrs, label, on) =>
+    `<button class="choice${on ? " on" : ""}" role="switch" aria-checked="${on}" ${attrs}>${esc(
+      label
+    )}</button>`;
+  const warn = WARN_CHOICES.map((level) =>
+    chip(`data-warn-level="${level}"`, `${level}%`, levels.has(level))
+  ).join("");
+  return `<div class="grp-row col">
+      <span class="rlab">Warn at<span class="rsub">Each level fires once per window</span></span>
+      <div class="choices">${warn}
+        ${chip(`data-alert-flag="used_up"`, "Used up", n.used_up)}
+        ${chip(`data-alert-flag="forecast"`, "Will run out early", n.forecast)}</div>
+    </div>
+    ${settingRow(
+      "Quiet hours",
+      n.quiet_hours
+        ? `No alerts ${minutesToTime(n.quiet_start)} – ${minutesToTime(n.quiet_end)}`
+        : "Hold alerts overnight",
+      "data-alert-flag-switch=\"quiet_hours\"",
+      n.quiet_hours,
+      true
+    )}
+    ${
+      n.quiet_hours
+        ? `<div class="grp-row static-row">
+            <span class="rlab">From</span>
+            <span class="times">
+              <input class="time-input" type="time" data-quiet="quiet_start" value="${minutesToTime(
+                n.quiet_start
+              )}" aria-label="Quiet hours start" />
+              <span class="rsub">to</span>
+              <input class="time-input" type="time" data-quiet="quiet_end" value="${minutesToTime(
+                n.quiet_end
+              )}" aria-label="Quiet hours end" />
+            </span>
+          </div>`
+        : ""
+    }`;
+}
+
+// Settings → Display → Tray icon: what the ring in the notification area
+// follows. An account choice falls back to the tightest window when that
+// account has nothing live.
+function trayIconRow() {
+  const options = [
+    ["tightest", "Tightest limit"],
+    ["logo", "Plain logo"],
+  ];
+  if (codexInPanel() && data?.codex?.available) options.push([CODEX_ACCOUNT, "Codex"]);
+  for (const a of shownClaudeAccounts()) options.push([claudeAccount(a.id), a.label || "Claude"]);
+  return `<div class="grp-row col">
+    <span class="rlab">Tray icon<span class="rsub">A ring for how much is left, amber when low, red when it will run out</span></span>
+    <div class="choices">${options
+      .map(
+        ([value, label]) =>
+          `<button class="choice${trayIconMode === value ? " on" : ""}" data-tray-icon="${esc(
+            value
+          )}">${esc(label)}</button>`
+      )
+      .join("")}</div>
+  </div>`;
+}
+
+function compactModeRow() {
+  const options = [
+    ["auto", `Auto (${COMPACT_FROM}+ accounts)`],
+    ["on", "Always"],
+    ["off", "Never"],
+  ];
+  return `<div class="grp-row col">
+    <span class="rlab">Compact Overview<span class="rsub">One row per account instead of full cards</span></span>
+    <div class="choices">${options
+      .map(
+        ([value, label]) =>
+          `<button class="choice${compactMode === value ? " on" : ""}" data-compact="${value}">${esc(
+            label
+          )}</button>`
+      )
+      .join("")}</div>
+  </div>`;
+}
+
+function settingsNav() {
+  return `<div class="secnav" role="tablist" aria-label="Settings sections">${SETTINGS_SECTIONS.map(
+    ([key, label]) =>
+      `<button role="tab" aria-selected="${key === settingsSection}" class="${
+        key === settingsSection ? "on" : ""
+      }" data-settings-section="${key}">${esc(label)}</button>`
+  ).join("")}</div>`;
+}
+
+function settingsAlerts() {
+  let html = `<div class="grp-label">Limits</div><div class="grp">`;
   html += settingRow(
     "Codex limits",
-    "Near, hit, and reset",
+    "Warnings, run-outs and resets",
     'data-notify-provider="codex"',
     notificationSettings.codex,
     false
   );
+  html += settingRow(
+    "Claude limits",
+    "Warnings, run-outs and resets",
+    'data-notify-provider="claude"',
+    notificationSettings.claude,
+    true
+  );
+  html += alertOptionsRows();
+  html += `</div>`;
+  if (notifyOptionsError)
+    html += `<div class="banner small">Couldn't save the alert options — try again.</div>`;
+
+  html += `<div class="grp-label">Resets</div><div class="grp">`;
   html += settingRow(
     "Codex reset credits",
     "When a free reset is granted",
     'data-notify-provider="codex_resets"',
     notificationSettings.codex_resets,
     false
-  );
-  html += settingRow(
-    "Claude limits",
-    "Near, hit, and reset",
-    'data-notify-provider="claude"',
-    notificationSettings.claude,
-    true
   );
   html += settingRow(
     "Claude resets",
@@ -1821,17 +2310,12 @@ function renderSettings() {
   html += `</div>`;
   if (notifyError)
     html += `<div class="banner small">Couldn't save the notification setting — try again.</div>`;
+  return html;
+}
 
-  if (creditAccounts().length || (codexInPanel() && typeof cx.credits === "number")) {
-    html += `<div class="grp-label">Usage credits</div><div class="grp">
-      <div class="grp-row" data-credits>
-        <span class="rlab">Manage credits<span class="rsub">Monthly caps and the past-limits switch</span></span>
-        <span class="go">›</span>
-      </div></div>`;
-  }
-
+function settingsDisplay() {
   const scopes = scopedLimitNames(shownClaudeAccounts());
-  html += `<div class="grp-label">Display</div><div class="grp">`;
+  let html = `<div class="grp-label">Meters</div><div class="grp">`;
   html += settingRow(
     "Meters fill as you use",
     meterFillsUp
@@ -1868,8 +2352,12 @@ function renderSettings() {
   html += `</div>`;
   if (showRecentBurn)
     html += `<div class="sec-sub">Read from the recorded window history, so it only covers time this app was running — the highlight's tooltip says how far back it can actually speak for.</div>`;
+  html += `<div class="grp-label">Layout</div><div class="grp">${compactModeRow()}${trayIconRow()}</div>`;
+  return html;
+}
 
-  html += `<div class="grp-label">Taskbar widget</div><div class="grp">`;
+function settingsWidget() {
+  let html = `<div class="grp-label">Taskbar widget</div><div class="grp">`;
   html += settingRow(
     "Show on the taskbar",
     "An always-on-top strip of per-account meters",
@@ -1920,9 +2408,9 @@ function renderSettings() {
     html += `<div class="grp-row">
       <span class="rlab">Width<span class="rsub">Or drag either side edge</span></span>
       <span class="stepper">
-        <button class="acct-btn" data-widget-width="-10" title="Narrower">−</button>
+        <button class="acct-btn" data-widget-width="-10" title="Narrower" aria-label="Narrower">−</button>
         <b class="stepval">${Math.round(widgetSettings.width || 114)} px</b>
-        <button class="acct-btn" data-widget-width="10" title="Wider">+</button>
+        <button class="acct-btn" data-widget-width="10" title="Wider" aria-label="Wider">+</button>
       </span>
     </div>`;
     html += `<div class="grp-row">
@@ -1945,10 +2433,15 @@ function renderSettings() {
       widgetLoadError
     )}</div>`;
   }
-  html += `<div class="sec-sub">Windows has no way to put a real button inside the taskbar, so this floats on top of it.</div>`;
+  html += `<div class="sec-sub">Windows has no way to put a real button inside the taskbar, so this floats on top of it. Hover it for the exact numbers.</div>`;
+  return html;
+}
 
+function settingsAccounts() {
+  const cx = data.codex,
+    cl = data.claude;
   const accounts = cl.accounts || [];
-  html += `<div class="grp-label">Accounts</div>`;
+  let html = `<div class="grp-label">Accounts</div>`;
   // Built first so a machine with neither provider signed in gets the add-folder
   // button on its own rather than an empty bordered box above it.
   let rows = cx.available ? codexAccountRow() : "";
@@ -1966,20 +2459,48 @@ function renderSettings() {
   }
   if (rows) {
     html += `<div class="grp">${rows}</div>`;
+    if (removeError)
+      html += `<div class="banner small">Couldn't remove that folder — ${esc(removeError)}</div>`;
     html += `<div class="sec-sub">Hiding an account only takes it off that surface — the folder stays registered, and its usage keeps being collected and recorded.</div>`;
   }
   html += addFolderControl();
 
-  html += `<div class="grp-label">Data sources</div><div class="grp">`;
+  if (creditAccounts().length || (codexInPanel() && typeof cx.credits === "number")) {
+    html += `<div class="grp-label">Usage credits</div><div class="grp">
+      <div class="grp-row" data-credits tabindex="0" role="button">
+        <span class="rlab">Manage credits<span class="rsub">Monthly caps and the past-limits switch</span></span>
+        <span class="go">›</span>
+      </div></div>`;
+  }
+  return html;
+}
+
+function settingsAdvanced() {
+  const cx = data.codex,
+    cl = data.claude;
+  const accounts = cl.accounts || [];
+  let html = `<div class="grp-label">Data sources</div><div class="grp">`;
   html += diagRow("codex-quota", "Codex quota", cx.health);
   html += diagRow("codex-history", "Codex history", cx.history_health, cx.estimate, true);
   for (const a of accounts) html += diagRow(`claude-account:${a.id}`, a.label, a.health);
   html += diagRow("claude-history", "Claude history", cl.history_health, cl.estimate, true);
   html += windowHistoryRow();
   html += `</div>`;
-
   html += renderAbout();
+  return html;
+}
 
+function renderSettings() {
+  if (!SETTINGS_SECTIONS.some(([key]) => key === settingsSection)) settingsSection = "alerts";
+  let html = header("Settings", "", { hideRefresh: true, rightText: "" });
+  html += settingsNav();
+  html += {
+    alerts: settingsAlerts,
+    display: settingsDisplay,
+    widget: settingsWidget,
+    accounts: settingsAccounts,
+    advanced: settingsAdvanced,
+  }[settingsSection]();
   return html;
 }
 
@@ -2077,10 +2598,31 @@ function applyTabVisibility() {
   // tab strip no longer offers a way back to.
   if (showable[activeTab] === false) {
     activeTab = "overview";
-    document
-      .querySelectorAll(".tab")
-      .forEach((t) => t.classList.toggle("active", t.dataset.tab === activeTab));
+    markActiveTab();
   }
+}
+
+// A selector that finds "the same control" in freshly rendered markup: its id,
+// or its first data-* attribute and value. Every interactive element here is
+// tagged one of those two ways, because that is how it is wired up below.
+function controlSelector(el) {
+  if (!el || el === document.body) return null;
+  if (el.id) return `#${CSS.escape(el.id)}`;
+  const attr = [...el.attributes].find((a) => a.name.startsWith("data-"));
+  if (!attr) return null;
+  return attr.value
+    ? `[${attr.name}="${CSS.escape(attr.value)}"]`
+    : `[${attr.name}]`;
+}
+
+// Enter and Space on something drawn as a div but acting as a button.
+function onActivate(el, handler) {
+  el.addEventListener("click", handler);
+  el.addEventListener("keydown", (event) => {
+    if (event.target !== el || (event.key !== "Enter" && event.key !== " ")) return;
+    event.preventDefault();
+    handler(event);
+  });
 }
 
 function render() {
@@ -2091,6 +2633,11 @@ function render() {
     fitWindowHeight();
     return;
   }
+  // Every refresh rebuilds the screen. Without this, a keyboard user's place
+  // would be thrown back to the top of the page once a minute.
+  const focused = content.contains(document.activeElement)
+    ? controlSelector(document.activeElement)
+    : null;
   const wide = panelExpanded && activeTab === "windows";
   document.getElementById("app").classList.toggle("expanded", wide);
   if (creditsOpen) content.innerHTML = renderCredits();
@@ -2099,6 +2646,11 @@ function render() {
   else if (activeTab === "windows") content.innerHTML = wide ? renderWindowsWide() : renderWindows();
   else if (activeTab === "settings") content.innerHTML = renderSettings();
   else content.innerHTML = renderOverview();
+  if (focused) {
+    try {
+      content.querySelector(focused)?.focus({ preventScroll: true });
+    } catch (_) {}
+  }
 
   const refreshBtn = document.getElementById("refreshBtn");
   if (refreshBtn) refreshBtn.addEventListener("click", refresh);
@@ -2119,14 +2671,102 @@ function render() {
   if (collapseBtn) collapseBtn.addEventListener("click", () => setPanelExpanded(false));
 
   content.querySelectorAll("[data-goto]").forEach((card) =>
-    card.addEventListener("click", () => switchTab(card.dataset.goto))
+    onActivate(card, () => switchTab(card.dataset.goto))
   );
   // Credits navigation. stopPropagation so a meter inside an Overview card
   // opens the Credits screen instead of following the card's tab link.
   content.querySelectorAll("[data-credits]").forEach((el) =>
-    el.addEventListener("click", (event) => {
+    onActivate(el, (event) => {
       event.stopPropagation();
       creditsOpen = true;
+      render();
+    })
+  );
+  // "Use a reset" on the Overview's top card: the reset is spent where it
+  // always is, behind the inline confirm on its provider's tab.
+  content.querySelectorAll("[data-use-reset-go]").forEach((el) =>
+    el.addEventListener("click", (event) => {
+      event.stopPropagation();
+      goUseReset(el.dataset.useResetGo);
+    })
+  );
+  content.querySelectorAll("[data-open-url]").forEach((el) =>
+    el.addEventListener("click", () =>
+      invoke("plugin:opener|open_url", { url: el.dataset.openUrl }).catch(() => {})
+    )
+  );
+
+  // First-launch card.
+  content.querySelectorAll("[data-welcome]").forEach((el) =>
+    el.addEventListener("click", () => welcomeAction(el.dataset.welcome))
+  );
+  content.querySelectorAll("[data-welcome-dismiss]").forEach((el) =>
+    el.addEventListener("click", () => {
+      welcomeDismissed = true;
+      try {
+        localStorage.setItem("welcomeDismissed", "1");
+      } catch (_) {}
+      render();
+    })
+  );
+
+  // Settings sections, and the controls only some of them draw.
+  content.querySelectorAll("[data-settings-section]").forEach((el) =>
+    el.addEventListener("click", () => {
+      settingsSection = el.dataset.settingsSection;
+      try {
+        localStorage.setItem("settingsSection", settingsSection);
+      } catch (_) {}
+      render();
+      content.scrollTop = 0;
+    })
+  );
+  content.querySelectorAll("[data-warn-level]").forEach((el) =>
+    el.addEventListener("click", () => {
+      const level = Number(el.dataset.warnLevel);
+      const levels = new Set(notificationSettings.warn_levels || []);
+      if (levels.has(level)) levels.delete(level);
+      else levels.add(level);
+      setAlertOptions({ warn_levels: [...levels].sort((a, b) => a - b) });
+    })
+  );
+  content.querySelectorAll("[data-alert-flag]").forEach((el) =>
+    el.addEventListener("click", () => {
+      const flag = el.dataset.alertFlag;
+      setAlertOptions({ [flag]: !notificationSettings[flag] });
+    })
+  );
+  content.querySelectorAll("[data-alert-flag-switch]").forEach((input) =>
+    input.addEventListener("change", () =>
+      setAlertOptions({ [input.dataset.alertFlagSwitch]: input.checked })
+    )
+  );
+  content.querySelectorAll("[data-quiet]").forEach((input) =>
+    input.addEventListener("change", () => {
+      const [h, m] = input.value.split(":").map(Number);
+      if (Number.isFinite(h) && Number.isFinite(m))
+        setAlertOptions({ [input.dataset.quiet]: h * 60 + m });
+    })
+  );
+  content.querySelectorAll("[data-tray-icon]").forEach((el) =>
+    el.addEventListener("click", async () => {
+      const previous = trayIconMode;
+      trayIconMode = el.dataset.trayIcon;
+      render();
+      try {
+        trayIconMode = (await invoke("set_tray_icon_mode", { mode: trayIconMode })).icon;
+      } catch (_) {
+        trayIconMode = previous;
+      }
+      render();
+    })
+  );
+  content.querySelectorAll("[data-compact]").forEach((el) =>
+    el.addEventListener("click", () => {
+      compactMode = el.dataset.compact;
+      try {
+        localStorage.setItem("compactOverview", compactMode);
+      } catch (_) {}
       render();
     })
   );
@@ -2376,7 +3016,21 @@ function render() {
     el.addEventListener("click", () => startRename(el.dataset.rename))
   );
   content.querySelectorAll("[data-remove]").forEach((el) =>
-    el.addEventListener("click", () => removeDirectory(el.dataset.remove))
+    el.addEventListener("click", () => {
+      confirmingRemove = el.dataset.remove;
+      removeError = null;
+      render();
+      content.querySelector("[data-remove-cancel]")?.focus();
+    })
+  );
+  content.querySelectorAll("[data-remove-confirm]").forEach((el) =>
+    el.addEventListener("click", () => removeDirectory(el.dataset.removeConfirm))
+  );
+  content.querySelectorAll("[data-remove-cancel]").forEach((el) =>
+    el.addEventListener("click", () => {
+      confirmingRemove = null;
+      render();
+    })
   );
   content.querySelectorAll("[data-rename-cancel]").forEach((el) =>
     el.addEventListener("click", cancelRename)
@@ -2467,10 +3121,19 @@ function switchTab(tab) {
   // The wide layout belongs to the timeline; leaving it puts the popover back.
   if (panelExpanded && tab !== "windows") setPanelExpanded(false);
   if (tab === "windows") loadWindowHistory();
-  document
-    .querySelectorAll(".tab")
-    .forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
+  markActiveTab();
   render();
+}
+
+// The active tab's look, and its tab semantics: selected, and the one stop in
+// the tab order (the arrow keys move between the rest).
+function markActiveTab() {
+  document.querySelectorAll(".tab").forEach((t) => {
+    const on = t.dataset.tab === activeTab;
+    t.classList.toggle("active", on);
+    t.setAttribute("aria-selected", String(on));
+    t.tabIndex = on ? 0 : -1;
+  });
 }
 
 // ---------- refresh ----------
@@ -2504,6 +3167,7 @@ async function refresh() {
     .catch(() => {});
   try {
     data = await invoke("get_usage");
+    refreshFailedAt = null;
   } catch (e) {
     // Keep stale data on screen if we have any; only blank out on first load.
     if (!data) {
@@ -2512,6 +3176,7 @@ async function refresh() {
       refreshing = false;
       return;
     }
+    refreshFailedAt = Date.now();
   }
   refreshing = false;
   // The collection just fed the recorder, so the timeline's copy and the
@@ -2610,6 +3275,68 @@ async function setNotifyEnabled(provider, enabled) {
     notifyError = provider;
   }
   render();
+}
+
+// Merge `changes` into the alert options and save the whole set. Optimistic,
+// like the other switches: a refusal puts the old values back.
+async function setAlertOptions(changes) {
+  const previous = notificationSettings;
+  const next = { ...previous, ...changes };
+  notificationSettings = next;
+  notifyOptionsError = false;
+  render();
+  try {
+    notificationSettings = await invoke("set_notification_options", {
+      options: {
+        warn_levels: next.warn_levels,
+        used_up: next.used_up,
+        forecast: next.forecast,
+        quiet_hours: next.quiet_hours,
+        quiet_start: next.quiet_start,
+        quiet_end: next.quiet_end,
+      },
+    });
+  } catch (_) {
+    notificationSettings = previous;
+    notifyOptionsError = true;
+  }
+  render();
+}
+
+async function loadTraySettings() {
+  try {
+    trayIconMode = (await invoke("get_tray_settings")).icon || "tightest";
+  } catch (_) {}
+}
+
+// The first-launch card's "Turn on" buttons, each the same action its
+// Settings switch performs.
+async function welcomeAction(what) {
+  if (what === "widget") {
+    try {
+      await invoke("set_widget_enabled", { enabled: true });
+      widgetSettings = { ...widgetSettings, enabled: true };
+    } catch (_) {}
+    render();
+  } else if (what === "alerts") {
+    if (data?.codex?.available) await setNotifyEnabled("codex", true);
+    if (data?.claude?.available) await setNotifyEnabled("claude", true);
+  } else if (what === "start") {
+    await setStartOnLogin(true);
+  }
+}
+
+// Take a reset key to the confirm that spends it: its provider's tab, with
+// the inline "Use it?" already open. The tray menu's "Use a reset" lands here
+// too, so spending one is always the same two clicks in the same place.
+function goUseReset(key) {
+  const tab = key.startsWith("claude:") ? "claude" : "codex";
+  switchTab(tab);
+  startUseReset(key);
+  // render() is synchronous, so the confirm is already in the page.
+  const confirm = document.querySelector(`[data-reset-confirm="${CSS.escape(key)}"]`);
+  confirm?.scrollIntoView({ block: "center" });
+  confirm?.focus();
 }
 
 // ---------- reset credits (Codex) and banked resets (Claude) ----------
@@ -2721,9 +3448,13 @@ async function saveAccountLabel(id, label) {
 }
 
 async function removeDirectory(id) {
+  confirmingRemove = null;
+  removeError = null;
   try {
     await invoke("remove_claude_directory", { id });
-  } catch (_) {}
+  } catch (e) {
+    removeError = String(e);
+  }
   refresh();
 }
 
@@ -2760,8 +3491,36 @@ async function addDirectory(path) {
 document
   .querySelectorAll(".tab")
   .forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
+// Arrow keys move between tabs, as in any tab strip; Home and End jump to
+// the ends. Hidden tabs (a provider with nothing to show) are skipped.
+document.getElementById("tabs").addEventListener("keydown", (event) => {
+  const tabs = [...document.querySelectorAll(".tab")].filter((t) => !t.hidden);
+  const at = tabs.indexOf(document.activeElement);
+  if (at < 0) return;
+  const next = {
+    ArrowRight: tabs[(at + 1) % tabs.length],
+    ArrowLeft: tabs[(at - 1 + tabs.length) % tabs.length],
+    Home: tabs[0],
+    End: tabs[tabs.length - 1],
+  }[event.key];
+  if (!next) return;
+  event.preventDefault();
+  next.focus();
+  switchTab(next.dataset.tab);
+});
+markActiveTab();
 
-listen("refresh", refresh);
+// Rust sends this each time it shows the panel, which is also the moment to
+// replay the opening animation — the window is hidden and shown, never
+// reloaded, so a plain CSS animation would only ever run once.
+listen("refresh", () => {
+  const app = document.getElementById("app");
+  app.classList.remove("opening");
+  void app.offsetWidth;
+  app.classList.add("opening");
+  refresh();
+});
+listen("refresh-now", refresh);
 // A collection the panel didn't start — the file watcher, the background poll —
 // has finished. Paint the snapshot it left rather than collecting again, which
 // would ask every provider a second time for the numbers it already has. The
@@ -2777,6 +3536,7 @@ listen("usage-updated", async () => {
   }
   if (!cached || (data && cached.generated_at <= data.generated_at)) return;
   data = cached;
+  refreshFailedAt = null;
   // The collection fed the recorder as well, so these are a sample behind.
   loadWindowHistory();
   loadRecentBurn(true);
@@ -2789,9 +3549,40 @@ listen("collapse", () => {
   panelExpanded = false;
   render();
 });
-// Esc leaves the expanded timeline — the panel has no title bar to close.
+// Esc backs out one step at a time: an open confirm, then the Credits screen,
+// then the expanded timeline, and finally the panel itself — it has no title
+// bar to close. Inputs handle their own Esc (cancelling the edit) first.
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && panelExpanded) setPanelExpanded(false);
+  if (event.key !== "Escape" || event.defaultPrevented) return;
+  if (confirmingReset || confirmingRemove) {
+    confirmingReset = null;
+    confirmingRemove = null;
+    render();
+  } else if (creditsOpen) {
+    creditsOpen = false;
+    render();
+  } else if (panelExpanded) {
+    setPanelExpanded(false);
+  } else {
+    window.__TAURI__.window.getCurrentWindow().hide().catch(() => {});
+  }
+});
+// From the tray menu: "Settings…" and "Use a reset" open the panel on the
+// right screen.
+listen("goto", (event) => {
+  if (event.payload === "settings") switchTab("settings");
+});
+listen("use-reset", (event) => {
+  if (event.payload) goUseReset(event.payload);
+});
+// The tray menu can switch alerts too, so the Settings switches follow it.
+listen("notification-settings", (event) => {
+  if (event.payload) notificationSettings = event.payload;
+  render();
+});
+listen("tray-settings", (event) => {
+  if (event.payload?.icon) trayIconMode = event.payload.icon;
+  if (activeTab === "settings") render();
 });
 // Rust pushes the updater status on every transition, so the About section
 // tracks a background check without polling.
@@ -2851,5 +3642,6 @@ loadAccountVisibility();
 loadWidgetSettings().then(() => loadRecentBurn(true));
 loadUpdateState();
 loadStartOnLogin();
+loadTraySettings();
 loadWindowHistory();
 refresh();

@@ -187,23 +187,32 @@ pub struct AlertOptions {
     pub quiet_end: u16,
 }
 
-/// "4:52 pm" in local time, matching the panel's clock times.
+/// "4:52 pm" today, "Thu 9:00 am" within the week, "Oct 21 9:00 am" beyond,
+/// in local time — matching the panel. A bare clock time days away reads as
+/// today.
 pub(crate) fn clock_text(ts: i64) -> String {
     use chrono::{Local, TimeZone};
-    Local
-        .timestamp_opt(ts, 0)
-        .single()
-        .map(|t| t.format("%-I:%M %P").to_string())
-        .unwrap_or_default()
+    let Some(at) = Local.timestamp_opt(ts, 0).single() else {
+        return String::new();
+    };
+    let time = at.format("%-I:%M %P").to_string();
+    match (at.date_naive() - Local::now().date_naive()).num_days() {
+        0 => time,
+        1..=6 => format!("{} {time}", at.format("%a")),
+        _ => format!("{} {time}", at.format("%b %-d")),
+    }
 }
 
-/// "18 min", "1 h 20 min" — a gap for the middle of a sentence.
+/// "18 min", "1 h 20 min", "3 d 4 h" — a gap for the middle of a sentence.
 pub(crate) fn gap_text(secs: i64) -> String {
     let minutes = (secs.max(0) + 30) / 60;
-    match (minutes / 60, minutes % 60) {
-        (0, m) => format!("{m} min"),
-        (h, 0) => format!("{h} h"),
-        (h, m) => format!("{h} h {m} min"),
+    let (days, hours, mins) = (minutes / 1440, minutes % 1440 / 60, minutes % 60);
+    match (days, hours, mins) {
+        (0, 0, m) => format!("{m} min"),
+        (0, h, 0) => format!("{h} h"),
+        (0, h, m) => format!("{h} h {m} min"),
+        (d, 0, _) => format!("{d} d"),
+        (d, h, _) => format!("{d} d {h} h"),
     }
 }
 

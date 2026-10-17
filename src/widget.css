@@ -118,6 +118,15 @@ body {
 .cell.hot > u {
   background: var(--danger);
 }
+/* Used up: striped instead of solid, with the time until it's back as its
+   label (set in widget.js). */
+.cell.out {
+  background: repeating-linear-gradient(
+    135deg,
+    rgba(239, 107, 107, 0.55) 0 3px,
+    rgba(239, 107, 107, 0.25) 3px 6px
+  );
+}
 /* Recent-usage band: what this window burned over the last stretch, filled
    violet against the fill edge — matching the panel's meters, and for the same
    reason: it is the hue neither provider colour uses, and it holds up against

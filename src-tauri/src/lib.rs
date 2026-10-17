@@ -160,6 +160,24 @@ fn round_native_corners(window: &tauri::WebviewWindow) {
 #[cfg(not(windows))]
 fn round_native_corners(_window: &tauri::WebviewWindow) {}
 
+/// Acrylic behind the panel, tinted to match its light or dark theme so the
+/// translucent CSS on top reads the same either way. Reports whether the OS
+/// accepted it.
+fn apply_glass(window: &tauri::WebviewWindow, theme: Option<tauri::Theme>) -> bool {
+    let tint = match theme {
+        Some(tauri::Theme::Light) => tauri::window::Color(243, 245, 248, 150),
+        _ => tauri::window::Color(16, 19, 26, 120),
+    };
+    window
+        .set_effects(
+            tauri::window::EffectsBuilder::new()
+                .effect(tauri::window::Effect::Acrylic)
+                .color(tint)
+                .build(),
+        )
+        .is_ok()
+}
+
 /// Toast notifications on Windows require the sender's AppUserModelID to be
 /// registered. The installer normally does this via a Start Menu shortcut,
 /// but a portable or dev-built exe has no such registration, so every toast
@@ -669,9 +687,11 @@ pub fn run() {
                         app.state::<Quitting>().0.store(true, Ordering::Relaxed);
                         app.exit(0);
                     }
+                    // Not "refresh": that one also means "just shown", and
+                    // replays the panel's opening animation.
                     "refresh" => {
                         if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.emit("refresh", ());
+                            let _ = w.emit("refresh-now", ());
                         }
                     }
                     "check_updates" => {
@@ -719,16 +739,9 @@ pub fn run() {
 
             // Hide when the popover loses focus, like a native menu-bar panel.
             if let Some(window) = app.get_webview_window("main") {
-                // Glassy backdrop: acrylic blur with a dark tint. If the OS
+                // Glassy backdrop: acrylic blur tinted to the theme. If the OS
                 // refuses, the frontend keeps its solid background instead.
-                let glassy = window
-                    .set_effects(
-                        tauri::window::EffectsBuilder::new()
-                            .effect(tauri::window::Effect::Acrylic)
-                            .color(tauri::window::Color(16, 19, 26, 120))
-                            .build(),
-                    )
-                    .is_ok();
+                let glassy = apply_glass(&window, window.theme().ok());
                 app.state::<Glass>().0.store(glassy, Ordering::Relaxed);
                 if glassy {
                     round_native_corners(&window);
@@ -737,6 +750,13 @@ pub fn run() {
                 let w = window.clone();
                 let handle = app.handle().clone();
                 window.on_window_event(move |event| {
+                    // The panel's CSS follows the theme by itself; the native
+                    // tint under it has to be told.
+                    if let WindowEvent::ThemeChanged(theme) = event {
+                        if handle.state::<Glass>().0.load(Ordering::Relaxed) {
+                            apply_glass(&w, Some(*theme));
+                        }
+                    }
                     if let WindowEvent::Focused(false) = event {
                         // The expanded timeline is meant to be read alongside
                         // other windows, so it stays put until it's closed.

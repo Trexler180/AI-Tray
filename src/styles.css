@@ -85,10 +85,6 @@ body {
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
-.tab .ico {
-  font-size: 12.5px;
-  opacity: 0.8;
-}
 .tab:hover {
   color: var(--text);
   background: var(--card);
@@ -339,9 +335,65 @@ body {
   background: linear-gradient(90deg, rgba(122, 99, 235, 0.55), rgba(182, 162, 250, 0.7));
   border-right-color: #c9b8ff;
 }
-.bgauge.warn .bfill {
+/* Tiers (see `meterTier` in shared.js): amber once a window is low, red once
+   it will run out before it resets, and a striped track once it has. Each
+   also carries a word in the bar, so the colour is never the only signal. */
+.bgauge.low .bfill {
+  background: linear-gradient(90deg, rgba(190, 120, 50, 0.55), rgba(236, 176, 110, 0.72));
+  border-right-color: #ffcf96;
+}
+.bgauge.crit .bfill,
+.bgauge.out .bfill {
   background: linear-gradient(90deg, rgba(214, 62, 62, 0.55), rgba(244, 110, 110, 0.7));
   border-right-color: #ff8a8a;
+}
+.bgauge.out {
+  background: repeating-linear-gradient(
+    135deg,
+    rgba(239, 107, 107, 0.13) 0 6px,
+    rgba(239, 107, 107, 0.05) 6px 12px
+  );
+  box-shadow: inset 0 0 0 1px rgba(239, 107, 107, 0.35);
+}
+.state {
+  margin-left: 5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.38);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  text-shadow: none;
+  vertical-align: 1px;
+}
+.state.low {
+  color: #ffcf96;
+}
+.state.crit,
+.state.out {
+  color: #ffa0a0;
+}
+.bgauge.out .state.out {
+  margin-left: 4px;
+}
+/* "Out by 4:52 pm, 18 min before reset" under a meter whose pace runs it out
+   early. Pulled up against its bar so it reads as that bar's footnote. */
+.fc {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -3px 0 9px 2px;
+  font-size: 11px;
+  color: #f2b0b0;
+}
+.fc svg {
+  flex: 0 0 auto;
+}
+.fc b {
+  color: #ffd6d6;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 /* Recent-usage band: the quota spent in the last X minutes, filled violet
    against the fill edge — the end of the bar that just moved.
@@ -406,7 +458,7 @@ body {
 }
 .bgauge .btxt .rr {
   flex: 0 1 auto;
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 500;
   color: #cdd5e1;
   overflow: hidden;
@@ -500,7 +552,7 @@ body {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 10.5px;
+  font-size: 11px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--faint);
@@ -536,11 +588,12 @@ body {
 
 /* ---- Bar chart ---- */
 .chart {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: 3px;
-  height: 32px;
-  margin: 9px 0 0;
+  height: 40px;
+  margin: 20px 0 0;
 }
 .chart .bar {
   flex: 1;
@@ -561,7 +614,7 @@ body {
 
 /* ---- Settings groups ---- */
 .grp-label {
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -600,7 +653,7 @@ body {
 }
 .rsub {
   display: block;
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--faint);
   margin-top: 1px;
 }
@@ -671,12 +724,12 @@ body {
   font-weight: 600;
 }
 .acct-row .pill {
-  font-size: 10px;
+  font-size: 11px;
   padding: 1px 6px;
 }
 .acct-row .pth {
   display: block;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--faint);
   margin-top: 1px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -712,7 +765,7 @@ body {
   gap: 8px;
 }
 .vis-lab {
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--faint);
   flex: 0 0 auto;
 }
@@ -982,7 +1035,7 @@ body {
 }
 .diag-src {
   color: var(--faint);
-  font-size: 10.5px;
+  font-size: 11px;
   margin-left: auto;
   text-align: right;
   min-width: 0;
@@ -1001,7 +1054,7 @@ body {
 .health-detail {
   padding: 1px 11px 8px 25px;
   color: var(--faint);
-  font-size: 10px;
+  font-size: 11px;
 }
 .health-detail > div {
   display: flex;
@@ -1022,7 +1075,7 @@ body {
   background: rgba(255, 255, 255, 0.025);
   color: var(--muted);
   font: inherit;
-  font-size: 10px;
+  font-size: 11px;
   cursor: pointer;
 }
 .health-copy:hover {
@@ -1109,7 +1162,7 @@ body {
   color: var(--muted);
 }
 .ov-acct .pill {
-  font-size: 10px;
+  font-size: 11px;
   padding: 1px 6px;
 }
 
@@ -1214,7 +1267,7 @@ body {
   background: var(--claude);
 }
 .pill.tiny {
-  font-size: 9.5px;
+  font-size: 11px;
   padding: 1px 6px;
 }
 .pill.hot {
@@ -1239,7 +1292,7 @@ body {
   flex: 1;
   padding: 4px 6px;
   font: inherit;
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--muted);
   background: transparent;
@@ -1261,7 +1314,7 @@ body {
 .tw-axis {
   display: flex;
   margin-left: 26px;
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: 0.3px;
   color: var(--faint);
   font-variant-numeric: tabular-nums;
@@ -1289,7 +1342,7 @@ body {
 }
 .tw-cred .rt {
   margin-left: auto;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
   color: var(--faint);
   font-variant-numeric: tabular-nums;
@@ -1303,7 +1356,7 @@ body {
 .tw-row .k {
   width: 20px;
   flex: 0 0 20px;
-  font-size: 9.5px;
+  font-size: 10px;
   font-weight: 600;
   color: var(--faint);
 }
@@ -1349,7 +1402,7 @@ body {
   left: 5px;
   top: 0;
   line-height: 14px;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   color: #fff;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
@@ -1378,7 +1431,7 @@ body {
   left: 8px;
   top: 50%;
   transform: translateY(-50%);
-  font-size: 9.5px;
+  font-size: 10px;
   color: var(--faint);
 }
 .tw-burn {
@@ -1406,7 +1459,7 @@ body {
   padding: 1px 5px;
   border-radius: 4px;
   background: rgba(12, 15, 21, 0.85);
-  font-size: 9.5px;
+  font-size: 10px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
@@ -1493,7 +1546,7 @@ body {
 }
 .gantt-hd .cred-col {
   align-self: center;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.14em;
   color: var(--faint);
@@ -1510,7 +1563,7 @@ body {
   font-variant-numeric: tabular-nums;
 }
 .gantt-hd .col .c1 {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--faint);
 }
 .gantt-hd .col .c2 {
@@ -1556,7 +1609,7 @@ body {
   padding: 3px 8px;
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.05);
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--muted);
 }
 .cred-sub b {
@@ -1570,7 +1623,7 @@ body {
 }
 .kmeta {
   margin-top: 5px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--faint);
   font-variant-numeric: tabular-nums;
 }
@@ -1700,7 +1753,7 @@ body {
   align-items: center;
   gap: 18px;
   margin-top: 12px;
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--faint);
 }
 .wide-legend i {
@@ -1724,4 +1777,705 @@ body {
 .wide-legend .key.next {
   height: 10px;
   border: 1px dashed rgba(255, 255, 255, 0.28);
+}
+
+/* ---- Tab icons ----
+   All five are drawn now; a fixed box keeps them from shrinking when a
+   label is long. */
+.tab svg {
+  flex: 0 0 auto;
+  opacity: 0.85;
+}
+
+/* ---- Refresh that failed ---- */
+.hd-refresh.fail {
+  color: var(--warn);
+  background: rgba(223, 160, 95, 0.1);
+}
+.banner.amber {
+  background: rgba(223, 160, 95, 0.1);
+  border-color: rgba(223, 160, 95, 0.32);
+  color: #ecc08f;
+}
+.hd + .banner.small {
+  margin: -2px 0 10px;
+}
+
+/* ---- Keyboard focus ----
+   Everything that acts on a click can be reached with Tab now, and shows
+   where it is. */
+.ov-card:focus-visible,
+[data-credits]:focus-visible,
+.cmp-row:focus-visible,
+.btn:focus-visible,
+.choice:focus-visible,
+.row-btn:focus-visible,
+.ghost-btn:focus-visible,
+.diag-row:focus-visible,
+.health-copy:focus-visible,
+.reset-use:focus-visible,
+.secnav button:focus-visible,
+.time-input:focus-visible,
+.welcome-x:focus-visible,
+.tsegs button:focus-visible,
+.segs button:focus-visible {
+  outline: 2px solid var(--codex);
+  outline-offset: 2px;
+}
+.ov-card[role="button"]:hover {
+  border-color: var(--border-strong);
+}
+
+/* ---- Runs out first ----
+   The Overview's top card: the window most likely to stop you. Red when it
+   will run out or has, amber when it is only low. */
+.tight {
+  border-radius: 10px;
+  padding: 10px 12px 11px;
+  margin-bottom: 10px;
+  background: linear-gradient(180deg, rgba(239, 107, 107, 0.11), rgba(239, 107, 107, 0.04));
+  border: 1px solid rgba(239, 107, 107, 0.3);
+  --tight-ink: #f2b0b0;
+  --tight-strong: #ffd6d6;
+}
+.tight.low {
+  background: linear-gradient(180deg, rgba(223, 160, 95, 0.11), rgba(223, 160, 95, 0.04));
+  border-color: rgba(223, 160, 95, 0.32);
+  --tight-ink: #ecc08f;
+  --tight-strong: #ffe0bd;
+}
+.tight-lab {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--tight-ink);
+}
+.tight-main {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  margin-top: 4px;
+}
+.tight-main .big {
+  font-size: 24px;
+  font-weight: 750;
+  letter-spacing: -0.3px;
+  font-variant-numeric: tabular-nums;
+}
+.tight-main .big small {
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--muted);
+}
+.tight-main .who {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.tight-main .who b {
+  color: var(--text);
+}
+.tight-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 6px;
+}
+.tight-fc {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--tight-ink);
+}
+.tight-fc b {
+  color: var(--tight-strong);
+}
+
+/* Filled call-to-action, in the provider's colour. */
+.btn {
+  flex: 0 0 auto;
+  padding: 6px 11px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  border: none;
+  border-radius: 8px;
+  color: #2a1406;
+  background: linear-gradient(90deg, var(--claude-2), var(--claude));
+  cursor: pointer;
+  transition: filter 0.15s, transform 0.1s;
+}
+.btn.teal {
+  color: #03201d;
+  background: linear-gradient(90deg, var(--codex-2), var(--codex));
+}
+.btn:hover {
+  filter: brightness(1.08);
+}
+.btn:active {
+  transform: scale(0.97);
+}
+
+/* ---- Compact Overview ---- */
+.ov-card.cmp {
+  padding: 2px 10px;
+  cursor: default;
+}
+.ov-card.cmp:active {
+  transform: none;
+}
+.cmp-row {
+  display: grid;
+  grid-template-columns: 10px 1fr 104px;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 8px 2px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.cmp-row:first-child {
+  border-top: none;
+}
+.cmp-row:hover .nm {
+  color: #fff;
+}
+.cmp-row .d {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--codex);
+}
+.cmp-row .d.claude {
+  background: var(--claude);
+}
+.cmp-mid {
+  min-width: 0;
+}
+.cmp-row .nm {
+  display: block;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmp-row .nm span {
+  margin-left: 5px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--faint);
+}
+.cmp-row .mb {
+  display: block;
+  height: 5px;
+  margin-top: 5px;
+  border-radius: 3px;
+  background: var(--track);
+  overflow: hidden;
+}
+.cmp-row .mb i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--codex);
+}
+.cmp-row .mb i.claude {
+  background: var(--claude);
+}
+.cmp-row .mb i.low {
+  background: var(--warn);
+}
+.cmp-row .mb i.crit {
+  background: var(--danger);
+}
+.cmp-row .r {
+  text-align: right;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.cmp-row .r b {
+  font-size: 12.5px;
+  color: var(--text);
+}
+.cmp-row .r b.low {
+  color: #ffcf96;
+}
+.cmp-row .r b.crit,
+.cmp-row .r b.out {
+  color: #ff9a9a;
+}
+
+/* ---- First-launch card ---- */
+.welcome {
+  margin-bottom: 10px;
+  padding: 11px 12px 4px;
+  border: 1px solid rgba(45, 212, 191, 0.3);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(45, 212, 191, 0.09), rgba(45, 212, 191, 0.03));
+}
+.welcome-h {
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 700;
+}
+.welcome-x {
+  margin-left: auto;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--faint);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.welcome-x:hover {
+  color: var(--text);
+  background: var(--card);
+}
+.welcome p {
+  margin: 3px 0 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.setup-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 0;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.setup-row .ic {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--codex);
+  font-size: 13px;
+  font-weight: 700;
+}
+.setup-row .tx {
+  flex: 1;
+  min-width: 0;
+}
+.setup-row .tx span {
+  display: block;
+  font-size: 11px;
+  color: var(--faint);
+}
+.setup-done {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ok);
+}
+
+/* ---- Settings sections ---- */
+.secnav {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  margin: -2px 0 2px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+}
+.secnav button {
+  flex: 1;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.secnav button:hover {
+  color: var(--text);
+}
+.secnav button.on {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+.times {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.time-input {
+  padding: 3px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  color-scheme: dark;
+  user-select: text;
+}
+
+/* ---- Removing a folder ---- */
+.acct-row.confirming {
+  background: rgba(239, 107, 107, 0.05);
+}
+.confirm-q {
+  margin-right: 2px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #f2b0b0;
+}
+.acct-btn.danger {
+  color: #ff9a9a;
+  border-color: rgba(239, 107, 107, 0.45);
+  background: rgba(239, 107, 107, 0.1);
+}
+
+/* ---- Credits: billing ---- */
+.row-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+/* ---- Value chart labels and projects ---- */
+.chart .bar.today {
+  filter: brightness(1.18);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+.chart .maxline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  border-top: 1px dashed rgba(255, 255, 255, 0.16);
+  pointer-events: none;
+}
+.chart .maxlab {
+  position: absolute;
+  right: 0;
+  top: -15px;
+  font-size: 10px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.chart-x {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.chart-x .t {
+  color: var(--text);
+  font-weight: 600;
+}
+.proj {
+  margin-top: 9px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border);
+}
+.proj-lab {
+  margin-bottom: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.proj-row {
+  display: grid;
+  grid-template-columns: 116px 1fr 52px;
+  align-items: center;
+  gap: 8px;
+  margin: 5px 0;
+  font-size: 11.5px;
+}
+.proj-row .nm {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+.proj-row .tr {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--track);
+  overflow: hidden;
+}
+.proj-row .tr i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--codex);
+  opacity: 0.85;
+}
+.chart.claude ~ .proj .tr i {
+  background: var(--claude);
+}
+.proj-row .v {
+  text-align: right;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Opening ----
+   A short rise from the tray, so the panel reads as coming out of the icon
+   rather than appearing from nowhere. */
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+.panel.opening {
+  animation: panel-in 0.12s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .panel.opening {
+    animation: none;
+  }
+}
+
+/* ---- High contrast ----
+   The Windows contrast themes replace every colour; without borders the bars
+   would vanish into their tracks. */
+@media (forced-colors: active) {
+  .bgauge,
+  .tw-seg,
+  .gantt .bar,
+  .cmp-row .mb {
+    border: 1px solid CanvasText;
+  }
+  .bgauge .bfill,
+  .tw-seg .f,
+  .gantt .bar .bf,
+  .cmp-row .mb i,
+  .chart .bar {
+    background: Highlight;
+    forced-color-adjust: none;
+  }
+  .state {
+    border: 1px solid CanvasText;
+  }
+}
+
+/* ---- Light theme ----
+   Follows the Windows app setting, as the taskbar widget already does. Same
+   layout; the tokens and the handful of literal whites flip. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg-top: #fbfcfd;
+    --bg-bot: #f1f3f6;
+    --card: rgba(0, 0, 0, 0.025);
+    --border: rgba(0, 0, 0, 0.08);
+    --border-strong: rgba(0, 0, 0, 0.14);
+    --text: #171b22;
+    --muted: #5b6474;
+    --faint: #7c8596;
+    --track: rgba(0, 0, 0, 0.07);
+    --codex: #0f9e8e;
+    --codex-2: #0b7f73;
+    --claude: #d4733a;
+    --claude-2: #b85a24;
+    --credit: #7a63eb;
+    --ok: #188a6b;
+    --warn: #b06d22;
+  }
+  .panel {
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+  }
+  .glass .panel {
+    background: linear-gradient(180deg, rgba(251, 252, 253, 0.72), rgba(241, 243, 246, 0.8));
+  }
+  .tab.active,
+  .tab.active[data-tab="overview"],
+  .tab.active[data-tab="windows"],
+  .tab.active[data-tab="settings"],
+  .secnav button.on,
+  .tsegs button.on,
+  .segs button.on {
+    color: #000;
+    background: rgba(0, 0, 0, 0.07);
+  }
+  .tab.active[data-tab="claude"] {
+    background: rgba(212, 115, 58, 0.16);
+  }
+  .secnav,
+  .tsegs,
+  .segs {
+    background: rgba(0, 0, 0, 0.05);
+  }
+  .hd-refresh:hover,
+  .hd-expand:hover,
+  .hd-back:hover {
+    background: rgba(0, 0, 0, 0.06);
+  }
+  .bgauge {
+    background: rgba(0, 0, 0, 0.06);
+  }
+  .bgauge .bfill {
+    background: linear-gradient(90deg, rgba(45, 212, 191, 0.35), rgba(45, 212, 191, 0.55));
+    border-right-color: #0f9e8e;
+  }
+  .bgauge.claude .bfill {
+    background: linear-gradient(90deg, rgba(240, 163, 106, 0.38), rgba(240, 163, 106, 0.6));
+    border-right-color: #c9622a;
+  }
+  .bgauge.credit .bfill {
+    background: linear-gradient(90deg, rgba(160, 140, 245, 0.35), rgba(160, 140, 245, 0.55));
+    border-right-color: #6c55e0;
+  }
+  .bgauge.low .bfill {
+    background: linear-gradient(90deg, rgba(223, 160, 95, 0.38), rgba(223, 160, 95, 0.6));
+    border-right-color: #b06d22;
+  }
+  .bgauge.crit .bfill,
+  .bgauge.out .bfill {
+    background: linear-gradient(90deg, rgba(239, 107, 107, 0.35), rgba(239, 107, 107, 0.55));
+    border-right-color: #c93a3a;
+  }
+  .bgauge .bmark {
+    background: rgba(0, 0, 0, 0.55);
+    box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.6);
+  }
+  .bgauge .btxt {
+    color: var(--text);
+    text-shadow: 0 1px 1px rgba(255, 255, 255, 0.6);
+  }
+  .bgauge .btxt b {
+    color: #000;
+  }
+  .bgauge .btxt .sub,
+  .bgauge .btxt .rr {
+    color: #3d4553;
+  }
+  .state {
+    background: rgba(255, 255, 255, 0.75);
+  }
+  .state.low {
+    color: #a2611c;
+  }
+  .state.crit,
+  .state.out {
+    color: #c42f2f;
+  }
+  .fc,
+  .confirm-q {
+    color: #b83232;
+  }
+  .fc b {
+    color: #8f1f1f;
+  }
+  .tight {
+    --tight-ink: #b83232;
+    --tight-strong: #8f1f1f;
+  }
+  .tight.low {
+    --tight-ink: #95581a;
+    --tight-strong: #6e3f10;
+  }
+  .banner {
+    background: rgba(239, 107, 107, 0.1);
+    color: #a32b2b;
+  }
+  .banner.amber {
+    color: #8a5418;
+  }
+  .grp {
+    background: rgba(0, 0, 0, 0.015);
+  }
+  .grp-row:hover,
+  .diag-row:hover {
+    background: rgba(0, 0, 0, 0.03);
+  }
+  .sw {
+    background: rgba(0, 0, 0, 0.08);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.12);
+  }
+  .sw::before {
+    background: #fff;
+  }
+  .choice.on {
+    color: #000;
+    background: rgba(15, 158, 142, 0.14);
+  }
+  .acct-input,
+  .time-input {
+    background: #fff;
+    color-scheme: light;
+  }
+  .setup-row .ic {
+    background: rgba(0, 0, 0, 0.05);
+  }
+  .cmp-row:hover .nm {
+    color: #000;
+  }
+  .cmp-row .r b.low {
+    color: #95581a;
+  }
+  .cmp-row .r b.crit,
+  .cmp-row .r b.out {
+    color: #b83232;
+  }
+  .chart .maxline {
+    border-top-color: rgba(0, 0, 0, 0.18);
+  }
+  .chart .bar.today {
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  }
+  .tw-plot,
+  .gantt .plot {
+    background: repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.07) 0 1px, transparent 1px var(--col));
+  }
+  .tw-seg,
+  .gantt .bar {
+    background: rgba(0, 0, 0, 0.07);
+  }
+  .tw-ghost,
+  .gantt .ghost {
+    border-color: rgba(0, 0, 0, 0.22);
+  }
+  .tw-now,
+  .gantt .nowline {
+    border-left-color: rgba(0, 0, 0, 0.45);
+  }
+  .tw-chip {
+    background: rgba(255, 255, 255, 0.9);
+  }
+  .tw-seg .n,
+  .gantt .bar .bt {
+    color: #000;
+    text-shadow: 0 1px 1px rgba(255, 255, 255, 0.6);
+  }
+  .gantt .bar .notch {
+    border-left-color: rgba(0, 0, 0, 0.5);
+  }
+  .gantt .chev {
+    color: rgba(0, 0, 0, 0.45);
+  }
+  .gantt-hd .col.on .c1,
+  .gantt-hd .col.on .c2 {
+    color: #000;
+  }
 }

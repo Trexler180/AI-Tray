@@ -148,3 +148,19 @@ test("tightestLimit picks the worst tier, then the least left", () => {
   assert.equal(tightestLimit(limits.filter((l) => l.id !== "runs-out"), NOW).id, "low-higher");
   assert.equal(tightestLimit([], NOW), null);
 });
+
+test("tightestLimit puts the soonest run-out first, whatever its percentage", () => {
+  // A weekly window 91% used three days in runs out days from now; a session
+  // 86% used near its end runs out in about 40 minutes.
+  const weekly = {
+    used_percent: 91,
+    window_minutes: 10080,
+    resets_at: NOW / 1000 + 4 * 86400,
+  };
+  const limits = [
+    { id: "weekly", gauge: weekly },
+    { id: "session", gauge: session(86, 0.81) },
+  ];
+  assert.equal(meterTier(weekly, NOW), "crit");
+  assert.equal(tightestLimit(limits, NOW).id, "session");
+});

@@ -109,13 +109,21 @@ export function meterTier(g, nowMs = Date.now()) {
 }
 
 // The window to worry about first among `limits` ({ gauge, … }): the worst
-// tier, then the least left, then the soonest reset. Null for an empty list.
+// tier; among windows heading for empty, the one that gets there soonest (a
+// session out in 40 minutes beats a weekly out on Thursday, whatever their
+// percentages); then the least left, then the soonest reset. Null for an
+// empty list. tray.rs ranks the same way.
 export function tightestLimit(limits, nowMs = Date.now()) {
-  const rank = (limit) => [
-    TIERS.indexOf(meterTier(limit.gauge, nowMs)),
-    Number(limit.gauge.used_percent) || 0,
-    -(limit.gauge.resets_at ?? Number.MAX_SAFE_INTEGER),
-  ];
+  const rank = (limit) => {
+    const tier = meterTier(limit.gauge, nowMs);
+    const runsOut = tier === "crit" ? runsOutAt(limit.gauge, nowMs) ?? nowMs / 1000 : null;
+    return [
+      TIERS.indexOf(tier),
+      runsOut === null ? 0 : -runsOut,
+      Number(limit.gauge.used_percent) || 0,
+      -(limit.gauge.resets_at ?? Number.MAX_SAFE_INTEGER),
+    ];
+  };
   // Lexicographic: the first field that differs decides.
   const worse = (a, b) => {
     for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] > b[i];
